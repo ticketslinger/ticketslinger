@@ -1,0 +1,64 @@
+{
+  "id": "acct_test1",
+  "object": "account",
+  "business_profile": {
+    "annual_revenue": null,
+    "estimated_worker_count": null,
+    "mcc": null,
+    "name": null,
+    "product_description": null,
+    "support_address": null,
+    "support_email": null,
+    "support_phone": null,
+    "support_url": null,
+    "url": null
+  },
+  "business_type": null,
+  "capabilities": {},
+  "charges_enabled": true,
+  "controller": {
+    "fees": { "payer": "account" },
+    "is_controller": true,
+    "losses": { "payments": "stripe" },
+    "requirement_collection": "stripe",
+    "stripe_dashboard": { "type": "full" },
+    "type": "application"
+  },
+  "country": "US",
+  "created": 1739235842,
+  "default_currency": "usd",
+  "details_submitted": true,
+  "email": "owner@example.com",
+  "external_accounts": {
+    "object": "list",
+    "data": [],
+    "has_more": false,
+    "total_count": 0,
+    "url": "/v1/accounts/acct_test1/external_accounts"
+  },
+  "future_requirements": {
+    "alternatives": [],
+    "current_deadline": null,
+    "currently_due": [],
+    "disabled_reason": null,
+    "errors": [],
+    "eventually_due": [],
+    "past_due": [],
+    "pending_verification": []
+  },
+  "metadata": {},
+  "payouts_enabled": true,
+  "requirements": {
+    "alternatives": [],
+    "current_deadline": null,
+    "currently_due": [],
+    "disabled_reason": null,
+    "errors": [],
+    "eventually_due": [],
+    "past_due": [],
+    "pending_verification": []
+  },
+  "settings": {},
+  "tos_acceptance": { "date": null, "ip": null, "user_agent": null },
+  "type": "standard"
+}

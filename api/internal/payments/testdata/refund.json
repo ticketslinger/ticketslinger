@@ -1,0 +1,20 @@
+{
+  "id": "re_test1",
+  "object": "refund",
+  "amount": 5612,
+  "balance_transaction": null,
+  "charge": "ch_1NirD82eZvKYlo2CIvbtLWuY",
+  "created": 1692942318,
+  "currency": "usd",
+  "destination_details": {
+    "card": { "reference_status": "pending", "reference_type": "acquirer_reference_number", "type": "refund" },
+    "type": "card"
+  },
+  "metadata": {},
+  "payment_intent": "pi_test1",
+  "reason": null,
+  "receipt_number": null,
+  "source_transfer_reversal": null,
+  "status": "succeeded",
+  "transfer_reversal": null
+}

@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLoadRequiresDatabaseURL(t *testing.T) {
 	t.Setenv("TS_DATABASE_URL", "")
@@ -67,6 +70,56 @@ func TestLoadPlatformFee(t *testing.T) {
 		t.Setenv(kv[0], kv[1])
 		if _, err := Load(); err == nil {
 			t.Fatalf("expected error for %s=%s", kv[0], kv[1])
+		}
+	}
+}
+
+func TestLoadStripe(t *testing.T) {
+	t.Setenv("TS_DATABASE_URL", "postgres://x")
+	set := func(sk, pk, wh string) {
+		t.Setenv("TS_STRIPE_SECRET_KEY", sk)
+		t.Setenv("TS_STRIPE_PUBLISHABLE_KEY", pk)
+		t.Setenv("TS_STRIPE_WEBHOOK_SECRET", wh)
+	}
+	set("", "", "")
+	c, err := Load()
+	if err != nil || c.StripeSecretKey != "" || c.StorefrontURL != "http://localhost:3001" {
+		t.Fatalf("defaults: %+v %v", c, err)
+	}
+	for _, ok := range [][3]string{
+		{"sk_test_abc", "pk_test_abc", "whsec_abc"},
+		{"sk_live_abc", "pk_live_abc", "whsec_abc"},
+		{"rk_test_abc", "pk_test_abc", "whsec_abc"},
+		{"rk_live_abc", "pk_live_abc", "whsec_abc"},
+		{"", "", "whsec_e2e"}, // test mode: the fake provider, signed webhooks
+	} {
+		set(ok[0], ok[1], ok[2])
+		c, err := Load()
+		if err != nil || c.StripeSecretKey != ok[0] || c.StripePublishableKey != ok[1] || c.StripeWebhookSecret != ok[2] {
+			t.Fatalf("%v: %+v %v", ok, c, err)
+		}
+	}
+	for _, bad := range [][3]string{
+		{"sk_test_abc", "", "whsec_abc"},            // no publishable key
+		{"sk_test_abc", "pk_test_abc", ""},          // no webhook secret
+		{"pk_test_abc", "pk_test_abc", "whsec_abc"}, // not a secret key
+		{"sk_test_abc", "sk_test_abc", "whsec_abc"}, // not a publishable key
+		{"sk_test_abc", "pk_live_abc", "whsec_abc"}, // modes differ
+		{"sk_live_abc", "pk_test_abc", "whsec_abc"},
+		{"rk_live_abc", "pk_test_abc", "whsec_abc"},
+		{"sk_test_abc", "pk_test_abc", "abc"}, // not a webhook secret
+		{"", "", "abc"},
+		{"", "pk_test_abc", "whsec_abc"}, // a publishable key on its own
+	} {
+		set(bad[0], bad[1], bad[2])
+		_, err := Load()
+		if err == nil {
+			t.Fatalf("%v: expected an error", bad)
+		}
+		for _, v := range bad {
+			if len(v) > 3 && strings.Contains(err.Error(), v) {
+				t.Fatalf("%v: error %q repeats a key", bad, err)
+			}
 		}
 	}
 }

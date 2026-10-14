@@ -302,6 +302,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/payments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Any member, or any API key. Whether this organizer can take card payments. provider is none when the server has no payment provider set up; paid tickets can't be sold until it has one and charges_enabled is true. */
+        get: operations["getPayments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/payments/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Owners and admins only, from a signed-in session. Creates the organizer's Stripe account the first time (a Standard account: the organizer gets the full Stripe dashboard and deals with Stripe directly), then returns a one-time Stripe onboarding link. Send the person there; Stripe brings them back to /o/{organizer}/payments?return=1 when they finish, or ?refresh=1 when the link has expired. Calling it again reuses the same account. Its response carries a one-time onboarding link, so we never keep it: a retry with the same key runs again, and a duplicate sent while the first is running gets 409 idempotency_in_progress. 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached. */
+        post: operations["connectPayments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/payments/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Owners and admins, or a write API key. Asks Stripe for the account's current state and saves it; call it when someone comes back from onboarding. 409 not_connected before the first connect; 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached. */
+        post: operations["refreshPayments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/events": {
         parameters: {
             query?: never;
@@ -335,7 +386,7 @@ export interface paths {
         delete: operations["deleteEvent"];
         options?: never;
         head?: never;
-        /** @description Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed). Going live is refused with 422 event_over once ends_at has passed (an event that has started but not ended can go live), 422 no_ticket_types without a ticket type, and 422 unquotaed_ticket_type while a ticket type has no quota. A live event's ends_at can still change. The slug changes only on a draft (409 slug_locked). Once tickets are sold or held in an open checkout, tax_rate_bp, prices_include_tax, fee_mode and timezone can't change and the event can't go back to draft (409 has_sales; any order counts, even one without tickets); field names the property refused. */
+        /** @description Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed). Going live is refused with 422 event_over once ends_at has passed (an event that has started but not ended can go live), 422 no_ticket_types without a ticket type, 422 unquotaed_ticket_type while a ticket type has no quota, and 422 payments_not_ready when any ticket type costs money and the organizer's Stripe account can't take payments yet (see /organizers/{organizer}/payments). A live event's ends_at can still change. The slug changes only on a draft (409 slug_locked). Once tickets are sold or held in an open checkout, tax_rate_bp, prices_include_tax, fee_mode and timezone can't change and the event can't go back to draft (409 has_sales; any order counts, even one without tickets); field names the property refused. */
         patch: operations["updateEvent"];
         trace?: never;
     };
@@ -535,6 +586,23 @@ export interface components {
         };
         Health: {
             status: string;
+        };
+        PaymentsStatus: {
+            /**
+             * @description stripe in production, test for the built-in fake, none when the server takes no payments.
+             * @enum {string}
+             */
+            provider: "stripe" | "test" | "none";
+            /** @description Whether the organizer has a Stripe account. */
+            connected: boolean;
+            /** @description Whether Stripe lets the account take payments. Paid tickets go on sale only when it does. */
+            charges_enabled: boolean;
+            /** @description Whether the organizer has finished Stripe's onboarding form. */
+            details_submitted: boolean;
+        };
+        OnboardingLink: {
+            /** @description Stripe's onboarding page. It works once and expires within minutes, so redirect to it straight away. */
+            url: string;
         };
         SignupRequest: {
             /** Format: email */
@@ -843,7 +911,7 @@ export interface components {
             description?: string;
             /**
              * Format: int64
-             * @description In cents: 2500 is $25. Up to $100,000.
+             * @description In cents: 2500 is $25. 0 makes it free; otherwise it costs at least 50, the least a card can be charged (422 below_minimum_charge). Up to $100,000.
              */
             price_cents?: number;
             /** @description Overrides the event's tax rate. Send null to go back to the event's. Leave it out to keep it as it is. */
@@ -1515,6 +1583,95 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+        };
+    };
+    getPayments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentsStatus"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    connectPayments: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OnboardingLink"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    refreshPayments: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentsStatus"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     listEvents: {

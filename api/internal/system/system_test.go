@@ -183,7 +183,7 @@ func TestPublicSeesOnlyLiveEventsAndVisibleTickets(t *testing.T) {
 	}
 	// Each refusal aborts its transaction, so each gets its own.
 	for _, q := range []string{
-		`select created_at from organizers limit 1`, // Task 8 switches this to stripe_account_id
+		`select stripe_account_id from organizers limit 1`,
 		`select count(*) from quotas`,
 		`select count(*) from promo_codes`,
 		`select count(*) from api_keys`,

@@ -12,6 +12,7 @@ require (
 	github.com/oapi-codegen/runtime v1.7.0
 	github.com/pquerna/otp v1.5.0
 	github.com/pressly/goose/v3 v3.29.0
+	github.com/stripe/stripe-go/v87 v87.0.0
 	golang.org/x/crypto v0.58.0
 )
 
@@ -36,6 +37,7 @@ require (
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/sethvargo/go-retry v0.5.0 // indirect
+	github.com/shopspring/decimal v1.5.0 // indirect
 	github.com/speakeasy-api/jsonpath v0.6.3 // indirect
 	github.com/speakeasy-api/openapi v1.24.0 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect

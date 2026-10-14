@@ -125,6 +125,16 @@ test("build a sellable event, reach it with an API key, then get back in with a 
     page.getByRole("row", { name: /Name on ticket Required Text box For every ticket/ }),
   ).toBeVisible();
 
+  // Paid tickets need Stripe. The dashboard has no payments page yet, so
+  // connect through its API proxy; the fake provider onboards at once.
+  const csrf = (await context.cookies()).find((c) => c.name === "ts_csrf")?.value ?? "";
+  for (const step of ["connect", "refresh"]) {
+    const res = await page.request.post(`/api/organizers/social-club/payments/${step}`, {
+      headers: { "X-CSRF-Token": csrf },
+    });
+    expect(res.status()).toBe(200);
+  }
+
   await page.getByRole("button", { name: "Go live" }).click();
   await expect(page.getByRole("button", { name: "Back to draft" })).toBeVisible();
   // The pill reads "On sale" in the dashboard; the API calls it live.

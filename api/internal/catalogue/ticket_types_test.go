@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/oapi-codegen/nullable"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
@@ -456,5 +457,50 @@ func TestConcurrentCreatesGetDistinctPositions(t *testing.T) {
 	}
 	if total != n || distinct != n {
 		t.Fatalf("%d ticket types, %d distinct positions", total, distinct)
+	}
+}
+
+func TestPaidTicketsCostAtLeastFiftyCents(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	user, orgs := seed(t, pool)
+	org, actor := orgs[0], audit.Actor{User: user}
+	var ev catalogue.Event
+	if err := as(t, pool, user, org, func(tx pgx.Tx) (err error) { ev, err = catalogue.CreateEvent(ctx, tx, org, actor, in("gala")); return }); err != nil {
+		t.Fatal(err)
+	}
+	create := func(cents int64) (x catalogue.TicketType, err error) {
+		err = as(t, pool, user, org, func(tx pgx.Tx) (e error) {
+			x, e = catalogue.CreateTicketType(ctx, tx, org, ev.ID, actor, catalogue.TicketTypeInput{Name: "T", PriceCents: cents})
+			return
+		})
+		return
+	}
+	var inv catalogue.ErrInvalid
+	for _, c := range []int64{1, 49} {
+		if _, err := create(c); !errors.As(err, &inv) || inv.Code != "below_minimum_charge" || inv.Field != "price_cents" {
+			t.Fatalf("%d cents: %v", c, err)
+		}
+	}
+	var fifty catalogue.TicketType
+	for _, c := range []int64{0, 50} {
+		x, err := create(c)
+		if err != nil {
+			t.Fatalf("%d cents: %v", c, err)
+		}
+		fifty = x
+	}
+	price := int64(49)
+	err := as(t, pool, user, org, func(tx pgx.Tx) error {
+		_, err := catalogue.UpdateTicketType(ctx, tx, org, ev.ID, fifty.ID, actor, catalogue.TicketTypePatch{PriceCents: &price})
+		return err
+	})
+	if !errors.As(err, &inv) || inv.Code != "below_minimum_charge" {
+		t.Fatalf("update to 49 cents: %v", err)
+	}
+	var pg *pgconn.PgError
+	_, err = testdb.Owner(t, pool).Exec(ctx, `update ticket_types set price_cents = 49 where id = $1`, fifty.ID)
+	if !errors.As(err, &pg) || pg.Code != "23514" || pg.ConstraintName != "ticket_types_chargeable" {
+		t.Fatalf("direct write of 49 cents: %v", err)
 	}
 }

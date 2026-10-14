@@ -39,6 +39,14 @@ func tooManyAttempts() error {
 func locked() error {
 	return &apiError{423, "locked", "Too many wrong passwords. Your account is paused for 15 minutes."}
 }
+
+// The payment provider's errors. Both are 5xx, so Idempotency-Key never
+// keeps them and a retry runs fresh.
+var (
+	errPaymentsNotConfigured = &apiError{503, "payments_not_configured", "This server isn't set up to take card payments yet. Free tickets still work. Paid ones need Stripe keys from whoever runs it."}
+	errPaymentsUnavailable   = &apiError{503, "payments_unavailable", "We couldn't reach Stripe just now. Try again in a minute."}
+)
+
 func notFound() error {
 	return &apiError{404, "not_found", "That doesn't exist, or you don't have access to it."}
 }

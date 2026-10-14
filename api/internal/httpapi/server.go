@@ -21,6 +21,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/db"
 	"github.com/ticketslinger/ticketslinger/api/internal/idempotency"
 	"github.com/ticketslinger/ticketslinger/api/internal/organizers"
+	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 )
 
 type Deps struct {
@@ -29,6 +30,8 @@ type Deps struct {
 	Organizers *organizers.Service
 	Keys       *apikeys.Service
 	Config     config.Config
+	// Payments takes card payments; nil when none is configured.
+	Payments plugin.PaymentProvider
 }
 
 type server struct {

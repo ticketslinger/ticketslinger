@@ -113,3 +113,41 @@ func TestWorkerSendsQueuedEmail(t *testing.T) {
 		t.Fatalf("err=%v sent=%d", err, len(m.Sent))
 	}
 }
+
+func TestTestModeRefusesLiveStripeKeys(t *testing.T) {
+	for _, c := range []config.Config{
+		{StripeSecretKey: "sk_live_abc", StripePublishableKey: "pk_live_abc", StripeWebhookSecret: "whsec_abc"},
+		{StripeSecretKey: "rk_live_abc", StripePublishableKey: "pk_live_abc", StripeWebhookSecret: "whsec_abc"},
+		{StripePublishableKey: "pk_live_abc"},
+	} {
+		cfg := local("127.0.0.1:3001")
+		cfg.StripeSecretKey, cfg.StripePublishableKey, cfg.StripeWebhookSecret = c.StripeSecretKey, c.StripePublishableKey, c.StripeWebhookSecret
+		if _, err := newHandler(cfg, nil, true); err == nil {
+			t.Errorf("%+v: test mode started with a live key", c)
+		} else if strings.Contains(err.Error(), "_abc") {
+			t.Errorf("error %q repeats the key", err)
+		}
+		if _, err := newHandler(cfg, nil, false); err != nil {
+			t.Errorf("%+v outside test mode: %v", c, err)
+		}
+	}
+	cfg := local("127.0.0.1:3001")
+	cfg.StripeSecretKey, cfg.StripePublishableKey, cfg.StripeWebhookSecret = "sk_test_abc", "pk_test_abc", "whsec_e2e"
+	if _, err := newHandler(cfg, nil, true); err != nil {
+		t.Fatalf("test keys in test mode: %v", err)
+	}
+}
+
+func TestPaymentProvider(t *testing.T) {
+	if p := paymentProvider(config.Config{}, false); p != nil {
+		t.Fatalf("no key: %v, want none", p)
+	}
+	if p := paymentProvider(config.Config{StripeSecretKey: "sk_test_abc", StripePublishableKey: "pk_test_abc"}, false); p == nil || p.Name() != "stripe" || p.PublishableKey() != "pk_test_abc" {
+		t.Fatalf("with a key: %v", p)
+	}
+	for _, c := range []config.Config{{}, {StripeSecretKey: "sk_test_abc", StripePublishableKey: "pk_test_abc"}} {
+		if p := paymentProvider(c, true); p == nil || p.Name() != "test" {
+			t.Fatalf("test mode: %v, want the fake", p)
+		}
+	}
+}

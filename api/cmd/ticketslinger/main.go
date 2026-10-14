@@ -22,6 +22,8 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/httpapi"
 	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
+	"github.com/ticketslinger/ticketslinger/api/internal/payments"
+	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 )
 
 var version = "dev"
@@ -125,13 +127,32 @@ func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Hand
 				return nil, fmt.Errorf("TS_TEST_MODE needs an http://localhost or loopback %s, not %q", name, v)
 			}
 		}
+		// Test mode never touches real money, even by mistake.
+		for name, key := range map[string]string{"TS_STRIPE_SECRET_KEY": cfg.StripeSecretKey, "TS_STRIPE_PUBLISHABLE_KEY": cfg.StripePublishableKey} {
+			if mode, _ := config.StripeMode(key, "sk_", "rk_", "pk_"); mode == "live" {
+				return nil, fmt.Errorf("TS_TEST_MODE refuses a live %s; use a test key or none", name)
+			}
+		}
 		mail = mem
 	}
-	h := httpapi.New(httpapi.Deps{Pool: pool, Auth: auth.NewService(pool, mail, auth.Options{RPID: cfg.WebAuthnRPID, Origin: cfg.DashboardOrigin, SecretKey: cfg.SecretKey}), Config: cfg})
+	h := httpapi.New(httpapi.Deps{Pool: pool, Auth: auth.NewService(pool, mail, auth.Options{RPID: cfg.WebAuthnRPID, Origin: cfg.DashboardOrigin, SecretKey: cfg.SecretKey}),
+		Config: cfg, Payments: paymentProvider(cfg, testMode)})
 	if testMode {
 		h = testMail(h, mem)
 	}
 	return h, nil
+}
+
+// paymentProvider is the fake in test mode, Stripe when a secret key is set,
+// and otherwise none: free tickets still sell, paid ones can't.
+func paymentProvider(cfg config.Config, testMode bool) plugin.PaymentProvider {
+	switch {
+	case testMode:
+		return payments.NewFake()
+	case cfg.StripeSecretKey != "":
+		return payments.NewStripe(cfg.StripeSecretKey, cfg.StripePublishableKey, nil)
+	}
+	return nil
 }
 
 // testMail serves the link in the newest message to ?to=, so a browser test

@@ -22,6 +22,8 @@ const apiEnv = {
   TS_DASHBOARD_ORIGIN: "http://localhost:3002",
   TS_WEBAUTHN_RPID: "localhost",
   TS_TEST_MODE: "1",
+  // Test mode always takes payments through the built-in fake provider.
+  TS_STRIPE_WEBHOOK_SECRET: "whsec_e2e",
 };
 
 function run(cmd: string[], opts: { cwd?: string; env?: Record<string, string | undefined> } = {}) {

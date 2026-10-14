@@ -37,6 +37,10 @@ func seed(t *testing.T, pool *pgxpool.Pool) (user uuid.UUID, orgs [2]uuid.UUID) 
 			t.Fatal(err)
 		}
 	}
+	// Both have finished Stripe onboarding, so paid tickets can go live.
+	if _, err := testdb.Owner(t, pool).Exec(ctx, `update organizers set stripe_account_id = 'acct_' || replace(slug::text, '-', ''), stripe_charges_enabled = true`); err != nil {
+		t.Fatal(err)
+	}
 	return user, orgs
 }
 
@@ -324,5 +328,65 @@ func TestCreateAndDeleteAreAudited(t *testing.T) {
 	}
 	if d.actor == nil || *d.actor != user || d.entity != ev.ID || d.before == nil || d.after != nil {
 		t.Errorf("deleted: %+v", d)
+	}
+}
+
+func TestGoLiveNeedsPaymentsForPaidTickets(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	user, orgs := seed(t, pool)
+	org, actor := orgs[0], audit.Actor{User: user}
+	live, draft := "live", "draft"
+	stripe := func(ready bool) {
+		t.Helper()
+		if _, err := testdb.Owner(t, pool).Exec(ctx, `update organizers set stripe_charges_enabled = $2 where id = $1`, org, ready); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stripe(false)
+	var ev catalogue.Event
+	var free catalogue.TicketType
+	if err := as(t, pool, user, org, func(tx pgx.Tx) (err error) {
+		if ev, err = catalogue.CreateEvent(ctx, tx, org, actor, catalogue.EventInput{Slug: "gala", Name: "Gala", Timezone: "UTC",
+			StartsAt: time.Now().Add(24 * time.Hour), EndsAt: time.Now().Add(27 * time.Hour)}); err != nil {
+			return err
+		}
+		if free, err = catalogue.CreateTicketType(ctx, tx, org, ev.ID, actor, catalogue.TicketTypeInput{Name: "Free"}); err != nil {
+			return err
+		}
+		_, err = catalogue.CreateQuota(ctx, tx, org, ev.ID, actor, catalogue.QuotaInput{Name: "Hall", Size: 100, TicketTypeIDs: []uuid.UUID{free.ID}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	status := func(s *string) error {
+		return as(t, pool, user, org, func(tx pgx.Tx) error {
+			_, err := catalogue.UpdateEvent(ctx, tx, org, ev.ID, actor, catalogue.EventPatch{Status: s})
+			return err
+		})
+	}
+	if err := status(&live); err != nil {
+		t.Fatalf("free-only event without Stripe: %v", err)
+	}
+	if err := status(&draft); err != nil {
+		t.Fatal(err)
+	}
+	if err := as(t, pool, user, org, func(tx pgx.Tx) error {
+		paid, err := catalogue.CreateTicketType(ctx, tx, org, ev.ID, actor, catalogue.TicketTypeInput{Name: "General", PriceCents: 2500})
+		if err != nil {
+			return err
+		}
+		_, err = catalogue.CreateQuota(ctx, tx, org, ev.ID, actor, catalogue.QuotaInput{Name: "Floor", Size: 50, TicketTypeIDs: []uuid.UUID{paid.ID}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var inv catalogue.ErrInvalid
+	if err := status(&live); !errors.As(err, &inv) || inv.Code != "payments_not_ready" || inv.Field != "status" {
+		t.Fatalf("paid ticket without Stripe: %v", err)
+	}
+	stripe(true)
+	if err := status(&live); err != nil {
+		t.Fatalf("paid ticket with Stripe: %v", err)
 	}
 }

@@ -39,10 +39,11 @@ func opID(op *openapi3.Operation) string {
 // sessionOnly lists tenant operations an API key may never call, even for
 // its own organizer: they need a person behind a signed-in session.
 var sessionOnly = map[string]string{
-	"listAudit":    "the audit log is for people, not integrations, in this release",
-	"listApiKeys":  "keys don't manage keys",
-	"createApiKey": "keys don't mint keys",
-	"revokeApiKey": "keys don't revoke keys",
+	"listAudit":       "the audit log is for people, not integrations, in this release",
+	"listApiKeys":     "keys don't manage keys",
+	"createApiKey":    "keys don't mint keys",
+	"revokeApiKey":    "keys don't revoke keys",
+	"connectPayments": "a person signs Stripe's terms, and the link is theirs to follow",
 }
 
 // Every secured operation not in userScoped, called by a signed-in mfa user
