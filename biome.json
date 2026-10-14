@@ -1,6 +1,15 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
-  "files": { "includes": ["web/**", "e2e/**", "!**/dist", "!**/*.gen.ts"] },
+  "files": {
+    "includes": [
+      "web/**",
+      "e2e/**",
+      "!**/dist",
+      "!**/*.gen.ts",
+      "!**/test-results",
+      "!**/playwright-report"
+    ]
+  },
   "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
   "linter": { "rules": { "recommended": true } }
 }

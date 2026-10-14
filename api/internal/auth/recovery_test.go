@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/pquerna/otp/totp"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
@@ -67,7 +68,9 @@ func TestWrongRecoveryCodesLockTheAccount(t *testing.T) {
 	u := signupWithTOTP(t, s, "a@example.com")
 	_, _ = s.GenerateRecoveryCodes(ctx, u.ID, true)
 	for i := 0; i < 5; i++ {
-		_, _, _ = s.Login(ctx, "a@example.com", "a long passphrase", "", "aaaa-bbbb-cccc", "", "")
+		if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "aaaa-bbbb-cccc", "", ""); !errors.Is(err, auth.ErrBadCredentials) {
+			t.Fatalf("attempt %d: got %v, want ErrBadCredentials", i+1, err)
+		}
 	}
 	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", "", ""); !errors.Is(err, auth.ErrLocked) {
 		t.Fatalf("got %v, want ErrLocked", err)
@@ -148,5 +151,59 @@ func TestRecoveryCodeConcurrentOnlyOneWins(t *testing.T) {
 	wg.Wait()
 	if ok != 1 {
 		t.Fatalf("%d concurrent logins succeeded with one code, want 1", ok)
+	}
+}
+
+func TestStaleRecoveryCodesFailAndCountTowardLockout(t *testing.T) {
+	s, pool := newSvcPool(t)
+	ctx := context.Background()
+	u := signupWithTOTP(t, s, "a@example.com")
+	codes, _ := s.GenerateRecoveryCodes(ctx, u.ID, true)
+	// The only factor goes away; its codes must not outlive it.
+	if _, err := pool.Exec(ctx, `UPDATE users SET totp_enabled_at = NULL, totp_secret = NULL WHERE id = $1`, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", codes[i], "", ""); !errors.Is(err, auth.ErrBadCredentials) {
+			t.Fatalf("stale code %d: got %v, want ErrBadCredentials", i, err)
+		}
+	}
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", "", ""); !errors.Is(err, auth.ErrLocked) {
+		t.Fatalf("got %v, want ErrLocked", err)
+	}
+}
+
+func TestRecoveryGenerationIsRateLimited(t *testing.T) {
+	s, _ := newSvc(t)
+	ctx := context.Background()
+	u := signupWithTOTP(t, s, "a@example.com")
+	for i := 0; i < 5; i++ {
+		if _, err := s.GenerateRecoveryCodes(ctx, u.ID, true); err != nil {
+			t.Fatalf("call %d: %v", i+1, err)
+		}
+	}
+	if _, err := s.GenerateRecoveryCodes(ctx, u.ID, true); !errors.Is(err, auth.ErrRateLimited) {
+		t.Fatalf("sixth call: got %v, want ErrRateLimited", err)
+	}
+}
+
+// Hashing is slow; it must not happen while the user row is locked.
+func TestRecoveryHashingHappensOutsideTheRowLock(t *testing.T) {
+	s, pool := newSvcPool(t)
+	ctx := context.Background()
+	u := signupWithTOTP(t, s, "a@example.com")
+	called := 0
+	auth.SetBeforeHash(s, func() {
+		called++
+		err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE NOWAIT`, u.ID)
+			return err
+		})
+		if err != nil {
+			t.Errorf("user row locked before hashing: %v", err)
+		}
+	})
+	if _, err := s.GenerateRecoveryCodes(ctx, u.ID, true); err != nil || called != 10 {
+		t.Fatalf("err=%v hashes seen=%d", err, called)
 	}
 }

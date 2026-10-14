@@ -75,13 +75,17 @@ type Service struct {
 	opts    Options
 	ipLimit *limiter
 	emLimit *limiter
-	wa      *webauthn.WebAuthn // nil when RPID or Origin is unusable; passkey calls then return waErr
-	waErr   error
+	// recLimit caps recovery-code generation per user; each call costs ten Argon2 hashes.
+	recLimit   *limiter
+	beforeHash func()             // test hook, nil in production
+	wa         *webauthn.WebAuthn // nil when RPID or Origin is unusable; passkey calls then return waErr
+	waErr      error
 }
 
 func NewService(pool *pgxpool.Pool, m mailer.Mailer, o Options) *Service {
 	s := &Service{pool: pool, mail: m, opts: o,
-		ipLimit: newLimiter(20, time.Minute), emLimit: newLimiter(10, time.Minute)}
+		ipLimit: newLimiter(20, time.Minute), emLimit: newLimiter(10, time.Minute),
+		recLimit: newLimiter(5, time.Hour)}
 	s.wa, s.waErr = newWebAuthn(o)
 	return s
 }

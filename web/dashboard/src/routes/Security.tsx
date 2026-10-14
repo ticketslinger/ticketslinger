@@ -1,6 +1,6 @@
 import { startRegistration } from "@simplewebauthn/browser";
 import qrcode from "qrcode-generator";
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiFailure, api, must, session } from "../api";
 import { ErrorText, Field, Link, type Me, useAction } from "../ui";
 
@@ -111,13 +111,19 @@ export function Security({
       setCopied(true);
     });
 
-  // Rebuilt only when the codes change; the browser downloads it without a data: URL.
-  const recoveryFile = useMemo(
-    () =>
-      recovery &&
-      URL.createObjectURL(new Blob([`${recovery.join("\n")}\n`], { type: "text/plain" })),
-    [recovery],
-  );
+  // The browser downloads this blob URL without a data: URL; revoke it when the codes change or go.
+  const [recoveryFile, setRecoveryFile] = useState<string | null>(null);
+  useEffect(() => {
+    if (!recovery) return;
+    const url = URL.createObjectURL(new Blob([`${recovery.join("\n")}\n`], { type: "text/plain" }));
+    setRecoveryFile(url);
+    return () => {
+      URL.revokeObjectURL(url);
+      setRecoveryFile(null);
+    };
+  }, [recovery]);
+  // From the account or from what happened on this page: a factor added a moment ago counts.
+  const hasFactor = me.has_second_factor || me.totp_enabled || totpOn || passkeyAdded;
 
   return (
     <main>
@@ -245,7 +251,7 @@ export function Security({
         )}
       </section>
 
-      {(me.has_second_factor || me.totp_enabled || totpOn) && (
+      {hasFactor && (
         <section aria-labelledby="recovery-h">
           <h2 id="recovery-h">Recovery codes</h2>
           {recovery ? (
@@ -282,8 +288,10 @@ export function Security({
                 Lost your phone? A recovery code gets you in without your authenticator app or
                 passkey. You get ten, and each one works once.
               </p>
-              {needSecondStep && (
-                <p className="muted">Sign in with your passkey or authenticator code first.</p>
+              {!me.mfa && (
+                <p className="notice">
+                  Sign in with your passkey or authenticator code first, then you can create them.
+                </p>
               )}
               <ErrorText>{recoveryAction.error}</ErrorText>
               <button

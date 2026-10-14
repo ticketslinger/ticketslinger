@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -50,10 +51,32 @@ func newRecoveryCode() (string, error) {
 }
 
 // GenerateRecoveryCodes replaces the user's codes with ten new ones and
-// returns them. This is the only time they exist in the clear.
+// returns them. This is the only time they exist in the clear. The Argon2
+// hashing happens before the transaction: the row lock is held only for the
+// factor check and the writes.
 func (s *Service) GenerateRecoveryCodes(ctx context.Context, userID uuid.UUID, mfa bool) ([]string, error) {
+	if !mfa {
+		return nil, ErrMFARequired
+	}
+	if !s.recLimit.allow("recovery:"+userID.String(), time.Now()) {
+		return nil, ErrRateLimited
+	}
 	codes := make([]string, recoveryCount)
 	hashes := make([]string, recoveryCount)
+	for i := range codes {
+		c, err := newRecoveryCode()
+		if err != nil {
+			return nil, err
+		}
+		if s.beforeHash != nil {
+			s.beforeHash()
+		}
+		h, err := hashPassword(ctx, c)
+		if err != nil {
+			return nil, err
+		}
+		codes[i], hashes[i] = c, h
+	}
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		// Same row lock as enrolment, so removing a factor can't slip in between check and write.
 		if _, err := tx.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, userID); err != nil {
@@ -67,20 +90,6 @@ func (s *Service) GenerateRecoveryCodes(ctx context.Context, userID uuid.UUID, m
 		}
 		if !has {
 			return ErrNoSecondFactor
-		}
-		if !mfa {
-			return ErrMFARequired
-		}
-		for i := range codes {
-			c, err := newRecoveryCode()
-			if err != nil {
-				return err
-			}
-			h, err := hashPassword(ctx, c)
-			if err != nil {
-				return err
-			}
-			codes[i], hashes[i] = c, h
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM recovery_codes WHERE user_id = $1`, userID); err != nil {
 			return err

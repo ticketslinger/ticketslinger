@@ -386,6 +386,8 @@ func (s *server) CreateRecoveryCodes(ctx context.Context, _ CreateRecoveryCodesR
 		return nil, &apiError{409, "no_second_factor", "Add a passkey or an authenticator app first. Recovery codes stand in for one of them."}
 	case errors.Is(err, auth.ErrMFARequired):
 		return nil, &apiError{403, "mfa_required", "Sign in with your passkey or authenticator code first, then create recovery codes."}
+	case errors.Is(err, auth.ErrRateLimited):
+		return nil, tooManyAttempts()
 	case err != nil:
 		return nil, err
 	}

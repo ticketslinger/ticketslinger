@@ -239,7 +239,7 @@ func TestRecoveryCodesOverHTTP(t *testing.T) {
 	if st, _ := do(t, "POST", srv.URL+"/v1/auth/recovery-codes", "", ""); st != 401 {
 		t.Fatalf("unauthenticated: %d", st)
 	}
-	if st, e := do(t, "POST", srv.URL+"/v1/auth/recovery-codes", tok, ""); st != 409 || errCode(e) != "no_second_factor" {
+	if st, e := do(t, "POST", srv.URL+"/v1/auth/recovery-codes", tok, ""); st != 403 || errCode(e) != "mfa_required" {
 		t.Fatalf("no factor: %d %v", st, e)
 	}
 	_, setup := do(t, "POST", srv.URL+"/v1/auth/totp", tok, `{"password":"a long passphrase"}`)
