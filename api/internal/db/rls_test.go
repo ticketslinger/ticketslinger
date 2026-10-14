@@ -179,17 +179,16 @@ func TestAuditLogIsAppendOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The app role holds no UPDATE or DELETE privilege at all: refused
+	// outright (42501), not merely filtered to zero rows by a policy.
 	for _, q := range []string{`update audit_log set action = 'x'`, `delete from audit_log`} {
 		err := db.WithOrganizer(ctx, pool, ua, oa, func(tx pgx.Tx, _ string) error {
-			tag, err := tx.Exec(ctx, q)
-			if err == nil && tag.RowsAffected() != 0 {
-				t.Errorf("%q affected %d rows", q, tag.RowsAffected())
-			}
+			_, err := tx.Exec(ctx, q)
 			return err
 		})
 		var pgErr *pgconn.PgError
-		if err != nil && (!errors.As(err, &pgErr) || pgErr.Code != "42501") {
-			t.Fatalf("%q: unexpected error %v", q, err)
+		if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+			t.Errorf("%q: got %v, want SQLSTATE 42501 insufficient_privilege", q, err)
 		}
 	}
 	var n int
