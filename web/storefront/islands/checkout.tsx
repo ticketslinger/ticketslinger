@@ -7,6 +7,7 @@ import type { components } from "@ticketslinger/api-client";
 import { render } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { formatCents } from "../server/money";
+import { eventPath, orderPath } from "./links";
 
 type Schemas = components["schemas"];
 type Question = Schemas["StorefrontQuestion"];
@@ -108,16 +109,13 @@ const MESSAGES: Record<string, string> = {
 // Answers that end this checkout: the buyer has to start again from the event.
 const OVER: Record<string, string> = { checkout_expired: EXPIRED, price_changed: PRICE_CHANGED };
 
-/** Always a path on this site: each slug is encoded, so neither can add a scheme or a host. */
-export const eventPath = (d: Pick<CheckoutData, "organizer" | "event_slug">) =>
-  `/${encodeURIComponent(d.organizer)}/${encodeURIComponent(d.event_slug)}`;
-
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Stays on our origin whatever host the API wrote into the link. */
-const go = (url: string) => {
-  const u = new URL(url, location.href);
-  location.assign(u.pathname + u.search);
+/** To the order, by a path we rebuilt ourselves; false when the link doesn't check out. */
+const go = (url: string | undefined, code: string | undefined) => {
+  const path = url ? orderPath(url, code) : undefined;
+  if (path) location.assign(path);
+  return path !== undefined;
 };
 
 type Answer = { status: number; body: { error?: ApiError } & Schemas["PaymentStart"] };
@@ -159,13 +157,29 @@ type Phase =
   | { kind: "slow" }
   | { kind: "over"; message: string };
 
-const clock = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
+// In the event's own time zone, named, so "7:42 PM MDT" means one moment wherever the buyer is.
+function clock(iso: string, timeZone: string) {
+  const o = { hour: "numeric", minute: "2-digit", timeZoneName: "short" } as const;
+  let f: Intl.DateTimeFormat;
+  try {
+    f = new Intl.DateTimeFormat("en-US", { ...o, timeZone });
+  } catch {
+    f = new Intl.DateTimeFormat("en-US", o);
+  }
+  return f.format(new Date(iso)).replace(/\s/g, " ");
+}
 
 function Checkout({ data }: { data: CheckoutData }) {
   const fields = answersFor(data.questions, data.items);
   const tickets = ticketsOf(data.items);
   // Back from a bank's check (3D Secure): Stripe adds these to return_url.
-  const back = new URLSearchParams(location.search);
+  // Read once, then dropped from the address bar: the client secret shouldn't linger there,
+  // and the next return_url shouldn't carry the last one's params.
+  const [back] = useState(() => {
+    const q = new URLSearchParams(location.search);
+    if (q.has("payment_intent")) history.replaceState(null, "", location.pathname);
+    return q;
+  });
   const failed = back.get("redirect_status") === "failed";
   const [phase, setPhase] = useState<Phase>(
     back.has("payment_intent") && !failed ? { kind: "waiting", test: false } : { kind: "details" },
@@ -198,10 +212,16 @@ function Checkout({ data }: { data: CheckoutData }) {
       const until = Date.now() + 120_000;
       while (live && Date.now() < until) {
         try {
-          const r = await fetch(`/api/checkouts/${data.token}`);
+          // The cap is two minutes, so no one read may hang past it.
+          const r = await fetch(`/api/checkouts/${data.token}`, {
+            signal: AbortSignal.timeout(10_000),
+          });
           if (r.ok) {
             const c = await r.json();
-            if (c.status === "completed" && c.order_url) return go(c.order_url);
+            if (c.status === "completed") {
+              if (!go(c.order_url, c.order_code)) setPhase({ kind: "over", message: GENERIC });
+              return;
+            }
             if (c.status === "expired") return setPhase({ kind: "over", message: EXPIRED });
           }
         } catch {}
@@ -241,7 +261,10 @@ function Checkout({ data }: { data: CheckoutData }) {
     setSending(false);
     const err = res.error ?? {};
     if (status === 200) {
-      if (res.kind === "free" && res.order_url) return go(res.order_url);
+      if (res.kind === "free") {
+        if (!go(res.order_url, res.order_code)) setPhase({ kind: "over", message: GENERIC });
+        return;
+      }
       start.current = res;
       return setPhase(
         res.kind === "stripe"
@@ -287,9 +310,11 @@ function Checkout({ data }: { data: CheckoutData }) {
         <p class="notice" role="alert">
           {phase.message}
         </p>
-        <a class="button" href={eventPath(data)}>
-          Back to {data.event_name}
-        </a>
+        {eventPath(data) && (
+          <a class="button" href={eventPath(data)}>
+            Back to {data.event_name}
+          </a>
+        )}
       </div>
     );
   }
@@ -369,9 +394,7 @@ function Checkout({ data }: { data: CheckoutData }) {
 
   return (
     <form class="details" onSubmit={submit}>
-      <p class="hold">
-        We're holding your tickets until {clock.format(expires).replace(/\s/g, " ")}.
-      </p>
+      <p class="hold">We're holding your tickets until {clock(data.expires_at, data.timezone)}.</p>
       <div class="field">
         <label for="email">Email</label>
         <input

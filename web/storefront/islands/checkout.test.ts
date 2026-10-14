@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { answersFor, type CheckoutData, eventPath, fieldErrors, payload } from "./checkout";
+import { answersFor, type CheckoutData, fieldErrors, payload } from "./checkout";
+import { eventPath, orderPath } from "./links";
 
 type Question = CheckoutData["questions"][number];
 
@@ -76,9 +77,33 @@ test("422 errors land on the input they name, in our words", () => {
   expect(fieldErrors({ code: "price_changed" })).toEqual({});
 });
 
-test("the way back is always a path on this site", () => {
+test("the way back is always a path on this site, and needs both slugs", () => {
   expect(eventPath({ organizer: "acme", event_slug: "gala" })).toBe("/acme/gala");
+  expect(eventPath({ organizer: "", event_slug: "gala" })).toBeUndefined();
+  expect(eventPath({ organizer: "acme", event_slug: "" })).toBeUndefined();
   expect(eventPath({ organizer: "javascript:alert(1)//", event_slug: "/evil.example" })).toBe(
     "/javascript%3Aalert(1)%2F%2F/%2Fevil.example",
   );
+});
+
+const T = "q3Jx0_Vb-8sKd2LmN4pR7tWzYcE1gH5iA9oU6fXnBvM";
+
+test("an order link is rebuilt from its code and token, never its path", () => {
+  expect(orderPath(`http://localhost:3003/orders/TS-7K2QF?t=${T}`)).toBe(`/orders/TS-7K2QF?t=${T}`);
+  expect(orderPath(`https://shop.example/orders/TS-7K2QF?t=${T}`, "TS-7K2QF")).toBe(
+    `/orders/TS-7K2QF?t=${T}`,
+  );
+  for (const bad of [
+    `http://localhost:3003//evil.example/orders/TS-7K2QF?t=${T}`,
+    `http://localhost:3003/\\evil.example/orders/TS-7K2QF?t=${T}`,
+    `//evil.example/orders/TS-7K2QF?t=${T}`,
+  ]) {
+    const got = orderPath(bad);
+    // Either refused, or rebuilt as our own /orders path.
+    if (got !== undefined) expect(got).toBe(`/orders/TS-7K2QF?t=${T}`);
+  }
+  expect(orderPath(`/orders/TS-7K2QF?t=short`)).toBeUndefined();
+  expect(orderPath(`/orders/TS-ILOU0?t=${T}`)).toBeUndefined();
+  expect(orderPath(`/orders/TS-7K2QF?t=${T}`, "TS-ABCDE")).toBeUndefined();
+  expect(orderPath("not a url at all")).toBeUndefined();
 });

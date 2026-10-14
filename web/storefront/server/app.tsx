@@ -7,6 +7,7 @@ import { bodyLimit } from "hono/body-limit";
 import { serveStatic } from "hono/bun";
 import type { VNode } from "preact";
 import { render } from "preact-render-to-string";
+import { ORDER, orderPath, TOKEN } from "../islands/links";
 import { csp } from "./csp";
 import { CheckoutPage } from "./pages/CheckoutPage";
 import { EventPage, type EventPageProps, type StorefrontEvent } from "./pages/EventPage";
@@ -43,10 +44,6 @@ const FORWARD = ["accept-language", "user-agent"];
 
 // What the API takes from callers who aren't signed in (a UUID fits).
 const IDEM = /^[A-Za-z0-9_-]{22,255}$/;
-// The API's checkout tokens are 32 random bytes in base64url; this is looser on length only.
-const TOKEN = /^[A-Za-z0-9_-]{16,128}$/;
-// The API's order codes: TS- and five Crockford base32 characters.
-const ORDER = /^TS-[0-9A-HJKMNP-TV-Z]{5}$/;
 // What the picker can send: 0 to 100, no padding.
 const QTY = /^(0|[1-9][0-9]?|100)$/;
 // More ticket types than any event page shows.
@@ -69,7 +66,7 @@ const CHECKOUT_MESSAGES: Record<string, string> = {
 };
 const IN_PROGRESS = CHECKOUT_MESSAGES.idempotency_in_progress;
 
-type Status = 200 | 400 | 404 | 409 | 413 | 422 | 429 | 500 | 502 | 503;
+type Status = 200 | 400 | 404 | 409 | 410 | 413 | 422 | 429 | 500 | 502 | 503;
 
 // How a checkout request ended: its checkout, or the page we showed for it.
 type Outcome =
@@ -260,25 +257,23 @@ export function createApp(opts: StorefrontOptions): Hono {
     }
   }
 
-  // Order links come from the API; the redirect stays on this site whatever host they name.
-  const local = (url: string) => {
-    const u = new URL(url, "http://storefront");
-    return u.pathname + u.search;
-  };
-
   app.get("/checkout/:token", async (c) => {
     const token = c.req.param("token");
     if (!TOKEN.test(token)) return notFound(c, "checkout");
     const r = await getCheckout(c, token);
     if (r.status === 404) return notFound(c, "checkout");
+    if (r.status === 429) return trouble(c, 429, SLOW_DOWN);
     const checkout = r.data;
     if (!checkout?.event) return trouble(c);
-    if (checkout.status === "completed" && checkout.order_url) {
+    if (checkout.status === "completed") {
+      // Rebuilt from the code and token: the link's own path never reaches the Location header.
+      const to = orderPath(checkout.order_url ?? "", checkout.order_code);
+      if (!to) return trouble(c);
       c.header("Cache-Control", "no-store");
-      return c.redirect(local(checkout.order_url), 303);
+      return c.redirect(to, 303);
     }
     const node = <CheckoutPage token={token} checkout={checkout} event={checkout.event} />;
-    return page(c, 200, node, checkout.status === "expired" ? "plain" : "stripe");
+    return checkout.status === "expired" ? page(c, 410, node) : page(c, 200, node, "stripe");
   });
 
   // The island's two calls, same-origin, passed through with the buyer's address.

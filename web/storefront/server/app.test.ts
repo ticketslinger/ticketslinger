@@ -653,6 +653,7 @@ test("an expired checkout says so and links back, with no script", async () => {
   const { a } = app(() => Response.json(checkout({ status: "expired" })));
   const res = await a.request(`/checkout/${TOK}`);
   const html = await res.text();
+  expect(res.status).toBe(410);
   expect(html).toContain("Your 15 minutes ran out and the tickets went back on sale.");
   expect(html).toContain('href="/acme/gala"');
   expect(html).not.toContain("checkout.js");
@@ -815,4 +816,82 @@ test("the health check answers without the API", async () => {
   const res = await a.request("/healthz");
   expect(res.status).toBe(200);
   expect(calls).toHaveLength(0);
+});
+
+test("a completed checkout's link can't send the buyer to another site", async () => {
+  for (const order_url of [
+    `http://localhost:3003//evil.example/orders/TS-7K2QF?t=${TOK}`,
+    `http://localhost:3003/\\evil.example/orders/TS-7K2QF?t=${TOK}`,
+  ]) {
+    const { a } = app(() =>
+      Response.json(checkout({ status: "completed", order_code: "TS-7K2QF", order_url })),
+    );
+    const res = await a.request(`/checkout/${TOK}`);
+    const to = res.headers.get("location");
+    if (res.status === 303) expect(to).toBe(`/orders/TS-7K2QF?t=${TOK}`);
+    else expect(res.status).toBe(502);
+    expect(to ?? "").not.toContain("evil");
+  }
+  const { a } = app(() =>
+    Response.json(
+      checkout({ status: "completed", order_code: "TS-7K2QF", order_url: "/orders/x?t=y" }),
+    ),
+  );
+  expect((await a.request(`/checkout/${TOK}`)).status).toBe(502);
+});
+
+test("too many checkout reads is the slow-down page", async () => {
+  const { a } = app(() => apiError(429, "rate_limited"));
+  const res = await a.request(`/checkout/${TOK}`);
+  expect(res.status).toBe(429);
+  expect(await res.text()).toContain("That's a lot of tries. Wait a minute and try again.");
+});
+
+// The visible lines add up to the total, whether tax is on top or already in the price.
+const sumsUp = (html: string) => {
+  const quote = html.match(/<ul class="quote">(.*?)<\/ul>/s)?.[1] ?? "";
+  const cents = (s: string) => Number(s.replace(/[^0-9]/g, ""));
+  const rows = [
+    ...quote.matchAll(/<li( class="total")?><span>[^<]*<\/span><span>([^<]*)<\/span><\/li>/g),
+  ];
+  const total = rows.find((r) => r[1]);
+  const sum = rows
+    .filter((r) => !r[1])
+    .reduce((n, r) => n + (r[2].startsWith("−") ? -cents(r[2]) : cents(r[2])), 0);
+  return { sum, total: cents(total?.[2] ?? "") };
+};
+
+const taxed = (inclusive: boolean) => {
+  // $25 at 8.25%: inclusive keeps $25.00 with $1.91 inside; exclusive adds $2.06.
+  const t = inclusive
+    ? { price_cents: 2500, discount_cents: 0, tax_cents: 191, fee_cents: 96, charge_cents: 2500 }
+    : { price_cents: 2500, discount_cents: 0, tax_cents: 206, fee_cents: 100, charge_cents: 2706 };
+  return checkout({
+    items: [{ ticket_type_id: "t1", quantity: 1 }],
+    quote: {
+      tickets: [{ ticket_type_id: "t1", ...t }],
+      subtotal_cents: 2500,
+      discount_cents: 0,
+      tax_cents: t.tax_cents,
+      fee_cents: t.fee_cents,
+      total_cents: t.charge_cents + t.fee_cents,
+      fee_mode: "pass",
+    },
+  });
+};
+
+test("tax on top is its own line, and the lines add up", async () => {
+  const { a } = app(() => Response.json(taxed(false)));
+  const html = await (await a.request(`/checkout/${TOK}`)).text();
+  expect(html).toContain("<span>Tax</span><span>$2.06</span>");
+  expect(html).not.toContain("Includes");
+  expect(sumsUp(html)).toEqual({ sum: 2806, total: 2806 });
+});
+
+test("tax inside the price is noted under the total, and the lines add up", async () => {
+  const { a } = app(() => Response.json(taxed(true)));
+  const html = await (await a.request(`/checkout/${TOK}`)).text();
+  expect(html).not.toContain("<span>Tax</span>");
+  expect(html).toContain("Includes $1.91 tax");
+  expect(sumsUp(html)).toEqual({ sum: 2596, total: 2596 });
 });

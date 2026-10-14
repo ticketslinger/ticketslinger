@@ -1,6 +1,7 @@
 /** @jsxImportSource preact */
 import type { components } from "@ticketslinger/api-client";
-import { type CheckoutData, eventPath } from "../../islands/checkout";
+import type { CheckoutData } from "../../islands/checkout";
+import { eventPath } from "../../islands/links";
 import { formatCents } from "../money";
 import { Layout } from "./Layout";
 
@@ -29,7 +30,11 @@ export function checkoutData(token: string, c: Checkout, e: CheckoutEvent): stri
 
 const eventUrl = (e: CheckoutEvent) => eventPath({ organizer: e.organizer, event_slug: e.slug });
 
-/** What the buyer is paying for: a line per ticket type, then discount, tax, fee and total. */
+/**
+ * What the buyer is paying for: a line per ticket type, then discount, tax added on top, fee
+ * and total, so the lines add up. Tax already inside a price (charge = price − discount) is
+ * noted under the total instead. Each ticket type sets its own, so a cart can have both.
+ */
 function Quote({ c, e }: { c: Checkout; e: CheckoutEvent }) {
   const q = c.quote;
   const names = new Map(e.ticket_types.map((t) => [t.id, t.name]));
@@ -40,7 +45,14 @@ function Quote({ c, e }: { c: Checkout; e: CheckoutEvent }) {
     return [`${it.quantity} × ${names.get(it.ticket_type_id) ?? "Ticket"}`, formatCents(cents)];
   });
   if (q.discount_cents > 0) lines.push(["Discount", `−${formatCents(q.discount_cents)}`]);
-  if (q.tax_cents > 0) lines.push(["Tax", formatCents(q.tax_cents)]);
+  let added = 0;
+  let included = 0;
+  for (const t of q.tickets) {
+    const net = t.price_cents - t.discount_cents;
+    if (t.charge_cents === net) included += t.tax_cents;
+    else added += t.charge_cents - net;
+  }
+  if (added > 0) lines.push(["Tax", formatCents(added)]);
   if (q.fee_mode === "pass" && q.fee_cents > 0)
     lines.push(["Service fee", formatCents(q.fee_cents)]);
   return (
@@ -55,6 +67,7 @@ function Quote({ c, e }: { c: Checkout; e: CheckoutEvent }) {
         <span>Total</span>
         <span>{formatCents(q.total_cents)}</span>
       </li>
+      {included > 0 && <li class="included">Includes {formatCents(included)} tax</li>}
     </ul>
   );
 }
@@ -79,9 +92,11 @@ export function CheckoutPage({
           <p class="notice" role="alert">
             {EXPIRED}
           </p>
-          <a class="button" href={eventUrl(event)}>
-            Back to {event.name}
-          </a>
+          {eventUrl(event) && (
+            <a class="button" href={eventUrl(event)}>
+              Back to {event.name}
+            </a>
+          )}
         </div>
       ) : (
         <>

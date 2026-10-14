@@ -301,3 +301,10 @@ button:disabled {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
 }
+
+.quote .included {
+  display: block;
+  border-top: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
