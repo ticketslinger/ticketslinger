@@ -51,10 +51,10 @@ func TestTicketTypeCRUDAndOrder(t *testing.T) {
 
 	// Position then created_at: swap positions by hand, then ties fall to creation order.
 	owner := testdb.Owner(t, pool)
-	if _, err := owner.Exec(ctx, `update ticket_types set position = 1 where id = $1`, made[1].ID); err != nil {
+	if _, err := owner.Exec(ctx, `update ticket_types set position = 2 where id = any($1)`, []uuid.UUID{made[0].ID, made[1].ID}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := owner.Exec(ctx, `update ticket_types set position = 0 where id = $1`, made[2].ID); err != nil {
+	if _, err := owner.Exec(ctx, `update ticket_types set position = 1 where id = $1`, made[2].ID); err != nil {
 		t.Fatal(err)
 	}
 	var list []catalogue.TicketType

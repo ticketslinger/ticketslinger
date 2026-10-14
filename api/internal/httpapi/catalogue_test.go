@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -334,4 +335,47 @@ func TestQuestionOverHTTP(t *testing.T) {
 	h.must(h.do(owner, "GET", base+"/questions/"+id, ""), 200)
 	h.must(h.do(owner, "DELETE", base+"/questions/"+id, ""), 204)
 	h.must(h.do(owner, "GET", base+"/questions/"+id, ""), 404)
+}
+
+func TestReorderOverHTTP(t *testing.T) {
+	h := newHarness(t)
+	owner := h.signupWithMFA("owner@example.com")
+	h.createOrganizer(owner, "acme")
+	_, readKey := h.createKey(owner, "acme", "read")
+	_, writeKey := h.createKey(owner, "acme", "write")
+	base := "/v1/organizers/acme/events/" + h.must(h.do(owner, "POST", "/v1/organizers/acme/events", eventBody), 201)["id"].(string)
+	for _, c := range []struct{ list, make1, make2 string }{
+		{"ticket-types", `{"name":"General","price_cents":2500}`, `{"name":"VIP","price_cents":9000}`},
+		{"questions", `{"label":"A","kind":"text","scope":"order"}`, `{"label":"B","kind":"text","scope":"order"}`},
+	} {
+		a := h.must(h.do(owner, "POST", base+"/"+c.list, c.make1), 201)["id"].(string)
+		b := h.must(h.do(owner, "POST", base+"/"+c.list, c.make2), 201)["id"].(string)
+		path, flipped := base+"/"+c.list+"/order", `{"ids":["`+b+`","`+a+`"]}`
+
+		if res := h.do(readKey, "PUT", path, flipped); res.StatusCode != 403 || h.errorCode(res) != "scope_read_only" {
+			t.Errorf("%s: read key: %d %q, want 403 scope_read_only", c.list, res.StatusCode, h.errorCode(res))
+		}
+		if res := h.do(owner, "PUT", path, `{"ids":["`+a+`"]}`); res.StatusCode != 422 || h.errorCode(res) != "order_mismatch" {
+			t.Errorf("%s: short list: %d %q, want 422 order_mismatch", c.list, res.StatusCode, h.errorCode(res))
+		}
+		if res := h.do(owner, "PUT", path, `{}`); res.StatusCode != 422 || h.errorCode(res) != "order_mismatch" {
+			t.Errorf("%s: no ids: %d %q, want 422 order_mismatch", c.list, res.StatusCode, h.errorCode(res))
+		}
+		res := h.do(writeKey, "PUT", path, flipped)
+		var got []map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&got)
+		if res.StatusCode != 200 || len(got) != 2 || got[0]["id"] != b || got[0]["position"] != float64(1) || got[1]["id"] != a || got[1]["position"] != float64(2) {
+			t.Fatalf("%s: write key reorder: %d %v", c.list, res.StatusCode, got)
+		}
+		var list []map[string]any
+		_ = json.NewDecoder(h.do(owner, "GET", base+"/"+c.list, "").Body).Decode(&list)
+		if len(list) != 2 || list[0]["id"] != b {
+			t.Errorf("%s: list after reorder: %v", c.list, list)
+		}
+	}
+	// Another organizer's event is a 404, not a mismatch.
+	h.createOrganizer(owner, "beta")
+	if res := h.do(owner, "PUT", strings.Replace(base, "acme", "beta", 1)+"/ticket-types/order", `{"ids":[]}`); res.StatusCode != 404 {
+		t.Errorf("wrong organizer: %d, want 404", res.StatusCode)
+	}
 }

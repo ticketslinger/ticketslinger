@@ -355,6 +355,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/events/{event}/ticket-types/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Owners and admins, or a write API key. Send every ticket type id of this event once, in the order you want; they take positions 1 to n together, or none changes. Anything else, a missing, repeated or foreign id included, is 422 order_mismatch. The same order again changes nothing. Returns the list. */
+        put: operations["reorderTicketTypes"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/events/{event}/ticket-types/{ticketType}": {
         parameters: {
             query?: never;
@@ -460,6 +477,23 @@ export interface paths {
         put?: never;
         /** @description Owners and admins, or a write API key. label, kind and scope are required (422 missing_field). The question goes at the end of the list. Every id in applies_to must be a ticket type of this event (422 unknown_ticket_type). */
         post: operations["createQuestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/questions/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Owners and admins, or a write API key. Send every question id of this event once, in the order you want; they take positions 1 to n together, or none changes. Anything else, a missing, repeated or foreign id included, is 422 order_mismatch. The same order again changes nothing. Returns the list. */
+        put: operations["reorderQuestions"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -795,6 +829,7 @@ export interface components {
             scope: "order" | "ticket";
             applies_to_all: boolean;
             applies_to: string[];
+            /** @description 1 is first. Change it with the order endpoint. */
             position: number;
             /** Format: date-time */
             created_at: string;
@@ -832,6 +867,9 @@ export interface components {
             /** @description Quotas of this event to join. Optional on a draft; a live event needs at least one (409 live_needs_capacity). An id from another event is 422 unknown_quota. */
             quota_ids?: string[];
         };
+        OrderIds: {
+            ids: string[];
+        };
         TicketType: {
             /** Format: uuid */
             id: string;
@@ -852,6 +890,7 @@ export interface components {
             min_per_order: number;
             max_per_order: number;
             hidden: boolean;
+            /** @description 1 is first. Change it with the order endpoint. */
             position: number;
             /** Format: date-time */
             created_at: string;
@@ -1575,6 +1614,36 @@ export interface operations {
             422: components["responses"]["Error"];
         };
     };
+    reorderTicketTypes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrderIds"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketType"][];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
     getTicketType: {
         parameters: {
             query?: never;
@@ -1975,6 +2044,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Question"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    reorderQuestions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrderIds"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Question"][];
                 };
             };
             403: components["responses"]["Error"];

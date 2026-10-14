@@ -1,5 +1,4 @@
-// Pure helpers for the option list of a select question, and for moving
-// questions up and down.
+// Pure helpers for the option list of a select question.
 
 const one = (s: string) => ([...s].length === 1 ? s : null);
 
@@ -38,23 +37,4 @@ export function duplicateAt(list: string[]): number {
     seen.add(key);
   }
   return -1;
-}
-
-/**
- * Moving one question changes only its own position, so a step up or down
- * means trading positions with its neighbour: two patches, or null at the ends.
- */
-export function swapPositions(
-  list: { id: string; position: number }[],
-  i: number,
-  dir: -1 | 1,
-): { id: string; position: number }[] | null {
-  const a = list[i];
-  const b = list[i + dir];
-  return a && b
-    ? [
-        { id: a.id, position: b.position },
-        { id: b.id, position: a.position },
-      ]
-    : null;
 }
