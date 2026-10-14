@@ -150,3 +150,32 @@ func RefundPayment(s *Service) jobs.Handler {
 func dollars(cents int64) string {
 	return fmt.Sprintf("$%d.%02d", cents/100, cents%100)
 }
+
+// OrderSummary is one row of an event's order list.
+type OrderSummary struct {
+	ID                           uuid.UUID
+	Code, Email, Status, FeeMode string
+	TicketCount                  int
+	TotalCents, FeeCents         int64
+	CreatedAt                    time.Time
+	PaidAt                       *time.Time
+}
+
+// ListOrders is the event's orders, newest first, pending ones left out. It
+// runs in the caller's organizer transaction: row-level security keeps it to
+// that organizer, so no role switch.
+func ListOrders(ctx context.Context, tx pgx.Tx, event uuid.UUID) ([]OrderSummary, error) {
+	if _, err := catalogue.GetEvent(ctx, tx, event); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `select o.id, o.code, o.email::text, o.status, (select count(*) from tickets t where t.order_id = o.id),
+			o.total_cents, o.fee_cents, o.fee_mode, o.created_at, o.paid_at
+		from orders o where o.event_id = $1 and o.status <> 'pending' order by o.created_at desc, o.id desc`, event)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (o OrderSummary, err error) {
+		err = r.Scan(&o.ID, &o.Code, &o.Email, &o.Status, &o.TicketCount, &o.TotalCents, &o.FeeCents, &o.FeeMode, &o.CreatedAt, &o.PaidAt)
+		return
+	})
+}

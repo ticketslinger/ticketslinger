@@ -514,6 +514,17 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/orders:
+    get:
+      operationId: listOrders
+      description: Any member, or any API key. The event's orders, newest first. Orders still waiting for payment aren't listed. email is the buyer's address.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/OrderSummary" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/promo-codes:
     get:
       operationId: listPromoCodes
@@ -953,6 +964,20 @@ components:
         connected: { type: boolean, description: Whether the organizer has a Stripe account. }
         charges_enabled: { type: boolean, description: "Whether Stripe lets the account take payments. Paid tickets go on sale only when it does." }
         details_submitted: { type: boolean, description: Whether the organizer has finished Stripe's onboarding form. }
+    OrderSummary:
+      type: object
+      required: [id, code, email, status, ticket_count, total_cents, fee_cents, fee_mode, created_at, paid_at]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        email: { type: string }
+        status: { type: string, enum: [paid, cancelled, refunded, partially_refunded] }
+        ticket_count: { type: integer }
+        total_cents: { type: integer, format: int64 }
+        fee_cents: { type: integer, format: int64 }
+        fee_mode: { type: string, enum: [absorb, pass] }
+        created_at: { type: string, format: date-time }
+        paid_at: { type: [string, "null"], format: date-time }
     OnboardingLink:
       type: object
       required: [url]

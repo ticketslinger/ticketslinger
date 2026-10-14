@@ -309,3 +309,20 @@ func (s *server) GetOrder(ctx context.Context, req GetOrderRequestObject) (GetOr
 	}
 	return GetOrder200JSONResponse(out), nil
 }
+
+// ListOrders shows buyers' emails to any member or key; nothing here logs them.
+func (s *server) ListOrders(ctx context.Context, req ListOrdersRequestObject) (ListOrdersResponseObject, error) {
+	out := ListOrders200JSONResponse{}
+	err := s.inOrganizer(ctx, req.Organizer, catalogueRead, func(_ organizers.Organizer, tx pgx.Tx) error {
+		list, err := sales.ListOrders(ctx, tx, req.Event)
+		for _, o := range list {
+			out = append(out, OrderSummary{Id: o.ID, Code: o.Code, Email: o.Email, Status: OrderSummaryStatus(o.Status), TicketCount: o.TicketCount,
+				TotalCents: o.TotalCents, FeeCents: o.FeeCents, FeeMode: OrderSummaryFeeMode(o.FeeMode), CreatedAt: o.CreatedAt, PaidAt: nullOf(o.PaidAt)})
+		}
+		return err
+	})
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return out, nil
+}
