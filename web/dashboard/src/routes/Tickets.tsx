@@ -14,33 +14,20 @@ const arrow = { "-1": "up", "1": "down" } as const;
 type TicketType = components["schemas"]["TicketType"];
 type Quota = components["schemas"]["Quota"];
 
-/** Which form field an API error code is about; "" when it's about the form as a whole. */
-export function fieldFor(code: string, message: string): string {
-  switch (code) {
-    case "invalid_name":
-      return "name";
-    case "invalid_description":
-      return "description";
-    case "bad_price":
-      return "price";
-    case "invalid_tax_rate":
-      return "tax";
-    case "bad_limits":
-      return "max";
-    case "bad_sales_window":
-      return "end";
-    case "bad_quota_size":
-      return "size";
-    case "unknown_quota":
-    case "unknown_ticket_type":
-    case "live_needs_capacity":
-      return "choices";
-    case "missing_field":
-      return message.includes("price_cents") ? "price" : message.includes("size") ? "size" : "";
-    default:
-      return "";
-  }
-}
+/** The form field for each request property the API can name; shared by the ticket and capacity forms. */
+export const ticketFields: Record<string, string> = {
+  name: "name",
+  description: "description",
+  price_cents: "price",
+  tax_rate_bp: "tax",
+  min_per_order: "min",
+  max_per_order: "max",
+  sales_start: "start",
+  sales_end: "end",
+  size: "size",
+  quota_ids: "choices",
+  ticket_type_ids: "choices",
+};
 
 export type TicketDraft = {
   name: string;
@@ -178,8 +165,8 @@ function TicketDialog({
   const start = ticket ? ticketDraftOf(ticket, event.timezone) : emptyTicket;
   const [d, setD] = useState(start);
   const [local, setLocal] = useState<Problem | null>(null);
-  const { busy, error, code, clear, run } = useAction();
-  const p = useProblem("tt", local, error, code, fieldFor);
+  const { busy, error, field, clear, run } = useAction();
+  const p = useProblem("tt", local, error, field, ticketFields);
   const set = (patch: Partial<TicketDraft>) => {
     setLocal(null);
     clear();
@@ -391,8 +378,8 @@ function QuotaDialog({
     : { name: "", size: "", types: [] };
   const [d, setD] = useState(start);
   const [local, setLocal] = useState<Problem | null>(null);
-  const { busy, error, code, clear, run } = useAction();
-  const p = useProblem("q", local, error, code, fieldFor);
+  const { busy, error, field, clear, run } = useAction();
+  const p = useProblem("q", local, error, field, ticketFields);
   const set = (patch: Partial<QuotaDraft>) => {
     setLocal(null);
     clear();

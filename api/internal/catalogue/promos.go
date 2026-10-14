@@ -82,17 +82,17 @@ var promoCodeRE = regexp.MustCompile(`^[A-Z0-9-]{3,32}$`)
 func validatePromo(p *PromoCode) error {
 	switch {
 	case !promoCodeRE.MatchString(p.Code):
-		return invalid("bad_code", "Use 3 to 32 letters, numbers and hyphens.")
+		return invalid("bad_code", "code", "Use 3 to 32 letters, numbers and hyphens.")
 	case p.Kind != "percent" && p.Kind != "amount":
-		return invalid("bad_kind", "A discount is either a percent or an amount.")
+		return invalid("bad_kind", "kind", "A discount is either a percent or an amount.")
 	case p.Kind == "percent" && (p.Value < 0 || p.Value > 10000):
-		return invalid("bad_discount", "A percent discount runs from 0% to 100%. Send it in basis points: 10% is 1000.")
+		return invalid("bad_discount", "value", "A percent discount runs from 0% to 100%. Send it in basis points: 10% is 1000.")
 	case p.Kind == "amount" && (p.Value < 0 || p.Value > 10000000):
-		return invalid("bad_discount", "An amount discount runs from $0 to $100,000. Send it in cents: $5 is 500.")
+		return invalid("bad_discount", "value", "An amount discount runs from $0 to $100,000. Send it in cents: $5 is 500.")
 	case p.MaxUses != nil && *p.MaxUses <= 0:
-		return invalid("bad_max_uses", "A code that can be used at most 0 times is no use. Send 1 or more, or null for no limit.")
+		return invalid("bad_max_uses", "max_uses", "A code that can be used at most 0 times is no use. Send 1 or more, or null for no limit.")
 	case p.ValidFrom != nil && p.ValidUntil != nil && !p.ValidUntil.After(*p.ValidFrom):
-		return invalid("bad_validity", "The code has to stop working after it starts.")
+		return invalid("bad_validity", "valid_until", "The code has to stop working after it starts.")
 	}
 	return nil
 }
@@ -101,7 +101,7 @@ func validatePromo(p *PromoCode) error {
 // one hidden ticket (an access code at full price) or it does nothing at all.
 func accessOnly(value int64, unlocks []uuid.UUID) error {
 	if value == 0 && len(unlocks) == 0 {
-		return invalid("bad_discount", "A code with no discount has to show at least one hidden ticket. Pick one to unlock, or set a discount.")
+		return invalid("bad_discount", "value", "A code with no discount has to show at least one hidden ticket. Pick one to unlock, or set a discount.")
 	}
 	return nil
 }
@@ -115,9 +115,9 @@ func NormalizePromoCode(s string) string { return strings.ToUpper(strings.TrimSp
 func validateAppliesTo(all bool, applies []uuid.UUID) error {
 	switch {
 	case all && len(applies) > 0:
-		return invalid("applies_to_conflict", "A code for all tickets can't also list ticket types. Send applies_to_all: false to limit it, or leave applies_to empty.")
+		return invalid("applies_to_conflict", "applies_to", "A code for all tickets can't also list ticket types. Send applies_to_all: false to limit it, or leave applies_to empty.")
 	case !all && len(applies) == 0:
-		return invalid("applies_to_required", "Pick at least one ticket type, or set applies_to_all to true.")
+		return invalid("applies_to_required", "applies_to", "Pick at least one ticket type, or set applies_to_all to true.")
 	}
 	return nil
 }
@@ -130,11 +130,11 @@ func promoDBError(err error) error {
 	if errors.As(err, &pg) {
 		switch pg.Code {
 		case "23514":
-			return ErrInvalid{"invalid_promo", "Something in that promo code isn't allowed. Check the code, the discount and the dates."}
+			return ErrInvalid{Code: "invalid_promo", Message: "Something in that promo code isn't allowed. Check the code, the discount and the dates."}
 		case "23503":
-			return ErrInvalid{"invalid_promo", "One of those ticket types isn't part of this event any more. Reload and try again."}
+			return ErrInvalid{Code: "invalid_promo", Message: "One of those ticket types isn't part of this event any more. Reload and try again."}
 		case "23505":
-			return ErrConflict{"code_taken", "This event already has that code. Pick another."}
+			return ErrConflict{"code_taken", "code", "This event already has that code. Pick another."}
 		}
 	}
 	return err
@@ -143,17 +143,17 @@ func promoDBError(err error) error {
 // promoSets checks, inside the locked transaction, that every id is a ticket
 // type of this event and that unlocks are all hidden.
 func promoSets(ctx context.Context, tx pgx.Tx, event uuid.UUID, applies, unlocks []uuid.UUID) ([]uuid.UUID, []uuid.UUID, error) {
-	applies, err := linkSet(ctx, tx, event, applies)
+	applies, err := linkSet(ctx, tx, event, applies, "applies_to")
 	if err != nil {
 		return nil, nil, err
 	}
-	if unlocks, err = linkSet(ctx, tx, event, unlocks); err != nil {
+	if unlocks, err = linkSet(ctx, tx, event, unlocks, "unlocks"); err != nil {
 		return nil, nil, err
 	}
 	var name string
 	err = tx.QueryRow(ctx, `select name from ticket_types where event_id = $1 and id = any($2) and not hidden order by position, id limit 1`, event, unlocks).Scan(&name)
 	if err == nil {
-		return nil, nil, invalid("unlock_not_hidden", "“"+name+"” isn't hidden, so there's nothing to unlock. Hide it first, or leave it out.")
+		return nil, nil, invalid("unlock_not_hidden", "unlocks", "“"+name+"” isn't hidden, so there's nothing to unlock. Hide it first, or leave it out.")
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil, err
@@ -256,7 +256,7 @@ func UpdatePromo(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 		p.Value = *patch.Value
 	}
 	if patch.Kind != nil && *patch.Kind != before.Kind && patch.Value == nil {
-		return PromoCode{}, invalid("value_required_with_kind", "Set the amount again when you switch between a percentage and a fixed amount.")
+		return PromoCode{}, invalid("value_required_with_kind", "value", "Set the amount again when you switch between a percentage and a fixed amount.")
 	}
 	if patch.AppliesToAll != nil {
 		p.AppliesToAll = *patch.AppliesToAll

@@ -1,14 +1,6 @@
 import { expect, test } from "bun:test";
 import { percentToBp } from "./EventForm";
-import {
-  discountText,
-  emptyPromo,
-  normalizeCode,
-  promoBody,
-  promoFieldFor,
-  usesText,
-  valueHint,
-} from "./Promos";
+import { discountText, emptyPromo, normalizeCode, promoBody, usesText, valueHint } from "./Promos";
 
 const ok = { ...emptyPromo, code: "spring", value: "10" };
 const field = (d: Partial<typeof ok>) =>
@@ -97,18 +89,6 @@ test("all tickets sends no list; a limited code needs at least one ticket", () =
     body: { applies_to_all: false, applies_to: ["a"] },
   });
   expect(field({ all: false, types: [] })).toBe("types");
-});
-
-test("API error codes point at fields", () => {
-  expect(promoFieldFor("code_taken", "")).toBe("code");
-  expect(promoFieldFor("bad_code", "")).toBe("code");
-  expect(promoFieldFor("bad_discount", "")).toBe("value");
-  expect(promoFieldFor("value_required_with_kind", "")).toBe("value");
-  expect(promoFieldFor("bad_validity", "")).toBe("until");
-  expect(promoFieldFor("applies_to_required", "")).toBe("types");
-  expect(promoFieldFor("unlock_not_hidden", "")).toBe("unlocks");
-  expect(promoFieldFor("missing_field", "Send “value”: the discount")).toBe("value");
-  expect(promoFieldFor("whatever", "")).toBe("");
 });
 
 test("list text", () => {

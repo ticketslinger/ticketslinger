@@ -66,7 +66,7 @@ func scan(row pgx.Row) (Event, error) {
 
 var slugRE = regexp.MustCompile(`^[a-z0-9](-?[a-z0-9])*$`)
 
-func invalid(code, msg string) error { return ErrInvalid{code, msg} }
+func invalid(code, field, msg string) error { return ErrInvalid{code, field, msg} }
 
 // validate holds the rules the CHECK constraints in 00007 back up. It trims
 // the name and returns the first rule broken.
@@ -74,21 +74,23 @@ func validate(e *Event) error {
 	e.Name = strings.TrimSpace(e.Name)
 	switch {
 	case len(e.Slug) < 3 || len(e.Slug) > 60 || !slugRE.MatchString(e.Slug):
-		return invalid("invalid_slug", "Use 3 to 60 lowercase letters, numbers and single hyphens for the web address.")
+		return invalid("invalid_slug", "slug", "Use 3 to 60 lowercase letters, numbers and single hyphens for the web address.")
 	case utf8.RuneCountInString(e.Name) < 1 || utf8.RuneCountInString(e.Name) > 160:
-		return invalid("invalid_name", "Give the event a name of up to 160 characters.")
+		return invalid("invalid_name", "name", "Give the event a name of up to 160 characters.")
 	case utf8.RuneCountInString(e.Description) > 20000:
-		return invalid("invalid_description", "The description can run to 20,000 characters. This one is longer.")
-	case utf8.RuneCountInString(e.VenueName) > 160 || utf8.RuneCountInString(e.VenueAddress) > 500:
-		return invalid("invalid_venue", "Keep the venue name to 160 characters and the address to 500.")
+		return invalid("invalid_description", "description", "The description can run to 20,000 characters. This one is longer.")
+	case utf8.RuneCountInString(e.VenueName) > 160:
+		return invalid("invalid_venue", "venue_name", "Keep the venue name to 160 characters and the address to 500.")
+	case utf8.RuneCountInString(e.VenueAddress) > 500:
+		return invalid("invalid_venue", "venue_address", "Keep the venue name to 160 characters and the address to 500.")
 	case !knownZone(e.Timezone):
-		return invalid("bad_timezone", "We don't know that time zone. Use a name like Europe/London or America/Chicago.")
+		return invalid("bad_timezone", "timezone", "We don't know that time zone. Use a name like Europe/London or America/Chicago.")
 	case !e.EndsAt.After(e.StartsAt):
-		return invalid("bad_times", "The event has to end after it starts.")
+		return invalid("bad_times", "ends_at", "The event has to end after it starts.")
 	case e.TaxRateBP < 0 || e.TaxRateBP > 10000:
-		return invalid("invalid_tax_rate", "Tax is in basis points, from 0 to 10000. For 8.25%, send 825.")
+		return invalid("invalid_tax_rate", "tax_rate_bp", "Tax is in basis points, from 0 to 10000. For 8.25%, send 825.")
 	case e.FeeMode != "absorb" && e.FeeMode != "pass":
-		return invalid("invalid_fee_mode", "Fee mode is either pass (the buyer pays our fee) or absorb (you do).")
+		return invalid("invalid_fee_mode", "fee_mode", "Fee mode is either pass (the buyer pays our fee) or absorb (you do).")
 	}
 	return nil
 }
@@ -173,11 +175,11 @@ func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 		return Event{}, err
 	}
 	if e.Slug != before.Slug && before.Status != "draft" {
-		return Event{}, ErrConflict{"slug_locked", "The web address can only change while the event is a draft."}
+		return Event{}, ErrConflict{"slug_locked", "slug", "The web address can only change while the event is a draft."}
 	}
 	if patch.Status != nil && *patch.Status != before.Status {
 		if before.Status != "draft" && before.Status != "live" {
-			return Event{}, invalid("status_not_allowed", "This event has finished its run, so its status can't change.")
+			return Event{}, invalid("status_not_allowed", "status", "This event has finished its run, so its status can't change.")
 		}
 		switch *patch.Status {
 		case "draft":
@@ -189,7 +191,7 @@ func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 			}
 			e.Status = "live"
 		default:
-			return Event{}, invalid("status_not_allowed", "Events can move between draft and live for now. Ending or cancelling one isn't available yet.")
+			return Event{}, invalid("status_not_allowed", "status", "Events can move between draft and live for now. Ending or cancelling one isn't available yet.")
 		}
 	}
 	if sameEvent(e, before) {
@@ -221,20 +223,20 @@ func sameEvent(a, b Event) bool {
 // status change.
 func goLive(ctx context.Context, tx pgx.Tx, e Event) error {
 	if !e.EndsAt.After(time.Now()) {
-		return invalid("event_over", "This event has already ended, so it can't go on sale.")
+		return invalid("event_over", "status", "This event has already ended, so it can't go on sale.")
 	}
 	var n int
 	if err := tx.QueryRow(ctx, `select count(*) from ticket_types where event_id = $1`, e.ID).Scan(&n); err != nil {
 		return err
 	}
 	if n == 0 {
-		return invalid("no_ticket_types", "Add at least one ticket type before you put the event on sale.")
+		return invalid("no_ticket_types", "status", "Add at least one ticket type before you put the event on sale.")
 	}
 	var name string
 	err := tx.QueryRow(ctx, `select name from ticket_types t where event_id = $1
 		and not exists (select 1 from quota_ticket_types where ticket_type_id = t.id) order by position, created_at, id limit 1`, e.ID).Scan(&name)
 	if err == nil {
-		return invalid("unquotaed_ticket_type", "Give \u201c"+name+"\u201d a capacity before going live.")
+		return invalid("unquotaed_ticket_type", "status", "Give \u201c"+name+"\u201d a capacity before going live.")
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return err
@@ -250,7 +252,7 @@ func DeleteEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 		return err
 	}
 	if before.Status != "draft" {
-		return ErrConflict{"event_not_draft", "Only a draft can be deleted. This event has already gone on sale."}
+		return ErrConflict{"event_not_draft", "", "Only a draft can be deleted. This event has already gone on sale."}
 	}
 	if _, err := tx.Exec(ctx, `delete from events where id = $1`, id); err != nil {
 		return err

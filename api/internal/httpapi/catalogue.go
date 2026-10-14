@@ -35,8 +35,14 @@ func catalogueError(err error) error {
 	case errors.Is(err, catalogue.ErrNotFound):
 		return notFound()
 	case errors.As(err, &inv):
+		if inv.Field != "" {
+			return invalidField(inv.Code, inv.Field, inv.Message)
+		}
 		return &apiError{422, inv.Code, inv.Message}
 	case errors.As(err, &con):
+		if con.Field != "" {
+			return fieldError{&apiError{409, con.Code, con.Message}, con.Field}
+		}
 		return &apiError{409, con.Code, con.Message}
 	}
 	return err
@@ -45,7 +51,7 @@ func catalogueError(err error) error {
 // missingField is a required number the body left out. Without it a 0 would
 // quietly become a free ticket or an empty capacity.
 func missingField(name, what string) error {
-	return &apiError{422, "missing_field", "Send \u201c" + name + "\u201d: " + what + "."}
+	return invalidField("missing_field", name, "Send \u201c"+name+"\u201d: "+what+".")
 }
 
 func toEvent(e catalogue.Event) Event {

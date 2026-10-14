@@ -3,6 +3,7 @@ package catalogue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -73,20 +74,20 @@ func validateQuestion(q *Question) error {
 	q.Label = strings.TrimSpace(q.Label)
 	switch {
 	case utf8.RuneCountInString(q.Label) < 1 || utf8.RuneCountInString(q.Label) > 200:
-		return invalid("bad_label", "Give the question a label of up to 200 characters.")
+		return invalid("bad_label", "label", "Give the question a label of up to 200 characters.")
 	case q.Kind != "text" && q.Kind != "select" && q.Kind != "checkbox":
-		return invalid("bad_kind", "A question is a text box, a select (pick one) or a checkbox.")
+		return invalid("bad_kind", "kind", "A question is a text box, a select (pick one) or a checkbox.")
 	case q.Scope != "order" && q.Scope != "ticket":
-		return invalid("bad_scope", "Ask once per order, or once per ticket.")
+		return invalid("bad_scope", "scope", "Ask once per order, or once per ticket.")
 	}
 	if q.Kind != "select" {
 		if len(q.Options) > 0 {
-			return invalid("bad_options", "Only a select question has options. Leave them out for text and checkbox questions.")
+			return invalid("bad_options", "options", "Only a select question has options. Leave them out for text and checkbox questions.")
 		}
 		return nil
 	}
 	if len(q.Options) < 2 || len(q.Options) > 30 {
-		return invalid("bad_options", "A select needs 2 to 30 options.")
+		return invalid("bad_options", "options", "A select needs 2 to 30 options.")
 	}
 	seen := map[string]bool{}
 	for i, o := range q.Options {
@@ -94,9 +95,9 @@ func validateQuestion(q *Question) error {
 		q.Options[i] = o
 		switch {
 		case utf8.RuneCountInString(o) < 1 || utf8.RuneCountInString(o) > 120:
-			return invalid("bad_options", "Each option needs 1 to 120 characters.")
+			return invalid("bad_options", fmt.Sprintf("options[%d]", i), "Each option needs 1 to 120 characters.")
 		case seen[fold(o)]:
-			return invalid("bad_options", "“"+o+"” is listed twice. Options have to be different, ignoring capitals.")
+			return invalid("bad_options", fmt.Sprintf("options[%d]", i), "“"+o+"” is listed twice. Options have to be different, ignoring capitals.")
 		}
 		seen[fold(o)] = true
 	}
@@ -113,9 +114,9 @@ func questionDBError(err error) error {
 	if errors.As(err, &pg) {
 		switch pg.Code {
 		case "23514":
-			return ErrInvalid{"invalid_question", "Something in that question isn't allowed. Check the label, the kind and the options."}
+			return ErrInvalid{Code: "invalid_question", Message: "Something in that question isn't allowed. Check the label, the kind and the options."}
 		case "23503":
-			return ErrInvalid{"invalid_question", "One of those ticket types isn't part of this event any more. Reload and try again."}
+			return ErrInvalid{Code: "invalid_question", Field: "applies_to", Message: "One of those ticket types isn't part of this event any more. Reload and try again."}
 		}
 	}
 	return err
@@ -145,7 +146,7 @@ func CreateQuestion(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor 
 	if _, err := lockEvent(ctx, tx, event); err != nil {
 		return Question{}, err
 	}
-	applies, err := linkSet(ctx, tx, event, in.AppliesTo)
+	applies, err := linkSet(ctx, tx, event, in.AppliesTo, "applies_to")
 	if err != nil {
 		return Question{}, err
 	}
@@ -208,7 +209,7 @@ func UpdateQuestion(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, ac
 	if patch.Kind != nil && *patch.Kind != before.Kind {
 		q.Kind = *patch.Kind
 		if q.Kind == "select" && patch.Options == nil {
-			return Question{}, invalid("options_required_with_kind", "Send the options too when you turn a question into a select.")
+			return Question{}, invalid("options_required_with_kind", "options", "Send the options too when you turn a question into a select.")
 		}
 		if before.Kind == "select" {
 			q.Options = []string{}
@@ -224,7 +225,7 @@ func UpdateQuestion(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, ac
 		return Question{}, err
 	}
 	if patch.AppliesTo != nil {
-		if q.AppliesTo, err = linkSet(ctx, tx, event, *patch.AppliesTo); err != nil {
+		if q.AppliesTo, err = linkSet(ctx, tx, event, *patch.AppliesTo, "applies_to"); err != nil {
 			return Question{}, err
 		}
 	}

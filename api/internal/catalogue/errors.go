@@ -13,12 +13,14 @@ import (
 var ErrNotFound = errors.New("catalogue: not found")
 
 // ErrInvalid is input the rules refuse (HTTP 422). Message is for people.
-type ErrInvalid struct{ Code, Message string }
+// Field names the request property it is about, when there is one.
+type ErrInvalid struct{ Code, Field, Message string }
 
 func (e ErrInvalid) Error() string { return e.Code }
 
 // ErrConflict is a request that clashes with what exists (HTTP 409).
-type ErrConflict struct{ Code, Message string }
+// Field names the request property that clashes, when there is one.
+type ErrConflict struct{ Code, Field, Message string }
 
 func (e ErrConflict) Error() string { return e.Code }
 
@@ -30,9 +32,9 @@ func dbError(err error) error {
 	if errors.As(err, &pg) {
 		switch pg.Code {
 		case "23514":
-			return ErrInvalid{"invalid_event", "Something in that event isn't allowed. Check the lengths, dates and tax rate."}
+			return ErrInvalid{Code: "invalid_event", Message: "Something in that event isn't allowed. Check the lengths, dates and tax rate."}
 		case "23505":
-			return ErrConflict{"slug_taken", "You already have an event at that web address. Pick another."}
+			return ErrConflict{"slug_taken", "slug", "You already have an event at that web address. Pick another."}
 		}
 	}
 	return err

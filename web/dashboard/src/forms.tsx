@@ -74,15 +74,25 @@ export function FormDialog({
   );
 }
 
+/**
+ * The form field for a request property the API named: options[2] is the
+ * options field. "" when the form has no field for it, so the message stands
+ * alone at the form level.
+ */
+export function formField(apiField: string, fields: Record<string, string>): string {
+  const key = apiField.replace(/\[\d+\]$/, "");
+  return Object.hasOwn(fields, key) ? fields[key] : "";
+}
+
 /** Marks the field a problem is about and moves focus to it. */
 export function useProblem(
   prefix: string,
   local: Problem | null,
   error: string,
-  code: string,
-  fieldOf: (code: string, message: string) => string,
+  apiField: string,
+  fields: Record<string, string>,
 ) {
-  const field = local?.field ?? (code ? fieldOf(code, error) : "");
+  const field = local?.field ?? formField(apiField, fields);
   const message = local?.message ?? error;
   // biome-ignore lint/correctness/useExhaustiveDependencies: message re-runs it, so a repeat mistake pulls focus back
   useEffect(() => {

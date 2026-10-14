@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { emptyTicket, fieldFor, needsCapacity, quotaBody, ticketBody } from "./Tickets";
+import { emptyTicket, needsCapacity, quotaBody, ticketBody } from "./Tickets";
 
 const ok = { ...emptyTicket, name: "General", price: "25" };
 
@@ -45,14 +45,6 @@ test("a capacity form", () => {
   expect(quotaBody({ name: "Floor", size: "0", types: [] })).toMatchObject({ body: { size: 0 } });
   expect(quotaBody({ name: "Floor", size: "-3", types: [] })).toMatchObject({ field: "size" });
   expect(quotaBody({ name: "", size: "3", types: [] })).toMatchObject({ field: "name" });
-});
-
-test("API error codes point at fields", () => {
-  expect(fieldFor("bad_price", "")).toBe("price");
-  expect(fieldFor("missing_field", "Send “price_cents”: the price")).toBe("price");
-  expect(fieldFor("missing_field", "Send “size”: how many")).toBe("size");
-  expect(fieldFor("live_needs_capacity", "")).toBe("choices");
-  expect(fieldFor("ticket_type_exists", "")).toBe("");
 });
 
 test("grouped quota sizes must be grouped properly", () => {

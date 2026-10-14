@@ -208,13 +208,13 @@ func (s *server) Signup(ctx context.Context, req SignupRequestObject) (SignupRes
 	sess, u, err := s.Auth.Signup(ctx, string(req.Body.Email), req.Body.Password, req.Body.Name, c.ip, c.ua)
 	switch {
 	case errors.Is(err, auth.ErrEmailTaken):
-		return nil, &apiError{409, "email_taken", "There's already an account with that email. Try signing in instead."}
+		return nil, fieldError{&apiError{409, "email_taken", "There's already an account with that email. Try signing in instead."}, "email"}
 	case errors.Is(err, auth.ErrPasswordTooShort):
-		return nil, &apiError{422, "password_too_short", "Your password needs at least 12 characters."}
+		return nil, invalidField("password_too_short", "password", "Your password needs at least 12 characters.")
 	case errors.Is(err, auth.ErrPasswordTooLong):
-		return nil, &apiError{422, "password_too_long", "Your password can be at most 256 characters."}
+		return nil, invalidField("password_too_long", "password", "Your password can be at most 256 characters.")
 	case errors.Is(err, auth.ErrInvalidName):
-		return nil, &apiError{422, "invalid_name", "Tell us your name, in 120 characters or fewer."}
+		return nil, invalidField("invalid_name", "name", "Tell us your name, in 120 characters or fewer.")
 	case errors.Is(err, auth.ErrRateLimited):
 		return nil, tooManyAttempts()
 	case err != nil:
@@ -236,7 +236,7 @@ func (s *server) Login(ctx context.Context, req LoginRequestObject) (LoginRespon
 	// Spaces and hyphens are how people copy a code, and the service drops
 	// them: allow padding up to 64 characters, then count what's left.
 	if len(recovery) > 64 || len(strings.NewReplacer(" ", "", "-", "").Replace(recovery)) > 32 {
-		return nil, &apiError{422, "invalid_recovery_code", "That recovery code is too long. Copy it again from where you saved it."}
+		return nil, invalidField("invalid_recovery_code", "recovery_code", "That recovery code is too long. Copy it again from where you saved it.")
 	}
 	sess, u, err := s.Auth.Login(ctx, string(req.Body.Email), req.Body.Password, code, recovery, c.ip, c.ua)
 	switch {
@@ -296,7 +296,7 @@ func passkeyError(err error, badCreds string) error {
 	case errors.Is(err, auth.ErrBadPasskey):
 		return &apiError{400, "invalid_passkey", "We couldn't verify that passkey. Try again, or use a different one."}
 	case errors.Is(err, auth.ErrInvalidName):
-		return &apiError{422, "invalid_name", "Give your passkey a name of 120 characters or fewer."}
+		return invalidField("invalid_name", "name", "Give your passkey a name of 120 characters or fewer.")
 	case errors.Is(err, auth.ErrPasswordRequired):
 		return &apiError{401, "password_required", "Enter your password to add a passkey."}
 	case errors.Is(err, auth.ErrMFARequired):
@@ -535,8 +535,8 @@ func (s *server) inOrganizerAsKey(ctx context.Context, key db.Principal, slug st
 
 var (
 	slugRE         = regexp.MustCompile(`^[a-z0-9](-?[a-z0-9])*$`)
-	errInvalidName = &apiError{422, "invalid_name", "Give your organizer a name of up to 120 characters."}
-	errInvalidSlug = &apiError{422, "invalid_slug", "Use 3 to 40 lowercase letters, numbers and single hyphens."}
+	errInvalidName = invalidField("invalid_name", "name", "Give your organizer a name of up to 120 characters.")
+	errInvalidSlug = invalidField("invalid_slug", "slug", "Use 3 to 40 lowercase letters, numbers and single hyphens.")
 )
 
 func toOrganizer(o organizers.Organizer) Organizer {
@@ -579,7 +579,7 @@ func (s *server) CreateOrganizer(ctx context.Context, req CreateOrganizerRequest
 		return nil, errInvalidSlug
 	}
 	if errors.Is(err, organizers.ErrSlugTaken) {
-		return nil, &apiError{409, "slug_taken", "Someone already uses that web address. Try another."}
+		return nil, fieldError{&apiError{409, "slug_taken", "Someone already uses that web address. Try another."}, "slug"}
 	}
 	if err != nil {
 		return nil, err
@@ -663,9 +663,9 @@ func (s *server) CreateApiKey(ctx context.Context, req CreateApiKeyRequestObject
 		k, plain, err := s.Keys.Create(ctx, tx, org.ID, u.ID, req.Body.Name, string(req.Body.Scope))
 		switch {
 		case errors.Is(err, apikeys.ErrInvalidName):
-			return &apiError{422, "invalid_name", "Give your key a name of up to 80 characters, so you know later what uses it."}
+			return invalidField("invalid_name", "name", "Give your key a name of up to 80 characters, so you know later what uses it.")
 		case errors.Is(err, apikeys.ErrInvalidScope):
-			return &apiError{422, "invalid_scope", "Pick read or write for the key's access."}
+			return invalidField("invalid_scope", "scope", "Pick read or write for the key's access.")
 		case err != nil:
 			return err
 		}
