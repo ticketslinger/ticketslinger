@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -22,6 +23,9 @@ type Config struct {
 	SecretKey []byte
 	// TrustedProxies may set the client address with X-Real-IP.
 	TrustedProxies []netip.Prefix
+	// Platform fee per paid ticket: basis points of the pre-tax price plus a flat amount.
+	PlatformFeeBP    int   // TS_PLATFORM_FEE_BP, 0-10000, default 200
+	PlatformFeeCents int64 // TS_PLATFORM_FEE_CENTS, 0-10000, default 50
 }
 
 func Load() (Config, error) {
@@ -50,6 +54,15 @@ func Load() (Config, error) {
 		}
 		c.SecretKey = k
 	}
+	bpv, err := intEnv("TS_PLATFORM_FEE_BP", 200, 10000)
+	if err != nil {
+		return c, err
+	}
+	cents, err := intEnv("TS_PLATFORM_FEE_CENTS", 50, 10000)
+	if err != nil {
+		return c, err
+	}
+	c.PlatformFeeBP, c.PlatformFeeCents = bpv, int64(cents)
 	if c.DatabaseURL == "" {
 		return c, errors.New("TS_DATABASE_URL is required")
 	}
@@ -61,4 +74,17 @@ func env(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// intEnv reads an integer in [0, hi], or def when unset.
+func intEnv(k string, def, hi int) (int, error) {
+	v := os.Getenv(k)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || n > hi {
+		return 0, fmt.Errorf("%s must be a whole number from 0 to %d", k, hi)
+	}
+	return n, nil
 }

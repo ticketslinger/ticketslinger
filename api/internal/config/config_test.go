@@ -46,3 +46,27 @@ func TestLoadSecretKey(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadPlatformFee(t *testing.T) {
+	t.Setenv("TS_DATABASE_URL", "postgres://x")
+	c, err := Load()
+	if err != nil || c.PlatformFeeBP != 200 || c.PlatformFeeCents != 50 {
+		t.Fatalf("defaults: %+v %v", c, err)
+	}
+	t.Setenv("TS_PLATFORM_FEE_BP", "0")
+	t.Setenv("TS_PLATFORM_FEE_CENTS", "10000")
+	if c, err = Load(); err != nil || c.PlatformFeeBP != 0 || c.PlatformFeeCents != 10000 {
+		t.Fatalf("bounds: %+v %v", c, err)
+	}
+	for _, kv := range [][2]string{
+		{"TS_PLATFORM_FEE_BP", "10001"}, {"TS_PLATFORM_FEE_BP", "-1"}, {"TS_PLATFORM_FEE_BP", "2.5"}, {"TS_PLATFORM_FEE_BP", "abc"},
+		{"TS_PLATFORM_FEE_CENTS", "10001"}, {"TS_PLATFORM_FEE_CENTS", "-1"}, {"TS_PLATFORM_FEE_CENTS", "x"},
+	} {
+		t.Setenv("TS_PLATFORM_FEE_BP", "200")
+		t.Setenv("TS_PLATFORM_FEE_CENTS", "50")
+		t.Setenv(kv[0], kv[1])
+		if _, err := Load(); err == nil {
+			t.Fatalf("expected error for %s=%s", kv[0], kv[1])
+		}
+	}
+}
