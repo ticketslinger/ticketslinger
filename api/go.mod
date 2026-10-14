@@ -4,7 +4,7 @@ go 1.27
 
 require (
 	github.com/descope/virtualwebauthn v1.0.5
-	github.com/getkin/kin-openapi v0.142.0
+	github.com/getkin/kin-openapi v0.144.0
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
