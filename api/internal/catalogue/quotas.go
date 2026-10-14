@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -51,10 +52,12 @@ func scanQuota(row pgx.Row) (Quota, error) {
 	return q, err
 }
 
-// validateQuota holds the rules the CHECK constraints in 00009 back up.
-func validateQuota(name string, size int) error {
+// validateQuota holds the rules the CHECK constraints in 00009 back up. It
+// trims the name first.
+func validateQuota(name *string, size int) error {
+	*name = strings.TrimSpace(*name)
 	switch {
-	case utf8.RuneCountInString(name) < 1 || utf8.RuneCountInString(name) > 120:
+	case utf8.RuneCountInString(*name) < 1 || utf8.RuneCountInString(*name) > 120:
 		return invalid("invalid_name", "Give the quota a name of up to 120 characters.")
 	case size < 0 || size > 1000000:
 		return invalid("bad_quota_size", "A quota holds from 0 to 1,000,000 tickets.")
@@ -62,12 +65,17 @@ func validateQuota(name string, size int) error {
 	return nil
 }
 
-// quotaDBError is dbError for quotas: 23514 is a failed CHECK or the
-// same-event foreign keys.
+// quotaDBError is dbError for quotas: 23514 is a failed CHECK, 23503 a link
+// whose quota or ticket type isn't there (or isn't in this event).
 func quotaDBError(err error) error {
 	var pg *pgconn.PgError
-	if errors.As(err, &pg) && pg.Code == "23514" {
-		return ErrInvalid{"invalid_quota", "Something in that quota isn't allowed. Check the name, the size and the ticket types."}
+	if errors.As(err, &pg) {
+		switch pg.Code {
+		case "23514":
+			return ErrInvalid{"invalid_quota", "Something in that quota isn't allowed. Check the name, the size and the ticket types."}
+		case "23503":
+			return ErrInvalid{"invalid_quota", "One of those ticket types isn't part of this event any more. Reload and try again."}
+		}
 	}
 	return err
 }
@@ -128,7 +136,7 @@ func liveNeedsCapacity(ctx context.Context, tx pgx.Tx, ev Event) error {
 // CreateQuota adds a quota and records quota.created by actor. tx must be
 // scoped to org.
 func CreateQuota(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor audit.Actor, in QuotaInput) (Quota, error) {
-	if err := validateQuota(in.Name, in.Size); err != nil {
+	if err := validateQuota(&in.Name, in.Size); err != nil {
 		return Quota{}, err
 	}
 	if _, err := lockEvent(ctx, tx, event); err != nil {
@@ -192,7 +200,7 @@ func UpdateQuota(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 	if p.Size != nil {
 		q.Size = *p.Size
 	}
-	if err := validateQuota(q.Name, q.Size); err != nil {
+	if err := validateQuota(&q.Name, q.Size); err != nil {
 		return Quota{}, err
 	}
 	if p.TicketTypeIDs != nil {

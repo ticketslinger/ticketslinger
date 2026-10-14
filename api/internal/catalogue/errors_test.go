@@ -27,3 +27,21 @@ func TestDBErrorBackstop(t *testing.T) {
 		t.Errorf("quota 23514: %v", err)
 	}
 }
+
+// A link whose ticket type vanished between the check and the insert is a
+// foreign key failure: 422, not a 500.
+func TestForeignKeyFailuresAreInvalid(t *testing.T) {
+	for name, c := range map[string]struct {
+		fn   func(error) error
+		code string
+	}{
+		"quota":    {quotaDBError, "invalid_quota"},
+		"promo":    {promoDBError, "invalid_promo"},
+		"question": {questionDBError, "invalid_question"},
+	} {
+		var inv ErrInvalid
+		if err := c.fn(&pgconn.PgError{Code: "23503"}); !errors.As(err, &inv) || inv.Code != c.code {
+			t.Errorf("%s 23503: %v, want %s", name, err, c.code)
+		}
+	}
+}

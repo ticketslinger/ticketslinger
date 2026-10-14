@@ -193,7 +193,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
     post:
       operationId: createEvent
-      description: Owners and admins, or a write API key. The event starts as a draft.
+      description: Owners and admins, or a write API key. The event starts as a draft. starts_at and ends_at are required (422 missing_field).
       parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateEvent" } } } }
       responses:
@@ -214,7 +214,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
     patch:
       operationId: updateEvent
-      description: "Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed)."
+      description: "Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed). Going live is refused with 422 event_over once ends_at has passed (an event that has started but not ended can go live), 422 no_ticket_types without a ticket type, and 422 unquotaed_ticket_type while a ticket type has no quota. A live event's ends_at can still change. The slug changes only on a draft (409 slug_locked)."
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
@@ -223,6 +223,7 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Event" } } } }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteEvent
@@ -473,7 +474,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
     patch:
       operationId: updateQuestion
-      description: "Owners and admins, or a write API key. Send only what changes. Turning a question into a select needs options in the same request (422 options_required_with_kind); turning a select into anything else clears its options. applies_to replaces the whole set when sent. Changing position moves only this question; the others keep theirs."
+      description: "Owners and admins, or a write API key. Send only what changes. Turning a question into a select needs options in the same request (422 options_required_with_kind); turning a select into anything else clears its options. applies_to replaces the whole set when sent. Order changes only through the order endpoint."
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
@@ -683,7 +684,7 @@ components:
       properties:
         code: { type: string, description: "3 to 32 letters, numbers and hyphens. Stored upper-case; unique within the event." }
         kind: { type: string, enum: [percent, amount] }
-        value: { type: integer, format: int64, minimum: 1, maximum: 10000000, description: "percent: basis points, 1 to 10000 (1000 is 10%). amount: cents, up to 10000000 ($100,000)." }
+        value: { type: integer, format: int64, minimum: 0, maximum: 10000000, description: "percent: basis points, 0 to 10000 (1000 is 10%). amount: cents, 0 to 10000000 ($100,000). 0 makes an access code: no discount, so unlocks must not be empty (422 bad_discount), on create and on any patch that sends value or unlocks." }
         max_uses: { type: [integer, "null"], minimum: 1, description: "null means unlimited." }
         valid_from: { type: [string, "null"], format: date-time }
         valid_until: { type: [string, "null"], format: date-time, description: Must be after valid_from. }
@@ -722,7 +723,6 @@ components:
         scope: { type: string, enum: [order, ticket], description: "order: asked once per order. ticket: asked for every ticket." }
         applies_to_all: { type: boolean, description: "true (the default) asks it for every ticket type; then applies_to must be empty (422 applies_to_conflict). false limits it to applies_to, which must not be empty (422 applies_to_required). If every listed ticket type is later deleted, the question is never asked." }
         applies_to: { type: array, items: { type: string, format: uuid }, description: "Ticket types the question covers when applies_to_all is false. On a patch the list replaces the current one." }
-        position: { type: integer, minimum: 1, description: "Patch only. Moves this question; the others keep their positions." }
     CreateQuestion:
       allOf:
         - { $ref: "#/components/schemas/QuestionFields" }
@@ -740,7 +740,7 @@ components:
         scope: { type: string, enum: [order, ticket] }
         applies_to_all: { type: boolean }
         applies_to: { type: array, items: { type: string, format: uuid } }
-        position: { type: integer, minimum: 1, description: "1 is first. Change it with a PATCH, or all at once with the order endpoint." }
+        position: { type: integer, minimum: 1, description: "1 is first. Change it with the order endpoint." }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     TicketTypeFields:

@@ -87,6 +87,20 @@ export const promoDraftOf = (p: Promo, tz: string): PromoDraft => ({
   unlocks: p.unlocks,
 });
 
+const discountOf = (d: PromoDraft) =>
+  d.kind === "percent" ? percentToBp(d.value) : parseDollars(d.value);
+
+/** What the value box says under it. A 0 that shows hidden tickets is an access code. */
+export function valueHint(d: PromoDraft): string {
+  if (d.unlocks.length > 0 && d.value.trim() !== "" && discountOf(d) === 0)
+    return "This code only unlocks hidden tickets — buyers pay full price.";
+  const base =
+    d.kind === "percent"
+      ? "From 0.01 to 100, like 10 or 12.5."
+      : "Taken off each ticket it applies to.";
+  return d.unlocks.length > 0 ? `${base} Or 0, to only show hidden tickets.` : base;
+}
+
 /** Checks a promo form and turns it into the API's fields, or says which field is wrong. */
 export function promoBody(
   d: PromoDraft,
@@ -96,7 +110,7 @@ export function promoBody(
   loaded?: { all: boolean; types: string[] },
 ): { body: components["schemas"]["PromoCodeFields"] } | Problem {
   const code = normalizeCode(d.code);
-  const value = d.kind === "percent" ? percentToBp(d.value) : parseDollars(d.value);
+  const value = discountOf(d);
   const max = d.maxUses.trim();
   const scopeKept =
     !!loaded &&
@@ -105,12 +119,13 @@ export function promoBody(
     loaded.types.every((t) => d.types.includes(t));
   if (!/^[A-Z0-9-]{3,32}$/.test(code))
     return { field: "code", message: "Use 3 to 32 letters, numbers and hyphens, like SPRING25." };
-  if (
-    d.value.trim() === "" ||
-    value === null ||
-    value < 1 ||
-    value > (d.kind === "percent" ? 10000 : MAX_CENTS)
-  )
+  if (d.value.trim() !== "" && value === 0 && d.unlocks.length === 0)
+    return {
+      field: "value",
+      message:
+        "A code with no discount has to show at least one hidden ticket. Pick one below, or enter a discount.",
+    };
+  if (d.value.trim() === "" || value === null || value > (d.kind === "percent" ? 10000 : MAX_CENTS))
     return {
       field: "value",
       message:
@@ -149,7 +164,11 @@ export function promoBody(
 }
 
 export const discountText = (p: Pick<Promo, "kind" | "value">) =>
-  p.kind === "percent" ? `${bpToPercent(p.value)}% off` : `${formatCents(p.value)} off`;
+  p.value === 0
+    ? "No discount"
+    : p.kind === "percent"
+      ? `${bpToPercent(p.value)}% off`
+      : `${formatCents(p.value)} off`;
 
 export const usesText = (p: Pick<Promo, "used_count" | "max_uses">) =>
   `${p.used_count} / ${p.max_uses ?? "no limit"}`;
@@ -251,11 +270,7 @@ function PromoDialog({
           <Field
             id="pc-value"
             label={d.kind === "percent" ? "Percent off" : "Dollars off (USD)"}
-            hint={
-              d.kind === "percent"
-                ? "From 0.01 to 100, like 10 or 12.5."
-                : "Taken off each ticket it applies to."
-            }
+            hint={valueHint(d)}
             inputMode="decimal"
             required
             aria-invalid={p.bad("value")}

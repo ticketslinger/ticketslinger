@@ -76,22 +76,32 @@ func scanPromo(row pgx.Row) (PromoCode, error) {
 
 var promoCodeRE = regexp.MustCompile(`^[A-Z0-9-]{3,32}$`)
 
-// validatePromo holds the rules the CHECK constraints in 00010 back up. The
-// code is already trimmed and upper-cased.
+// validatePromo holds the rules the CHECK constraints in 00010 and 00015 back
+// up. The code is already trimmed and upper-cased. A value of 0 is allowed
+// here; accessOnly decides whether it may stand.
 func validatePromo(p *PromoCode) error {
 	switch {
 	case !promoCodeRE.MatchString(p.Code):
 		return invalid("bad_code", "Use 3 to 32 letters, numbers and hyphens.")
 	case p.Kind != "percent" && p.Kind != "amount":
 		return invalid("bad_kind", "A discount is either a percent or an amount.")
-	case p.Kind == "percent" && (p.Value < 1 || p.Value > 10000):
-		return invalid("bad_discount", "A percent discount runs from 0.01% to 100%. Send it in basis points: 10% is 1000.")
-	case p.Kind == "amount" && (p.Value < 1 || p.Value > 10000000):
-		return invalid("bad_discount", "An amount discount runs from 1 cent to $100,000. Send it in cents: $5 is 500.")
+	case p.Kind == "percent" && (p.Value < 0 || p.Value > 10000):
+		return invalid("bad_discount", "A percent discount runs from 0% to 100%. Send it in basis points: 10% is 1000.")
+	case p.Kind == "amount" && (p.Value < 0 || p.Value > 10000000):
+		return invalid("bad_discount", "An amount discount runs from $0 to $100,000. Send it in cents: $5 is 500.")
 	case p.MaxUses != nil && *p.MaxUses <= 0:
 		return invalid("bad_max_uses", "A code that can be used at most 0 times is no use. Send 1 or more, or null for no limit.")
 	case p.ValidFrom != nil && p.ValidUntil != nil && !p.ValidUntil.After(*p.ValidFrom):
 		return invalid("bad_validity", "The code has to stop working after it starts.")
+	}
+	return nil
+}
+
+// accessOnly: a code worth 0 takes nothing off, so it has to reveal at least
+// one hidden ticket (an access code at full price) or it does nothing at all.
+func accessOnly(value int64, unlocks []uuid.UUID) error {
+	if value == 0 && len(unlocks) == 0 {
+		return invalid("bad_discount", "A code with no discount has to show at least one hidden ticket. Pick one to unlock, or set a discount.")
 	}
 	return nil
 }
@@ -113,13 +123,16 @@ func validateAppliesTo(all bool, applies []uuid.UUID) error {
 }
 
 // promoDBError is dbError for promo codes: 23514 a failed CHECK, 23505 the
-// per-event code.
+// per-event code, 23503 a link whose ticket type isn't there (or isn't in this
+// event).
 func promoDBError(err error) error {
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) {
 		switch pg.Code {
 		case "23514":
 			return ErrInvalid{"invalid_promo", "Something in that promo code isn't allowed. Check the code, the discount and the dates."}
+		case "23503":
+			return ErrInvalid{"invalid_promo", "One of those ticket types isn't part of this event any more. Reload and try again."}
 		case "23505":
 			return ErrConflict{"code_taken", "This event already has that code. Pick another."}
 		}
@@ -171,6 +184,9 @@ func CreatePromo(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor aud
 		return PromoCode{}, err
 	}
 	if err := validateAppliesTo(p.AppliesToAll, dedupe(in.AppliesTo)); err != nil {
+		return PromoCode{}, err
+	}
+	if err := accessOnly(p.Value, in.Unlocks); err != nil {
 		return PromoCode{}, err
 	}
 	if _, err := lockEvent(ctx, tx, event); err != nil {
@@ -263,10 +279,15 @@ func UpdatePromo(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 			return PromoCode{}, err
 		}
 	}
-	// Only when the patch touches the scope: a code emptied by a deleted
-	// ticket type can still have its other fields edited.
+	// Only when the patch touches the scope or the discount: a code emptied
+	// by a deleted ticket type can still have its other fields edited.
 	if patch.AppliesTo != nil || patch.AppliesToAll != nil {
 		if err := validateAppliesTo(p.AppliesToAll, p.AppliesTo); err != nil {
+			return PromoCode{}, err
+		}
+	}
+	if patch.Value != nil || patch.Unlocks != nil {
+		if err := accessOnly(p.Value, p.Unlocks); err != nil {
 			return PromoCode{}, err
 		}
 	}

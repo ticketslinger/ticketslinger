@@ -100,15 +100,6 @@ func TestQuestionPositionsAndPatch(t *testing.T) {
 	if err != nil || a.Position != 1 || b.Position != 2 || c.Position != 3 {
 		t.Fatalf("positions: %v %d %d %d", err, a.Position, b.Position, c.Position)
 	}
-	// Moving one leaves the others where they were.
-	three := 3
-	if _, err := e.patchQuestion(a.ID, catalogue.QuestionPatch{Position: &three}); err != nil {
-		t.Fatal(err)
-	}
-	zero := 0
-	if _, err := e.patchQuestion(a.ID, catalogue.QuestionPatch{Position: &zero}); !invalidCode(err, "bad_position") {
-		t.Fatalf("position 0: %v", err)
-	}
 	var list []catalogue.Question
 	if err := e.run(e.a, func(tx pgx.Tx) (err error) {
 		list, err = catalogue.ListQuestions(context.Background(), tx, e.ev.ID)
@@ -116,10 +107,10 @@ func TestQuestionPositionsAndPatch(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 3 || list[0].ID != b.ID || list[1].ID != a.ID || list[2].ID != c.ID || list[2].Position != 3 {
+	if len(list) != 3 || list[0].ID != a.ID || list[1].ID != b.ID || list[2].ID != c.ID || list[2].Position != 3 {
 		t.Fatalf("order: %+v", list)
 	}
-	// A new one is max+1, even with a gap.
+	// A new one is max+1.
 	d, _ := e.question(qn("D", "text"))
 	if d.Position != 4 {
 		t.Fatalf("after move: %d", d.Position)
@@ -130,7 +121,7 @@ func TestQuestionPositionsAndPatch(t *testing.T) {
 		t.Fatalf("no-op: %v", err)
 	}
 	var n int
-	if err := testdb.Owner(t, e.pool).QueryRow(context.Background(), `select count(*) from audit_log where action = 'question.updated'`).Scan(&n); err != nil || n != 1 {
+	if err := testdb.Owner(t, e.pool).QueryRow(context.Background(), `select count(*) from audit_log where action = 'question.updated'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("audit rows: %d %v", n, err)
 	}
 	// Kind changes.

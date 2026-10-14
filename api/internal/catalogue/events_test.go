@@ -17,7 +17,8 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
 )
 
-var t0 = time.Date(2027, 3, 1, 19, 0, 0, 0, time.UTC)
+// t0 is next year, so an event at t0 hasn't ended when a test puts it on sale.
+var t0 = time.Date(time.Now().Year()+1, 3, 1, 19, 0, 0, 0, time.UTC)
 
 func in(slug string) catalogue.EventInput {
 	return catalogue.EventInput{Slug: slug, Name: "Spring Gala", Timezone: "Europe/London", StartsAt: t0, EndsAt: t0.Add(3 * time.Hour)}

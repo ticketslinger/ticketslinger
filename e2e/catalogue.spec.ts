@@ -4,6 +4,27 @@ import { API, PASSWORD, signUpWithPasskey, virtualAuthenticator } from "./helper
 const PHONE = { width: 390, height: 844 };
 const DESKTOP = { width: 1280, height: 900 };
 
+// A month from now, so the event hasn't ended when it goes on sale.
+const DAY = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+
+/** The instant of a whole hour on DAY in Denver, worked out without the dashboard's own code. */
+function denver(hour: number): number {
+  const [y, m, d] = DAY.split("-").map(Number) as [number, number, number];
+  const guess = Date.UTC(y, m - 1, d, hour);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Denver",
+    hourCycle: "h23",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+  }).formatToParts(new Date(guess));
+  const part = (t: string) => Number(parts.find((p) => p.type === t)?.value);
+  // How far Denver's wall clock sits from UTC at that moment.
+  const offset = Date.UTC(part("year"), part("month") - 1, part("day"), part("hour")) - guess;
+  return guess - offset;
+}
+
 test("build a sellable event, reach it with an API key, then get back in with a recovery code", async ({
   page,
   context,
@@ -20,11 +41,25 @@ test("build a sellable event, reach it with an API key, then get back in with a 
   await page.getByRole("button", { name: "Create organizer" }).click();
   await expect(page.getByText("Social Club")).toBeVisible();
 
+  // An event that's already over can't go on sale, and the page says why.
+  await page.goto("/o/social-club/events/new");
+  await page.getByLabel("Event name").fill("Last Year");
+  await page.getByLabel("Starts").fill("2020-05-02T19:00");
+  await page.getByLabel("Ends").fill("2020-05-02T23:00");
+  await page.getByRole("button", { name: "Create event" }).click();
+  await expect(page.getByRole("heading", { name: "Last Year" })).toBeVisible();
+  await page.getByRole("button", { name: "Go live" }).click();
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "This event has already ended, so it can't go on sale." }),
+  ).toBeVisible();
+
   await page.goto("/o/social-club/events/new");
   await page.getByLabel("Event name").fill("Spring Social");
   await page.getByLabel("Time zone").selectOption("America/Denver");
-  await page.getByLabel("Starts").fill("2026-05-02T19:00");
-  await page.getByLabel("Ends").fill("2026-05-02T23:00");
+  await page.getByLabel("Starts").fill(`${DAY}T19:00`);
+  await page.getByLabel("Ends").fill(`${DAY}T23:00`);
   await page.getByRole("button", { name: "Create event" }).click();
   await expect(page.getByRole("heading", { name: "Spring Social" })).toBeVisible();
 
@@ -126,9 +161,9 @@ test("build a sellable event, reach it with an API key, then get back in with a 
     status: "live",
     timezone: "America/Denver",
   });
-  // The API writes the instants in the event's own offset (-06:00 in May); compare the moments.
-  expect(Date.parse(ev.starts_at)).toBe(Date.parse("2026-05-03T01:00:00Z"));
-  expect(Date.parse(ev.ends_at)).toBe(Date.parse("2026-05-03T05:00:00Z"));
+  // The API writes the instants in the event's own offset; compare the moments.
+  expect(Date.parse(ev.starts_at)).toBe(denver(19));
+  expect(Date.parse(ev.ends_at)).toBe(denver(23));
   const base = `/${ev.id}`;
   const types: { id: string; name: string; hidden: boolean }[] = await get(`${base}/ticket-types`);
   const id = (name: string) => types.find((t) => t.name === name)?.id;

@@ -7,6 +7,7 @@ import {
   promoBody,
   promoFieldFor,
   usesText,
+  valueHint,
 } from "./Promos";
 
 const ok = { ...emptyPromo, code: "spring", value: "10" };
@@ -139,4 +140,26 @@ test("editing a code whose tickets are gone leaves the scope out of the patch", 
   });
   // a new code still insists
   expect(field({ all: false, types: [] })).toBe("types");
+});
+
+test("0 off is allowed only for a code that shows hidden tickets", () => {
+  for (const kind of ["percent", "amount"] as const) {
+    expect(promoBody({ ...ok, kind, value: "0", unlocks: ["h"] }, "UTC")).toMatchObject({
+      body: { kind, value: 0, unlocks: ["h"] },
+    });
+    const r = promoBody({ ...ok, kind, value: "0" }, "UTC") as { field: string; message: string };
+    expect(r.field).toBe("value");
+    expect(r.message).toContain("hidden ticket");
+  }
+  expect(field({ value: "", unlocks: ["h"] })).toBe("value");
+  expect(discountText({ kind: "percent", value: 0 })).toBe("No discount");
+  expect(discountText({ kind: "amount", value: 0 })).toBe("No discount");
+});
+
+test("the value hint explains an access code in plain words", () => {
+  const access = "This code only unlocks hidden tickets — buyers pay full price.";
+  expect(valueHint({ ...ok, value: "0", unlocks: ["h"] })).toBe(access);
+  expect(valueHint({ ...ok, kind: "amount", value: "0.00", unlocks: ["h"] })).toBe(access);
+  expect(valueHint({ ...ok, value: "0" })).not.toBe(access);
+  expect(valueHint({ ...ok, value: "10", unlocks: ["h"] })).toContain("0");
 });

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,7 +12,9 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
 )
 
-const eventBody = `{"slug":"spring-gala","name":"Spring Gala","timezone":"Europe/London","starts_at":"2027-03-01T19:00:00Z","ends_at":"2027-03-01T22:00:00Z"}`
+// eventBody is next year, so it hasn't ended when a test puts it on sale.
+var eventBody = strings.ReplaceAll(`{"slug":"spring-gala","name":"Spring Gala","timezone":"Europe/London","starts_at":"YYYY-03-01T19:00:00Z","ends_at":"YYYY-03-01T22:00:00Z"}`,
+	"YYYY", strconv.Itoa(time.Now().Year()+1))
 
 func TestEventRoundTrip(t *testing.T) {
 	h := newHarness(t)
@@ -377,5 +380,64 @@ func TestReorderOverHTTP(t *testing.T) {
 	h.createOrganizer(owner, "beta")
 	if res := h.do(owner, "PUT", strings.Replace(base, "acme", "beta", 1)+"/ticket-types/order", `{"ids":[]}`); res.StatusCode != 404 {
 		t.Errorf("wrong organizer: %d, want 404", res.StatusCode)
+	}
+}
+
+func TestCreateEventNeedsBothTimes(t *testing.T) {
+	h := newHarness(t)
+	owner := h.signupWithMFA("owner@example.com")
+	stranger := h.signupWithMFA("stranger@example.com")
+	h.createOrganizer(owner, "acme")
+	for field, body := range map[string]string{
+		"starts_at": `{"slug":"gala","name":"Gala","timezone":"Europe/London","ends_at":"2027-03-01T22:00:00Z"}`,
+		"ends_at":   `{"slug":"gala","name":"Gala","timezone":"Europe/London","starts_at":"2027-03-01T19:00:00Z"}`,
+	} {
+		res := h.do(owner, "POST", "/v1/organizers/acme/events", body)
+		b := h.json(res)
+		e, _ := b["error"].(map[string]any)
+		if msg, _ := e["message"].(string); res.StatusCode != 422 || e["code"] != "missing_field" || !strings.Contains(msg, field) {
+			t.Errorf("no %s: %d %v", field, res.StatusCode, b)
+		}
+		if res := h.do(stranger, "POST", "/v1/organizers/acme/events", body); res.StatusCode != 404 {
+			t.Errorf("stranger, no %s: %d, want 404", field, res.StatusCode)
+		}
+	}
+}
+
+func TestGoLiveNeedsAnEventThatHasNotEnded(t *testing.T) {
+	h := newHarness(t)
+	owner := h.signupWithMFA("owner@example.com")
+	h.createOrganizer(owner, "acme")
+	base := "/v1/organizers/acme/events/" + h.must(h.do(owner, "POST", "/v1/organizers/acme/events",
+		`{"slug":"last-year","name":"Last Year","timezone":"Europe/London","starts_at":"2020-03-01T19:00:00Z","ends_at":"2020-03-01T22:00:00Z"}`), 201)["id"].(string)
+	tt := h.must(h.do(owner, "POST", base+"/ticket-types", `{"name":"General","price_cents":2500}`), 201)["id"].(string)
+	h.must(h.do(owner, "POST", base+"/quotas", `{"name":"Venue","size":100,"ticket_type_ids":["`+tt+`"]}`), 201)
+
+	res := h.do(owner, "PATCH", base, `{"status":"live"}`)
+	e, _ := h.json(res)["error"].(map[string]any)
+	if res.StatusCode != 422 || e["code"] != "event_over" || e["message"] != "This event has already ended, so it can't go on sale." {
+		t.Fatalf("ended event: %d %v", res.StatusCode, e)
+	}
+
+	// Started an hour ago and still running: that can go on sale.
+	at := func(d time.Duration) string { return time.Now().Add(d).UTC().Format(time.RFC3339) }
+	h.must(h.do(owner, "PATCH", base, `{"starts_at":"`+at(-time.Hour)+`","ends_at":"`+at(2*time.Hour)+`"}`), 200)
+	h.must(h.do(owner, "PATCH", base, `{"status":"live"}`), 200)
+	// Once live, the end time can still move, even into the past.
+	if up := h.must(h.do(owner, "PATCH", base, `{"ends_at":"`+at(-30*time.Minute)+`"}`), 200); up["status"] != "live" {
+		t.Fatalf("after moving the end: %v", up)
+	}
+}
+
+func TestQuestionPatchIgnoresPosition(t *testing.T) {
+	h := newHarness(t)
+	owner := h.signupWithMFA("owner@example.com")
+	h.createOrganizer(owner, "acme")
+	base := "/v1/organizers/acme/events/" + h.must(h.do(owner, "POST", "/v1/organizers/acme/events", eventBody), 201)["id"].(string)
+	a := h.must(h.do(owner, "POST", base+"/questions", `{"label":"A","kind":"text","scope":"order"}`), 201)["id"].(string)
+	h.must(h.do(owner, "POST", base+"/questions", `{"label":"B","kind":"text","scope":"order"}`), 201)
+	// Order changes only through the order endpoint.
+	if q := h.must(h.do(owner, "PATCH", base+"/questions/"+a, `{"label":"A2","position":2}`), 200); q["position"] != float64(1) || q["label"] != "A2" {
+		t.Fatalf("patched: %v", q)
 	}
 }
