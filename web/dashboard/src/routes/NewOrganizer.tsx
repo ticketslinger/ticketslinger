@@ -2,15 +2,15 @@ import { useState } from "react";
 import { api, must } from "../api";
 import { ErrorText, Field, Link, type Me, navigate, useAction } from "../ui";
 
-/** Name → slug matching the API's rule: ^[a-z0-9](-?[a-z0-9])*$, at most 40 characters. */
-export function slugify(name: string): string {
+/** Name → slug matching the API's rule: ^[a-z0-9](-?[a-z0-9])*$, at most `max` characters. */
+export function slugify(name: string, max = 40): string {
   return name
     .normalize("NFKD")
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+/, "")
-    .slice(0, 40)
+    .slice(0, max)
     .replace(/-+$/, "");
 }
 

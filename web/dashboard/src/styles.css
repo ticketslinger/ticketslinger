@@ -84,7 +84,9 @@ label {
   margin-bottom: 0.25rem;
 }
 
-input {
+input,
+select,
+textarea {
   display: block;
   width: 100%;
   font: inherit;
@@ -240,4 +242,227 @@ section {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
   gap: 0.5rem;
+}
+
+textarea {
+  resize: vertical;
+}
+
+/* Buttons that sit in a line instead of filling the width. */
+button.inline,
+.button.inline {
+  width: auto;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.row button + button {
+  margin-top: 0;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The organizer area: wider, since it's mostly used on a laptop. */
+main.wide {
+  max-width: 72rem;
+}
+
+.crumbs {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.org-name {
+  margin: 0;
+  font-weight: 600;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  margin: 0.75rem 0 1.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.tabs a {
+  padding: 0.5rem 0;
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
+}
+
+.tabs a:hover {
+  color: var(--text);
+}
+
+.tabs a[aria-current="page"] {
+  color: var(--text);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+
+.heading-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+}
+
+.heading-row h1 {
+  margin-bottom: 0.5rem;
+}
+
+.lede {
+  max-width: 40rem;
+}
+
+.pill {
+  display: inline-block;
+  padding: 0.1rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.pill.live {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.65rem 0.75rem 0.65rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+th {
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.actions-cell p {
+  margin: 0 0 0.5rem;
+}
+
+.actions-cell {
+  text-align: right;
+}
+
+.actions-cell .row {
+  justify-content: flex-end;
+}
+
+.status-box {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+}
+
+.status-box p {
+  margin: 0 0 0.6rem;
+}
+
+.event-form,
+.narrow {
+  max-width: 40rem;
+}
+
+fieldset.plain {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+fieldset.choices {
+  border: 0;
+  padding: 0;
+  margin: 0 0 1rem;
+}
+
+legend {
+  font-weight: 600;
+  padding: 0;
+  margin-bottom: 0.4rem;
+}
+
+label.check {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  font-weight: 400;
+  margin: 0 0 0.6rem;
+}
+
+label.check input {
+  width: auto;
+  margin: 0.3rem 0 0;
+}
+
+label.check .hint {
+  display: block;
+  margin: 0;
+}
+
+.danger {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+
+@media (min-width: 40rem) {
+  .pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 1rem;
+  }
+}
+
+dialog.confirm {
+  max-width: min(28rem, calc(100% - 2rem));
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  padding: 1rem 1.25rem;
+}
+
+dialog.confirm::backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+
+dialog.confirm p {
+  margin: 0 0 1rem;
 }
