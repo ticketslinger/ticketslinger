@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { session } from "../api";
+import { checkPending, session } from "../api";
+import { useTurnstile } from "../turnstile";
 import { ErrorText, Field, Link, useAction } from "../ui";
 
 const MIN = 12;
@@ -8,6 +9,7 @@ export function SignUp({ onSignedIn }: { onSignedIn: () => void }) {
   const [password, setPassword] = useState("");
   const [sentTo, setSentTo] = useState("");
   const { busy, error, run } = useAction();
+  const check = useTurnstile(true);
 
   if (sentTo) {
     return (
@@ -35,7 +37,13 @@ export function SignUp({ onSignedIn }: { onSignedIn: () => void }) {
           const f = new FormData(e.currentTarget);
           const email = String(f.get("email"));
           run(async () => {
-            await session.signup(String(f.get("name")), email, password);
+            if (check.shown && !check.token) throw checkPending();
+            try {
+              await session.signup(String(f.get("name")), email, password, check.token);
+            } catch (err) {
+              check.reset(); // the token is spent either way
+              throw err;
+            }
             setSentTo(email);
           });
         }}
@@ -54,6 +62,12 @@ export function SignUp({ onSignedIn }: { onSignedIn: () => void }) {
           onChange={(e) => setPassword(e.target.value)}
           hint={left > 0 ? `At least ${MIN} characters. ${left} to go.` : "That's long enough."}
         />
+        {check.shown && (
+          <div className="field">
+            <p className="hint">One quick check that you're a person.</p>
+            <div ref={check.ref} />
+          </div>
+        )}
         <ErrorText>{error}</ErrorText>
         <button type="submit" disabled={busy}>
           Create account

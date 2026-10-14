@@ -7,5 +7,5 @@ const server = process.env.TS_DASHBOARD_URL ?? "http://127.0.0.1:3002";
 export default defineConfig({
   plugins: [react()],
   build: { outDir: "dist", emptyOutDir: true },
-  server: { proxy: { "/api": server, "/session": server } },
+  server: { proxy: { "/api": server, "/session": server, "/config.json": server } },
 });

@@ -8,6 +8,8 @@ export type AppOptions = {
   apiUrl: string;
   staticDir: string;
   secureCookies: boolean;
+  /** Cloudflare Turnstile site key; "" turns the widget off. */
+  turnstileSiteKey?: string;
   /** Address of the TCP peer. Defaults to Bun's server.requestIP; tests inject their own. */
   peerIp?: (c: Context) => string | undefined;
 };
@@ -33,6 +35,11 @@ const DROP_RES = new Set([
   "transfer-encoding",
   "connection",
 ]);
+
+const CSP = "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'";
+// The HTML shell also loads and frames Turnstile when it's on.
+const TURNSTILE = "https://challenges.cloudflare.com";
+const SHELL_CSP = `${CSP}; script-src 'self' ${TURNSTILE}; frame-src ${TURNSTILE}; connect-src 'self' ${TURNSTILE}`;
 
 const err = (c: Context, status: 400 | 403 | 404 | 413 | 502, code: string, message: string) =>
   c.json({ error: { code, message } }, status);
@@ -66,6 +73,7 @@ function hasDotSegment(path: string, only: (s: string) => boolean): boolean {
 export function createApp(opts: AppOptions): Hono {
   const app = new Hono();
   const apiUrl = opts.apiUrl.replace(/\/+$/, "");
+  const siteKey = opts.turnstileSiteKey ?? "";
   const peerIp =
     opts.peerIp ??
     ((c: Context) =>
@@ -131,10 +139,8 @@ export function createApp(opts: AppOptions): Hono {
     h.set("X-Content-Type-Options", "nosniff");
     h.set("Referrer-Policy", "strict-origin-when-cross-origin");
     h.set("X-Frame-Options", "DENY");
-    h.set(
-      "Content-Security-Policy",
-      "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
-    );
+    const shell = siteKey && /^text\/html\b/i.test(h.get("content-type") ?? "");
+    h.set("Content-Security-Policy", shell ? SHELL_CSP : CSP);
   });
 
   app.use(
@@ -186,6 +192,8 @@ export function createApp(opts: AppOptions): Hono {
     });
     return c.json(rest, res.status as 200 | 201);
   }
+
+  app.get("/config.json", (c) => c.json({ turnstileSiteKey: siteKey }));
 
   app.post("/session/login", (c) => login(c, "/auth/login"));
   app.post("/session/signup", (c) => login(c, "/auth/signup"));

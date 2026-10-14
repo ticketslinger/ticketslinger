@@ -103,7 +103,7 @@ func (s *Service) consumeChallenge(ctx context.Context, id uuid.UUID, kind strin
 // Once the account has a second factor, only a session that passed one may
 // add another (see checkEnrolment). The first passkey on a password session
 // needs the current password, so a stolen session token can't plant one.
-func (s *Service) BeginPasskeyRegistration(ctx context.Context, userID uuid.UUID, mfa bool, password string) (uuid.UUID, *protocol.CredentialCreation, error) {
+func (s *Service) BeginPasskeyRegistration(ctx context.Context, userID uuid.UUID, mfa bool, password, ip string) (uuid.UUID, *protocol.CredentialCreation, error) {
 	if s.waErr != nil {
 		return uuid.Nil, nil, s.waErr
 	}
@@ -114,7 +114,7 @@ func (s *Service) BeginPasskeyRegistration(ctx context.Context, userID uuid.UUID
 		if password == "" {
 			return uuid.Nil, nil, ErrPasswordRequired
 		}
-		if _, err := s.reauthenticate(ctx, userID, password); err != nil {
+		if _, err := s.reauthenticate(ctx, userID, password, ip); err != nil {
 			return uuid.Nil, nil, err
 		}
 	}
@@ -217,7 +217,7 @@ func (s *Service) BeginPasskeyLogin(ctx context.Context, ip string) (uuid.UUID, 
 	if s.waErr != nil {
 		return uuid.Nil, nil, s.waErr
 	}
-	if !s.ipLimit.allow("passkey:"+ip, time.Now()) {
+	if !s.ipLimit.Allow("passkey:"+addrKey(ip), time.Now()) {
 		return uuid.Nil, nil, ErrRateLimited
 	}
 	assertion, sd, err := s.wa.BeginDiscoverableLogin()
@@ -235,7 +235,7 @@ func (s *Service) FinishPasskeyLogin(ctx context.Context, challengeID uuid.UUID,
 	if s.waErr != nil {
 		return Session{}, User{}, s.waErr
 	}
-	if !s.ipLimit.allow("passkey:"+ip, time.Now()) {
+	if !s.ipLimit.Allow("passkey:"+addrKey(ip), time.Now()) {
 		return Session{}, User{}, ErrRateLimited
 	}
 	sd, err := s.consumeChallenge(ctx, challengeID, "login", nil)

@@ -1,4 +1,4 @@
-package auth
+package ratelimit
 
 import (
 	"testing"
@@ -6,17 +6,17 @@ import (
 )
 
 func TestLimiterAllowsBurstThenBlocks(t *testing.T) {
-	l := newLimiter(3, time.Minute)
+	l := New(3, time.Minute)
 	now := time.Unix(0, 0)
 	for i := 0; i < 3; i++ {
-		if !l.allow("ip:1", now) {
+		if !l.Allow("ip:1", now) {
 			t.Fatalf("request %d blocked", i)
 		}
 	}
-	if l.allow("ip:1", now) {
+	if l.Allow("ip:1", now) {
 		t.Fatal("4th request in the window must be blocked")
 	}
-	if !l.allow("ip:1", now.Add(time.Minute)) {
+	if !l.Allow("ip:1", now.Add(time.Minute)) {
 		t.Fatal("next window must allow again")
 	}
 }

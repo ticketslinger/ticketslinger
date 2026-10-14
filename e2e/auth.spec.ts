@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import { addPasskey, signUp, virtualAuthenticator } from "./helpers";
+import { addPasskey, PASSWORD, signUp, virtualAuthenticator } from "./helpers";
 
 test("sign up, verify, create an organizer, then reach its audit log only after a passkey sign-in", async ({
   page,
@@ -34,6 +34,33 @@ test("sign up, verify, create an organizer, then reach its audit log only after 
   const after = await readAudit(page);
   expect(after.status).toBe(200);
   expect(after.body).toContainEqual(expect.objectContaining({ action: "organizer.created" }));
+});
+
+test("a few wrong passwords bring up the person check, and passing it signs you in", async ({
+  page,
+}) => {
+  const email = `e2e-check-${Date.now()}@example.com`;
+  await signUp(page, "Max", email);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page).toHaveURL(/\/signin$/);
+
+  await page.getByLabel("Email").fill(email);
+  for (let i = 0; i < 3; i++) {
+    await page.getByLabel("Password").fill("not the password at all");
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await expect(page.getByText("That email and password don't match.")).toBeVisible();
+  }
+  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    page.getByText("One quick check that you're a person.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator('input[name="cf-turnstile-response"]')).not.toHaveValue("", {
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page).toHaveURL(/\/$/);
 });
 
 function readAudit(page: Page): Promise<{ status: number; body: unknown }> {

@@ -29,7 +29,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
+        /** @description When the server has Turnstile on, send a turnstile_token: a missing or refused one is 422 turnstile_failed, and 503 turnstile_unavailable means Cloudflare couldn't check it just now, so try again with a fresh token. Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["signup"];
         delete?: never;
         options?: never;
@@ -46,7 +46,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description 401 totp_required means the account has an authenticator app; send totp_code, or a recovery_code instead. A valid recovery code is accepted for any account with a second factor and gives a session that passed it. Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
+        /** @description 401 totp_required means the account has an authenticator app; send totp_code, or a recovery_code instead. Every attempt that doesn't sign in counts, per email and client address (an IPv6 /64 counts as one address), whether or not the email has an account, and including attempts refused for a missing or bad token. After three from one address, that address must send a turnstile_token when the server has Turnstile on (401 turnstile_required; 422 turnstile_failed when it's refused; 503 turnstile_unavailable when Cloudflare can't check it). The fifth locks that address out for 15 minutes (423 locked). Ten across all addresses put every sign-in for that email behind Turnstile, from any address, without locking it. Counts keep adding up until 15 minutes pass without an attempt; signing in clears that address's count. A valid recovery code is accepted for any account with a second factor and gives a session that passed it. Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["login"];
         delete?: never;
         options?: never;
@@ -609,7 +609,10 @@ export interface components {
             email: string;
             password: string;
             name: string;
+            turnstile_token?: components["schemas"]["TurnstileToken"];
         };
+        /** @description The token from the Cloudflare Turnstile widget. Each one works once. */
+        TurnstileToken: string;
         LoginRequest: {
             /** Format: email */
             email: string;
@@ -617,6 +620,7 @@ export interface components {
             totp_code?: string;
             /** @description One of the account's unused recovery codes, in place of an authenticator code or passkey. Spaces, hyphens and case don't matter; up to 64 characters are read, and 422 invalid_recovery_code means more than 32 are left once spaces and hyphens are dropped. Sending it together with totp_code is 422 one_second_step. */
             recovery_code?: string;
+            turnstile_token?: components["schemas"]["TurnstileToken"];
         };
         SessionCreated: {
             session_token: string;
@@ -1044,6 +1048,7 @@ export interface operations {
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
             429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     login: {
@@ -1077,6 +1082,7 @@ export interface operations {
             422: components["responses"]["Error"];
             423: components["responses"]["Error"];
             429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     logout: {

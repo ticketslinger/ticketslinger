@@ -18,11 +18,11 @@ import (
 func signupWithTOTP(t *testing.T, s *auth.Service, email string) auth.User {
 	t.Helper()
 	ctx := context.Background()
-	_, u, err := s.Signup(ctx, email, "a long passphrase", "A", "", "")
+	_, u, err := s.Signup(ctx, email, "a long passphrase", "A", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	secret, _, err := s.StartTOTP(ctx, u.ID, false, "a long passphrase")
+	secret, _, err := s.StartTOTP(ctx, u.ID, false, "a long passphrase", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,15 +49,15 @@ func TestRecoveryCodeIsSingleUse(t *testing.T) {
 	}
 	// Typed sloppily: lower case, spaces instead of hyphens.
 	sloppy := strings.ToLower(strings.ReplaceAll(codes[0], "-", " "))
-	sess, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", sloppy, "", "")
+	sess, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", sloppy, "", "", "")
 	if err != nil || !sess.MFA {
 		t.Fatalf("first use: mfa=%v err=%v", sess.MFA, err)
 	}
-	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", codes[0], "", ""); !errors.Is(err, auth.ErrBadCredentials) {
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", codes[0], "", "", ""); !errors.Is(err, auth.ErrBadCredentials) {
 		t.Fatalf("reuse: got %v, want ErrBadCredentials", err)
 	}
 	// The other nine still work.
-	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", codes[1], "", ""); err != nil {
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", codes[1], "", "", ""); err != nil {
 		t.Fatalf("second code: %v", err)
 	}
 }
@@ -68,11 +68,11 @@ func TestWrongRecoveryCodesLockTheAccount(t *testing.T) {
 	u := signupWithTOTP(t, s, "a@example.com")
 	_, _ = s.GenerateRecoveryCodes(ctx, u.ID, true)
 	for i := 0; i < 5; i++ {
-		if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "aaaa-bbbb-cccc", "", ""); !errors.Is(err, auth.ErrBadCredentials) {
+		if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "aaaa-bbbb-cccc", "", "", ""); !errors.Is(err, auth.ErrBadCredentials) {
 			t.Fatalf("attempt %d: got %v, want ErrBadCredentials", i+1, err)
 		}
 	}
-	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", "", ""); !errors.Is(err, auth.ErrLocked) {
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", "", "", ""); !errors.Is(err, auth.ErrLocked) {
 		t.Fatalf("got %v, want ErrLocked", err)
 	}
 }
@@ -80,7 +80,7 @@ func TestWrongRecoveryCodesLockTheAccount(t *testing.T) {
 func TestRecoveryCodesNeedMFAAndAFactor(t *testing.T) {
 	s, _ := newSvc(t)
 	ctx := context.Background()
-	_, u, _ := s.Signup(ctx, "b@example.com", "a long passphrase", "B", "", "")
+	_, u, _ := s.Signup(ctx, "b@example.com", "a long passphrase", "B", "", "", "")
 	if _, err := s.GenerateRecoveryCodes(ctx, u.ID, true); !errors.Is(err, auth.ErrNoSecondFactor) {
 		t.Fatalf("no factor: got %v", err)
 	}
@@ -96,10 +96,10 @@ func TestRegeneratingReplacesOldCodes(t *testing.T) {
 	u := signupWithTOTP(t, s, "a@example.com")
 	old, _ := s.GenerateRecoveryCodes(ctx, u.ID, true)
 	fresh, _ := s.GenerateRecoveryCodes(ctx, u.ID, true)
-	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", old[0], "", ""); !errors.Is(err, auth.ErrBadCredentials) {
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", old[0], "", "", ""); !errors.Is(err, auth.ErrBadCredentials) {
 		t.Fatalf("old code after regenerate: got %v", err)
 	}
-	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", fresh[0], "", ""); err != nil {
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", fresh[0], "", "", ""); err != nil {
 		t.Fatalf("new code: %v", err)
 	}
 }
@@ -114,10 +114,10 @@ func TestRecoveryCodeForPasskeyOnlyAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Without a code, behaviour is unchanged: a plain, non-MFA session.
-	if sess, _, err := s.Login(ctx, "p@example.com", "a long passphrase", "", "", "", ""); err != nil || sess.MFA {
+	if sess, _, err := s.Login(ctx, "p@example.com", "a long passphrase", "", "", "", "", ""); err != nil || sess.MFA {
 		t.Fatalf("no code: mfa=%v err=%v", sess.MFA, err)
 	}
-	sess, _, err := s.Login(ctx, "p@example.com", "a long passphrase", "", codes[0], "", "")
+	sess, _, err := s.Login(ctx, "p@example.com", "a long passphrase", "", codes[0], "", "", "")
 	if err != nil || !sess.MFA {
 		t.Fatalf("with code: mfa=%v err=%v", sess.MFA, err)
 	}
@@ -125,7 +125,7 @@ func TestRecoveryCodeForPasskeyOnlyAccount(t *testing.T) {
 
 func TestRecoveryAndTOTPTogetherAreRefused(t *testing.T) {
 	s, _ := newSvc(t)
-	if _, _, err := s.Login(context.Background(), "a@example.com", "x", "123456", "aaaa-bbbb-cccc", "", ""); !errors.Is(err, auth.ErrOneSecondStep) {
+	if _, _, err := s.Login(context.Background(), "a@example.com", "x", "123456", "aaaa-bbbb-cccc", "", "", ""); !errors.Is(err, auth.ErrOneSecondStep) {
 		t.Fatalf("got %v, want ErrOneSecondStep", err)
 	}
 }
@@ -141,7 +141,7 @@ func TestRecoveryCodeConcurrentOnlyOneWins(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, _, err := s.Login(context.Background(), "a@example.com", "a long passphrase", "", codes[0], "", ""); err == nil {
+			if _, _, err := s.Login(context.Background(), "a@example.com", "a long passphrase", "", codes[0], "", "", ""); err == nil {
 				mu.Lock()
 				ok++
 				mu.Unlock()
@@ -164,11 +164,11 @@ func TestStaleRecoveryCodesFailAndCountTowardLockout(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 5; i++ {
-		if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", codes[i], "", ""); !errors.Is(err, auth.ErrBadCredentials) {
+		if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", codes[i], "", "", ""); !errors.Is(err, auth.ErrBadCredentials) {
 			t.Fatalf("stale code %d: got %v, want ErrBadCredentials", i, err)
 		}
 	}
-	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", "", ""); !errors.Is(err, auth.ErrLocked) {
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", "", "", ""); !errors.Is(err, auth.ErrLocked) {
 		t.Fatalf("got %v, want ErrLocked", err)
 	}
 }

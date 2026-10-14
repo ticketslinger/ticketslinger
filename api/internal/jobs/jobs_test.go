@@ -214,6 +214,9 @@ func TestSweepRemovesOnlyExpired(t *testing.T) {
 	idem := `insert into idempotency_keys(scope, key, request_hash, owner, expires_at) values ('anon POST /x', $1, '\x00', uuidv7(), now() + $2::interval)`
 	exec(idem, "old", "-1 minute")
 	exec(idem, "fresh", "1 hour")
+	fails := `insert into login_failures(account, ip, failures, updated_at) values (sha256($1::text::bytea), $2, 3, now() - $3::interval)`
+	exec(fails, user, "203.0.113.1", "25 hours")
+	exec(fails, user, "203.0.113.2", "23 hours")
 
 	co := `insert into checkouts(organizer_id, event_id, token_hash, expires_at) values ($1, $2, $3, now() - interval '8 days') returning id`
 	var gone, kept, recent string
@@ -230,12 +233,14 @@ func TestSweepRemovesOnlyExpired(t *testing.T) {
 		t.Fatal(err)
 	}
 	for sql, want := range map[string]int{
-		`select count(*) from sessions`:                            1,
-		`select count(*) from email_tokens`:                        1,
-		`select count(*) from webauthn_challenges`:                 1,
-		`select count(*) from checkouts`:                           2,
-		`select count(*) from idempotency_keys`:                    1,
-		`select count(*) from checkouts where id = '` + gone + `'`: 0,
+		`select count(*) from sessions`:                                1,
+		`select count(*) from email_tokens`:                            1,
+		`select count(*) from webauthn_challenges`:                     1,
+		`select count(*) from checkouts`:                               2,
+		`select count(*) from idempotency_keys`:                        1,
+		`select count(*) from login_failures where ip = '203.0.113.2'`: 1,
+		`select count(*) from login_failures`:                          1,
+		`select count(*) from checkouts where id = '` + gone + `'`:     0,
 	} {
 		if got := count(t, owner, sql); got != want {
 			t.Errorf("%s = %d, want %d", sql, got, want)

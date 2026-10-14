@@ -31,6 +31,9 @@ type Config struct {
 	StripePublishableKey string // TS_STRIPE_PUBLISHABLE_KEY: pk_, same mode; required with a secret key
 	StripeWebhookSecret  string // TS_STRIPE_WEBHOOK_SECRET: whsec_; required with a secret key
 	StorefrontURL        string // TS_STOREFRONT_URL
+	// Cloudflare Turnstile on sign-up and repeated failed sign-ins. Off when the secret is unset.
+	TurnstileSecret    string // TS_TURNSTILE_SECRET
+	TurnstileVerifyURL string // TS_TURNSTILE_VERIFY_URL, Cloudflare's siteverify by default
 }
 
 func Load() (Config, error) {
@@ -46,6 +49,9 @@ func Load() (Config, error) {
 		StripeSecretKey:      os.Getenv("TS_STRIPE_SECRET_KEY"),
 		StripePublishableKey: os.Getenv("TS_STRIPE_PUBLISHABLE_KEY"),
 		StripeWebhookSecret:  os.Getenv("TS_STRIPE_WEBHOOK_SECRET"),
+
+		TurnstileSecret:    os.Getenv("TS_TURNSTILE_SECRET"),
+		TurnstileVerifyURL: env("TS_TURNSTILE_VERIFY_URL", "https://challenges.cloudflare.com/turnstile/v0/siteverify"),
 	}
 	for _, cidr := range strings.Split(env("TS_TRUSTED_PROXIES", "127.0.0.1/32,::1/128"), ",") {
 		if cidr = strings.TrimSpace(cidr); cidr == "" {

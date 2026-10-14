@@ -111,10 +111,10 @@ func recordTOTPStep(ctx context.Context, tx pgx.Tx, id uuid.UUID, step int64, en
 // enabled, and returns it with the otpauth:// URL for a QR code. Calling it
 // again before confirming replaces the pending secret. A password session
 // must send the current password, so a stolen session token can't lock the
-// owner out (a wrong one counts toward the login lockout), and may only do
+// owner out (a wrong one counts toward the sign-in lockout for ip), and may only do
 // so while the account has no second factor (see checkEnrolment). An mfa
 // session needs no password.
-func (s *Service) StartTOTP(ctx context.Context, userID uuid.UUID, mfa bool, password string) (string, string, error) {
+func (s *Service) StartTOTP(ctx context.Context, userID uuid.UUID, mfa bool, password, ip string) (string, string, error) {
 	if err := s.checkEnrolment(ctx, userID, mfa); err != nil {
 		return "", "", err
 	}
@@ -126,7 +126,7 @@ func (s *Service) StartTOTP(ctx context.Context, userID uuid.UUID, mfa bool, pas
 	case password == "":
 		return "", "", ErrPasswordRequired
 	default:
-		email, err = s.reauthenticate(ctx, userID, password)
+		email, err = s.reauthenticate(ctx, userID, password, ip)
 	}
 	if err != nil {
 		return "", "", err
@@ -159,7 +159,7 @@ const pendingTOTPLifetime = "10 minutes"
 // once checkEnrolment's rule still holds under the user's row lock. A secret
 // started more than pendingTOTPLifetime ago counts as never started.
 func (s *Service) ConfirmTOTP(ctx context.Context, userID uuid.UUID, mfa bool, code string) error {
-	if !s.emLimit.allow("totp:"+userID.String(), time.Now()) {
+	if !s.emLimit.Allow("totp:"+userID.String(), time.Now()) {
 		return ErrRateLimited
 	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
