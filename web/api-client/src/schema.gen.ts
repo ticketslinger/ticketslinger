@@ -576,6 +576,10 @@ export interface components {
              * @description Set instead of actor_user_id when an API key did it.
              */
             actor_api_key_id?: string;
+            /** @description The person's name if they are still a member of this organizer, or the API key's name. Null for former members. */
+            actor_name?: string | null;
+            /** @description The person's email if they are still a member of this organizer. Null for API keys and former members. */
+            actor_email?: string | null;
             /** Format: date-time */
             at: string;
         };
