@@ -470,3 +470,29 @@ func TestPayRefusesWhenTheStoredTotalsDrift(t *testing.T) {
 		t.Fatalf("order still pending with no tickets and one intent? got %d, %d intents", n, len(rec.calls()))
 	}
 }
+
+func TestGetCheckoutCarriesWhatThePageAsks(t *testing.T) {
+	s, f, _ := payService(t, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	vip := f.addVIP(t, 9000, false)
+	name := f.question(t, "Name on badge", "text", "ticket", true, nil)
+	f.question(t, "Dinner choice", "text", "ticket", false, nil, vip) // not asked of this cart
+	size := f.question(t, "Shirt size", "select", "order", false, []string{"S", "M"})
+	c := f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 2}))
+	got, err := s.GetCheckout(ctx, c.Token)
+	f.must(t, err)
+	e := got.Event
+	if e == nil {
+		t.Fatal("GetCheckout has no event")
+	}
+	if e.Organizer != "acme" || e.Slug != "gala" || e.Name != "Gala" || e.Timezone != "America/New_York" {
+		t.Fatalf("event = %+v, want acme/gala, Gala, America/New_York", e)
+	}
+	if len(e.TicketTypes) != 1 || e.TicketTypes[0].ID != f.general || e.TicketTypes[0].Name != "General" {
+		t.Fatalf("ticket types = %+v, want just General", e.TicketTypes)
+	}
+	if len(e.Questions) != 2 || e.Questions[0].ID != name || e.Questions[1].ID != size ||
+		strings.Join(e.Questions[1].Options, ",") != "S,M" || !e.Questions[0].Required {
+		t.Fatalf("questions = %+v, want Name on badge then Shirt size", e.Questions)
+	}
+}

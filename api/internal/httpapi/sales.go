@@ -190,11 +190,17 @@ func (s *server) GetStorefrontEvent(ctx context.Context, req GetStorefrontEventR
 	if p := ev.Promo; p != nil {
 		out.Promo.Set(StorefrontPromo{Code: p.Code, Kind: StorefrontPromoKind(p.Kind), Value: p.Value})
 	}
-	for _, q := range ev.Questions {
-		out.Questions = append(out.Questions, StorefrontQuestion{Id: q.ID, Label: q.Label, Kind: StorefrontQuestionKind(q.Kind),
+	out.Questions = toQuestions(ev.Questions)
+	return GetStorefrontEvent200JSONResponse(out), nil
+}
+
+func toQuestions(qs []sales.StorefrontQuestion) []StorefrontQuestion {
+	out := []StorefrontQuestion{}
+	for _, q := range qs {
+		out = append(out, StorefrontQuestion{Id: q.ID, Label: q.Label, Kind: StorefrontQuestionKind(q.Kind),
 			Options: q.Options, Required: q.Required, Scope: StorefrontQuestionScope(q.Scope), AppliesToAll: q.AppliesToAll, AppliesTo: q.AppliesTo})
 	}
-	return GetStorefrontEvent200JSONResponse(out), nil
+	return out
 }
 
 func toCheckout(c sales.Checkout) Checkout {
@@ -211,6 +217,13 @@ func toCheckout(c sales.Checkout) Checkout {
 	}
 	if c.OrderURL != "" {
 		out.OrderCode, out.OrderUrl = &c.OrderCode, &c.OrderURL
+	}
+	if e := c.Event; e != nil {
+		out.Event = &CheckoutEvent{Organizer: e.Organizer, Slug: e.Slug, Name: e.Name, Timezone: e.Timezone,
+			TicketTypes: []TicketName{}, Questions: toQuestions(e.Questions)}
+		for _, t := range e.TicketTypes {
+			out.Event.TicketTypes = append(out.Event.TicketTypes, TicketName{Id: t.ID, Name: t.Name})
+		}
 	}
 	q := c.Quote
 	out.Quote = Quote{Tickets: []QuoteTicket{}, SubtotalCents: q.SubtotalCents, DiscountCents: q.DiscountCents, TaxCents: q.TaxCents,

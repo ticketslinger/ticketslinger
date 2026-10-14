@@ -12,10 +12,14 @@ const extra = {
     "frame-src https://challenges.cloudflare.com",
     "connect-src 'self' https://challenges.cloudflare.com",
   ],
+  // Stripe's own list for Stripe.js and Link (docs.stripe.com/security/guide, read 2026-10-14).
+  // Link is on unless the organizer's own Stripe account turns it off, so it's always allowed.
+  // No Google Maps: we don't use the Address Element.
   stripe: [
-    "script-src 'self' https://js.stripe.com",
-    "frame-src https://js.stripe.com https://hooks.stripe.com",
-    "connect-src 'self' https://api.stripe.com",
+    "script-src 'self' https://js.stripe.com https://*.js.stripe.com",
+    "frame-src https://js.stripe.com https://*.js.stripe.com https://hooks.stripe.com https://link.com https://*.link.com",
+    "connect-src 'self' https://api.stripe.com https://link.com https://*.link.com",
+    "img-src 'self' https://*.link.com",
   ],
 } as const;
 

@@ -1,7 +1,7 @@
 /** @jsxImportSource preact */
 import { Layout } from "./Layout";
 
-export function NotFound({ what }: { what: "event" | "page" }) {
+export function NotFound({ what }: { what: "event" | "page" | "checkout" }) {
   return (
     <Layout title="Not found">
       <h1>We can't find that {what}.</h1>

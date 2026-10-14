@@ -54,8 +54,23 @@ type Checkout struct {
 	Items                    []Item
 	PromoCode                string
 	Quote                    pricing.Quote
-	OrderCode                string // once completed
-	OrderURL                 string // once completed: the buyer's link to their order
+	OrderCode                string         // once completed
+	OrderURL                 string         // once completed: the buyer's link to their order
+	Event                    *CheckoutEvent // GetCheckout only: what the checkout page shows and asks
+}
+
+// CheckoutEvent is the event a checkout is for, as its page needs it: where
+// to send the buyer back to, the names of the cart's ticket types, and the
+// questions asked of them.
+type CheckoutEvent struct {
+	Organizer, Slug, Name, Timezone string
+	TicketTypes                     []TicketName
+	Questions                       []StorefrontQuestion // in position order, asked of the cart's types
+}
+
+type TicketName struct {
+	ID   uuid.UUID
+	Name string
 }
 
 type Availability struct {
@@ -505,8 +520,26 @@ func (s *Service) GetCheckout(ctx context.Context, token string) (Checkout, erro
 			out.PromoCode = p.code
 		}
 		var err error
-		out.Items, out.Quote, err = s.cart(ctx, tx, out.ID, out.EventID, pp, feeMode)
+		if out.Items, out.Quote, err = s.cart(ctx, tx, out.ID, out.EventID, pp, feeMode); err != nil {
+			return err
+		}
+		out.Event, err = checkoutEvent(ctx, tx, out.EventID, itemIDs(out.Items))
 		return err
 	})
 	return out, err
+}
+
+func checkoutEvent(ctx context.Context, tx pgx.Tx, event uuid.UUID, types []uuid.UUID) (*CheckoutEvent, error) {
+	e := &CheckoutEvent{}
+	if err := tx.QueryRow(ctx, `select o.slug::text, e.slug, e.name, e.timezone from events e join organizers o on o.id = e.organizer_id
+		where e.id = $1`, event).Scan(&e.Organizer, &e.Slug, &e.Name, &e.Timezone); err != nil {
+		return nil, err
+	}
+	rows, _ := tx.Query(ctx, `select id, name from ticket_types where event_id = $1 and id = any($2) order by position, id`, event, types)
+	var err error
+	if e.TicketTypes, err = pgx.CollectRows(rows, pgx.RowToStructByPos[TicketName]); err != nil {
+		return nil, err
+	}
+	e.Questions, err = questionsFor(ctx, tx, event, types)
+	return e, err
 }

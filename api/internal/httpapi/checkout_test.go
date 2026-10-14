@@ -92,6 +92,13 @@ func TestCheckoutOverHTTP(t *testing.T) {
 	if _, ok := got["token"]; ok || got["id"] != c["id"] {
 		t.Fatalf("get = %v, want the checkout without its token", got)
 	}
+	if e, _ := got["event"].(map[string]any); e == nil || e["organizer"] != "acme" || e["slug"] != "gala" ||
+		len(e["ticket_types"].([]any)) != 1 || e["questions"] == nil {
+		t.Fatalf("get event = %v, want acme/gala with its one ticket type", got["event"])
+	}
+	if _, ok := c["event"]; ok {
+		t.Fatalf("create = %v, want no event", c)
+	}
 	if res := s.send("", "", "GET", "/v1/checkouts/nope", ""); res.StatusCode != 404 {
 		t.Fatalf("unknown token: %d", res.StatusCode)
 	}

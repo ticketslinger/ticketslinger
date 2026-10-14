@@ -53,6 +53,7 @@
       "name": "@ticketslinger/storefront",
       "version": "0.0.0",
       "dependencies": {
+        "@stripe/stripe-js": "10.1.0",
         "@ticketslinger/api-client": "workspace:*",
         "hono": "4.13.13",
         "preact": "11.0.1",
@@ -130,6 +131,8 @@
     "@rolldown/pluginutils": ["@rolldown/pluginutils@1.0.1", "", {}, "sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw=="],
 
     "@simplewebauthn/browser": ["@simplewebauthn/browser@14.0.0", "", {}, "sha512-1odWVqeEBTl7lJ9zMKLEsmTlnyrDO5iRcTvfMKKk1WThUnp/i8JJdffdj2icP+tty159s4PgwE3BiMoEW9NFow=="],
+
+    "@stripe/stripe-js": ["@stripe/stripe-js@10.1.0", "", {}, "sha512-sLRPukMKMxvRVrgV3Za8LM0Yd2azrixQjfaiuzS8Fivlu/Gt7VbBuRiRZJIvfL3XxAw+FdfdmhHSvjAfLG3lkA=="],
 
     "@ticketslinger/api-client": ["@ticketslinger/api-client@workspace:web/api-client"],
 

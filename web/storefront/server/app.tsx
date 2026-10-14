@@ -8,8 +8,10 @@ import { serveStatic } from "hono/bun";
 import type { VNode } from "preact";
 import { render } from "preact-render-to-string";
 import { csp } from "./csp";
+import { CheckoutPage } from "./pages/CheckoutPage";
 import { EventPage, type EventPageProps, type StorefrontEvent } from "./pages/EventPage";
 import { ErrorPage, NotFound } from "./pages/NotFound";
+import { NoOrder, OrderPage } from "./pages/OrderPage";
 import { Recent } from "./recent";
 
 export type StorefrontOptions = {
@@ -27,8 +29,10 @@ export type StorefrontOptions = {
 
 type ApiError = components["schemas"]["Error"]["error"];
 
-// Forms only: a ticket form is a few hundred bytes.
+// Forms: a ticket form is a few hundred bytes.
 const MAX_BODY = 64 * 1024;
+// The island's pay request: up to 100 tickets' answers, each up to 1,000 characters.
+const MAX_JSON = 1024 * 1024;
 
 // First URL segments the storefront keeps for itself. The API refuses them as organizer slugs.
 const RESERVED = new Set(["checkout", "orders", "assets", "api", "healthz"]);
@@ -41,6 +45,8 @@ const FORWARD = ["accept-language", "user-agent"];
 const IDEM = /^[A-Za-z0-9_-]{22,255}$/;
 // The API's checkout tokens are 32 random bytes in base64url; this is looser on length only.
 const TOKEN = /^[A-Za-z0-9_-]{16,128}$/;
+// The API's order codes: TS- and five Crockford base32 characters.
+const ORDER = /^TS-[0-9A-HJKMNP-TV-Z]{5}$/;
 // What the picker can send: 0 to 100, no padding.
 const QTY = /^(0|[1-9][0-9]?|100)$/;
 // More ticket types than any event page shows.
@@ -144,14 +150,19 @@ export function createApp(opts: StorefrontOptions): Hono {
     return h;
   }
 
-  function page(c: Context, status: Status, node: VNode, turnstile = false) {
-    c.header("Content-Security-Policy", csp(turnstile ? "turnstile" : "plain"));
+  function page(
+    c: Context,
+    status: Status,
+    node: VNode,
+    policy: Parameters<typeof csp>[0] = "plain",
+  ) {
+    c.header("Content-Security-Policy", csp(policy));
     // Each render carries its own idempotency key and live counts: never cache it.
     c.header("Cache-Control", "no-store");
     return c.html(`<!doctype html>${render(node)}`, status);
   }
 
-  const notFound = (c: Context, what: "event" | "page" = "page") =>
+  const notFound = (c: Context, what: "event" | "page" | "checkout" = "page") =>
     page(c, 404, <NotFound what={what} />);
   const trouble = (c: Context, status: Status = 502, message = GENERIC) =>
     page(c, status, <ErrorPage message={message} />);
@@ -163,7 +174,12 @@ export function createApp(opts: StorefrontOptions): Hono {
   ) {
     const form = siteKey !== "" && p.data.event.state === "on_sale";
     const idem = p.idem ?? crypto.randomUUID();
-    return page(c, status, <EventPage {...p} siteKey={siteKey} idem={idem} />, form);
+    return page(
+      c,
+      status,
+      <EventPage {...p} siteKey={siteKey} idem={idem} />,
+      form ? "turnstile" : "plain",
+    );
   }
 
   // The first tap of a double tap is still running: give it a moment to finish.
@@ -210,11 +226,14 @@ export function createApp(opts: StorefrontOptions): Hono {
     if (!h.has("Content-Security-Policy")) h.set("Content-Security-Policy", csp("plain"));
   });
 
+  const tooBig = bodyLimit({
+    maxSize: MAX_BODY,
+    onError: (c) => trouble(c, 413, "That form is far bigger than ours. Go back and try again."),
+  });
+  app.use(async (c, next) => (c.req.path.startsWith("/api/") ? next() : tooBig(c, next)));
   app.use(
-    bodyLimit({
-      maxSize: MAX_BODY,
-      onError: (c) => trouble(c, 413, "That form is far bigger than ours. Go back and try again."),
-    }),
+    "/api/*",
+    bodyLimit({ maxSize: MAX_JSON, onError: (c) => apiError(c, 413, "too_large") }),
   );
 
   // Dotfiles are never served.
@@ -226,6 +245,107 @@ export function createApp(opts: StorefrontOptions): Hono {
     "/assets/*",
     serveStatic({ root: opts.staticDir, rewriteRequestPath: (p) => p.replace(/^\/assets/, "") }),
   );
+
+  app.get("/healthz", (c) => c.text("ok"));
+
+  async function getCheckout(c: Context, token: string) {
+    try {
+      const { data, error, response } = await api.GET("/checkouts/{token}", {
+        params: { path: { token } },
+        headers: apiHeaders(c),
+      });
+      return { status: response.status, data, error };
+    } catch {
+      return { status: 502 };
+    }
+  }
+
+  // Order links come from the API; the redirect stays on this site whatever host they name.
+  const local = (url: string) => {
+    const u = new URL(url, "http://storefront");
+    return u.pathname + u.search;
+  };
+
+  app.get("/checkout/:token", async (c) => {
+    const token = c.req.param("token");
+    if (!TOKEN.test(token)) return notFound(c, "checkout");
+    const r = await getCheckout(c, token);
+    if (r.status === 404) return notFound(c, "checkout");
+    const checkout = r.data;
+    if (!checkout?.event) return trouble(c);
+    if (checkout.status === "completed" && checkout.order_url) {
+      c.header("Cache-Control", "no-store");
+      return c.redirect(local(checkout.order_url), 303);
+    }
+    const node = <CheckoutPage token={token} checkout={checkout} event={checkout.event} />;
+    return page(c, 200, node, checkout.status === "expired" ? "plain" : "stripe");
+  });
+
+  // The island's two calls, same-origin, passed through with the buyer's address.
+  const apiError = (c: Context, status: number, code: string) => {
+    c.header("Cache-Control", "no-store");
+    return c.json({ error: { code, message: code } }, status as 400);
+  };
+  const relay = (c: Context, status: number, body: unknown, retryAfter?: string | null) => {
+    c.header("Cache-Control", "no-store");
+    if (retryAfter) c.header("Retry-After", retryAfter);
+    return c.json(body ?? {}, status as 200);
+  };
+
+  app.get("/api/checkouts/:token", async (c) => {
+    const token = c.req.param("token");
+    if (!TOKEN.test(token)) return apiError(c, 404, "not_found");
+    const r = await getCheckout(c, token);
+    if (r.status === 502) return apiError(c, 502, "unreachable");
+    return relay(c, r.status, r.data ?? r.error);
+  });
+
+  app.post("/api/checkouts/:token/pay", async (c) => {
+    const token = c.req.param("token");
+    if (!TOKEN.test(token)) return apiError(c, 404, "not_found");
+    const key = c.req.header("idempotency-key") ?? "";
+    if (!IDEM.test(key)) return apiError(c, 400, "bad_idempotency_key");
+    // JSON only: a cross-site form can't send it without asking first.
+    if (!/^application\/json\b/i.test(c.req.header("content-type") ?? "")) {
+      return apiError(c, 415, "json_only");
+    }
+    let body: components["schemas"]["PayCheckout"];
+    try {
+      body = await c.req.json();
+    } catch {
+      return apiError(c, 400, "bad_json");
+    }
+    try {
+      const { data, error, response } = await api.POST("/checkouts/{token}/pay", {
+        params: { path: { token } },
+        body,
+        headers: { ...apiHeaders(c), "Idempotency-Key": key },
+      });
+      return relay(c, response.status, data ?? error, response.headers.get("retry-after"));
+    } catch {
+      return apiError(c, 502, "unreachable");
+    }
+  });
+
+  app.get("/orders/:code", async (c) => {
+    const code = c.req.param("code");
+    const t = c.req.query("t") ?? "";
+    if (!ORDER.test(code) || !TOKEN.test(t)) return page(c, 404, <NoOrder />);
+    let status = 502;
+    let order: components["schemas"]["Order"] | undefined;
+    try {
+      const r = await api.GET("/orders/{code}", {
+        params: { path: { code }, query: { token: t } },
+        headers: apiHeaders(c),
+      });
+      status = r.response.status;
+      order = r.data;
+    } catch {}
+    if (order) return page(c, 200, <OrderPage order={order} />);
+    if (status === 404 || status === 400) return page(c, 404, <NoOrder />);
+    if (status === 429) return trouble(c, 429, SLOW_DOWN);
+    return trouble(c);
+  });
 
   app.get("/:organizer/:event", async (c) => {
     const { organizer, event } = c.req.param();
