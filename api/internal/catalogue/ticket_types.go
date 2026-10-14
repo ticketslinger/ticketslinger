@@ -100,7 +100,8 @@ func validateTT(t *TicketType) error {
 	return nil
 }
 
-// ttDBError is dbError for ticket types: 23514 is a failed CHECK.
+// ttDBError is dbError for ticket types: 23514 is a failed CHECK, 23503 a
+// hold or ticket still pointing at it (a sale the guards missed).
 func ttDBError(err error) error {
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) {
@@ -109,6 +110,8 @@ func ttDBError(err error) error {
 			return ErrInvalid{Code: "invalid_ticket_type", Message: "Something in that ticket type isn't allowed. Check the lengths, price, limits and dates."}
 		case "23505":
 			return ErrConflict{"ticket_type_exists", "", "That ticket type already exists."}
+		case "23503":
+			return errHasSales("", "this ticket")
 		}
 	}
 	return err
@@ -119,9 +122,10 @@ func ttDBError(err error) error {
 // and behind going live. Another tenant's event is ErrNotFound.
 //
 // FOR NO KEY UPDATE, not FOR UPDATE: the child writes never change the event's
-// keys, and holds and orders (P3) take FOR KEY SHARE on the event through their
-// foreign keys, which FOR UPDATE would block. UpdateEvent and DeleteEvent keep
-// FOR UPDATE, since the slug is a unique key and a delete removes the row.
+// keys, and checkouts, holds and orders take FOR KEY SHARE on the event through
+// their foreign keys, which FOR UPDATE would block. UpdateEvent uses it too (a
+// slug change upgrades the lock as it writes); DeleteEvent keeps FOR UPDATE,
+// since a delete removes the row and only drafts can go.
 func lockEvent(ctx context.Context, tx pgx.Tx, id uuid.UUID) (Event, error) {
 	return scan(tx.QueryRow(ctx, `select `+cols+` from events where id = $1 for no key update`, id))
 }
@@ -196,7 +200,10 @@ func UpdateTicketType(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, 
 	if _, err := lockEvent(ctx, tx, event); err != nil {
 		return TicketType{}, err
 	}
-	before, err := scanTT(tx.QueryRow(ctx, `select `+ttCols+` from ticket_types where id = $1 and event_id = $2 for update`, id, event))
+	// No row lock: the event lock keeps other catalogue writes off this row,
+	// and one order everywhere (event, then quotas, then rows) keeps the
+	// guard's quota locks ahead of the row lock the update takes.
+	before, err := GetTicketType(ctx, tx, event, id)
 	if err != nil {
 		return TicketType{}, err
 	}
@@ -240,7 +247,11 @@ func UpdateTicketType(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, 
 			return TicketType{}, err
 		}
 	}
-	// ponytail: P3 must guard price and limit edits once tickets are sold.
+	if field := pricingChange(t, before); field != "" {
+		if err := guardSales(ctx, tx, event, []uuid.UUID{id}, field, "this ticket"); err != nil {
+			return TicketType{}, err
+		}
+	}
 	t, err = scanTT(tx.QueryRow(ctx, `update ticket_types set name = $2, description = $3, price_cents = $4, tax_rate_bp = $5, prices_include_tax = $6,
 			sales_start = $7, sales_end = $8, min_per_order = $9, max_per_order = $10, hidden = $11, updated_at = clock_timestamp()
 		where id = $1 returning `+ttCols,
@@ -249,6 +260,24 @@ func UpdateTicketType(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, 
 		return TicketType{}, ttDBError(err)
 	}
 	return t, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "ticket_type.updated", EntityType: "ticket_type", EntityID: id, Before: before, After: t})
+}
+
+// pricingChange names the first field a buyer was quoted on that differs:
+// price, tax and per-order limits. "" when none does.
+func pricingChange(a, b TicketType) string {
+	switch {
+	case a.PriceCents != b.PriceCents:
+		return "price_cents"
+	case !samePtr(a.TaxRateBP, b.TaxRateBP):
+		return "tax_rate_bp"
+	case !samePtr(a.PricesIncludeTax, b.PricesIncludeTax):
+		return "prices_include_tax"
+	case a.MinPerOrder != b.MinPerOrder:
+		return "min_per_order"
+	case a.MaxPerOrder != b.MaxPerOrder:
+		return "max_per_order"
+	}
+	return ""
 }
 
 // setNull applies one nullable patch field: null clears, a value sets,
@@ -287,8 +316,13 @@ func DeleteTicketType(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, 
 	if err != nil {
 		return err
 	}
-	before, err := scanTT(tx.QueryRow(ctx, `select `+ttCols+` from ticket_types where id = $1 and event_id = $2 for update`, id, event))
+	// Read before locking: the quotas come first (lock order), and the event
+	// lock already keeps other catalogue writes off this row.
+	before, err := GetTicketType(ctx, tx, event, id)
 	if err != nil {
+		return err
+	}
+	if err := guardSales(ctx, tx, event, []uuid.UUID{id}, "", "this ticket"); err != nil {
 		return err
 	}
 	if ev.Status == "live" {
@@ -304,9 +338,8 @@ func DeleteTicketType(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, 
 	if err := tx.QueryRow(ctx, `select coalesce(array_agg(quota_id order by quota_id), '{}') from quota_ticket_types where ticket_type_id = $1`, id).Scan(&quotas); err != nil {
 		return err
 	}
-	// ponytail: P3 must guard this once tickets are sold.
 	if _, err := tx.Exec(ctx, `delete from ticket_types where id = $1`, id); err != nil {
-		return err
+		return ttDBError(err)
 	}
 	// Before lists the quotas it was in, as ticket_type.created's After does.
 	b := struct {

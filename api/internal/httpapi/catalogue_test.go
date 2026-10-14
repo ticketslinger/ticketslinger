@@ -441,3 +441,30 @@ func TestQuestionPatchIgnoresPosition(t *testing.T) {
 		t.Fatalf("patched: %v", q)
 	}
 }
+
+// Once a code is used or a question answered, the deletes answer 409
+// has_sales; the catalogue tests cover the rest of the guards.
+func TestSalesGuardsOverHTTP(t *testing.T) {
+	h := newHarness(t)
+	owner := h.signupWithMFA("owner@example.com")
+	h.createOrganizer(owner, "acme")
+	ev := h.must(h.do(owner, "POST", "/v1/organizers/acme/events", eventBody), 201)["id"].(string)
+	base := "/v1/organizers/acme/events/" + ev
+	promo := h.must(h.do(owner, "POST", base+"/promo-codes", `{"code":"EARLY","kind":"percent","value":1000}`), 201)["id"].(string)
+	question := h.must(h.do(owner, "POST", base+"/questions", `{"label":"Diet","kind":"text","scope":"order"}`), 201)["id"].(string)
+	if _, err := testdb.Owner(t, h.pool).Exec(context.Background(), `with u as (update promo_codes set used_count = 1 where id = $2),
+		o as (insert into orders(organizer_id, event_id, code, email, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents, fee_mode, quote, details)
+			select organizer_id, id, 'TS-AAAAA', 'b@example.com', 0, 0, 0, 0, 0, 'pass', '{}', '{}' from events where id = $1 returning id, organizer_id, event_id)
+		insert into answers(organizer_id, event_id, order_id, question_id, value) select organizer_id, event_id, id, $3, 'None' from o`,
+		ev, promo, question); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{base + "/promo-codes/" + promo, base + "/questions/" + question} {
+		if res := h.do(owner, "DELETE", path, ""); res.StatusCode != 409 || h.errorCode(res) != "has_sales" {
+			t.Errorf("delete %s: %d %q", path, res.StatusCode, h.errorCode(res))
+		}
+	}
+	if res := h.do(owner, "PATCH", base+"/promo-codes/"+promo, `{"value":2000}`); res.StatusCode != 409 || h.errorCode(res) != "has_sales" {
+		t.Errorf("patch value: %d %q", res.StatusCode, h.errorCode(res))
+	}
+}

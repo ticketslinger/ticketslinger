@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -146,6 +147,13 @@ func CreateQuota(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor aud
 	if err != nil {
 		return Quota{}, err
 	}
+	// Ticket types bring their sales into the new quota: take the locks their
+	// checkouts take before counting them.
+	if len(ids) > 0 {
+		if _, err := salesExist(ctx, tx, event, ids); err != nil {
+			return Quota{}, err
+		}
+	}
 	var id uuid.UUID
 	if err := tx.QueryRow(ctx, `insert into quotas(organizer_id, event_id, name, size) values ($1, $2, $3, $4) returning id`,
 		org, event, in.Name, in.Size).Scan(&id); err != nil {
@@ -153,6 +161,11 @@ func CreateQuota(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor aud
 	}
 	if err := setLinks(ctx, tx, org, event, id, ids); err != nil {
 		return Quota{}, err
+	}
+	if len(ids) > 0 {
+		if err := fitsSales(ctx, tx, id, in.Size); err != nil {
+			return Quota{}, err
+		}
 	}
 	q, err := getQuota(ctx, tx, event, id)
 	if err != nil {
@@ -189,7 +202,9 @@ func UpdateQuota(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 	if err != nil {
 		return Quota{}, err
 	}
-	before, err := scanQuota(tx.QueryRow(ctx, `select `+quotaCols+` from quotas where id = $1 and event_id = $2 for update`, id, event))
+	// Read before locking: a guard below locks quotas in id order, which this
+	// one may not lead. The event lock keeps other catalogue writes off it.
+	before, err := getQuota(ctx, tx, event, id)
 	if err != nil {
 		return Quota{}, err
 	}
@@ -211,6 +226,22 @@ func UpdateQuota(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 	if q.Name == before.Name && q.Size == before.Size && slices.Equal(q.TicketTypeIDs, before.TicketTypeIDs) {
 		return before, nil
 	}
+	added, removed := diffIDs(before.TicketTypeIDs, q.TicketTypeIDs), diffIDs(q.TicketTypeIDs, before.TicketTypeIDs)
+	shrink := q.Size < before.Size
+	if shrink || len(added) > 0 || len(removed) > 0 {
+		// Every ticket type in or leaving the quota: their checkouts take
+		// these locks, so none slips in between the count and the write.
+		if union := append(slices.Clone(before.TicketTypeIDs), added...); len(union) > 0 {
+			if _, err := salesExist(ctx, tx, event, union); err != nil {
+				return Quota{}, err
+			}
+		}
+		if len(removed) > 0 {
+			if err := guardSales(ctx, tx, event, removed, "ticket_type_ids", "these tickets"); err != nil {
+				return Quota{}, err
+			}
+		}
+	}
 	if _, err := tx.Exec(ctx, `update quotas set name = $2, size = $3, updated_at = clock_timestamp() where id = $1`, id, q.Name, q.Size); err != nil {
 		return Quota{}, quotaDBError(err)
 	}
@@ -222,11 +253,41 @@ func UpdateQuota(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 			return Quota{}, err
 		}
 	}
+	if shrink || len(added) > 0 {
+		if err := fitsSales(ctx, tx, id, q.Size); err != nil {
+			return Quota{}, err
+		}
+	}
 	q, err = getQuota(ctx, tx, event, id)
 	if err != nil {
 		return Quota{}, err
 	}
 	return q, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "quota.updated", EntityType: "quota", EntityID: id, Before: before, After: q})
+}
+
+// diffIDs returns the ids in b that aren't in a.
+func diffIDs(a, b []uuid.UUID) []uuid.UUID {
+	var out []uuid.UUID
+	for _, id := range b {
+		if !slices.Contains(a, id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// fitsSales refuses a quota, as now linked, smaller than what its ticket
+// types have sold and open checkouts hold. The caller holds the quota locks.
+func fitsSales(ctx context.Context, tx pgx.Tx, quota uuid.UUID, size int) error {
+	var used int
+	if err := tx.QueryRow(ctx, `select quota_used($1, null)`, quota).Scan(&used); err != nil {
+		return err
+	}
+	if size < used {
+		n := strconv.Itoa(used)
+		return ErrConflict{"quota_below_sales", "size", "You've sold or are holding " + n + " here. Set the capacity to at least " + n + "."}
+	}
+	return nil
 }
 
 // DeleteQuota removes a quota and records quota.deleted. On a live event it
@@ -236,11 +297,15 @@ func DeleteQuota(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 	if err != nil {
 		return err
 	}
-	before, err := scanQuota(tx.QueryRow(ctx, `select `+quotaCols+` from quotas where id = $1 and event_id = $2 for update`, id, event))
+	before, err := getQuota(ctx, tx, event, id)
 	if err != nil {
 		return err
 	}
-	// ponytail: P3 must guard this once tickets are sold against the quota.
+	if len(before.TicketTypeIDs) > 0 {
+		if err := guardSales(ctx, tx, event, before.TicketTypeIDs, "", "tickets in this capacity"); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(ctx, `delete from quotas where id = $1`, id); err != nil {
 		return err
 	}

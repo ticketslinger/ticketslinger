@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 )
@@ -141,8 +142,13 @@ func ListEvents(ctx context.Context, tx pgx.Tx) ([]Event, error) {
 
 // UpdateEvent applies patch, records event.updated with the row before and
 // after, and returns the result. Status moves between draft and live only.
+//
+// The row is locked FOR NO KEY UPDATE, like lockEvent: a checkout holding the
+// quotas inserts rows whose foreign keys take FOR KEY SHARE on it, and the
+// sales guard below then waits on those quotas, so FOR UPDATE would deadlock.
+// Changing the slug (draft only) upgrades the lock when the row is written.
 func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.Actor, patch EventPatch) (Event, error) {
-	before, err := scan(tx.QueryRow(ctx, `select `+cols+` from events where id = $1 for update`, id))
+	before, err := lockEvent(ctx, tx, id)
 	if err != nil {
 		return Event{}, err
 	}
@@ -183,7 +189,6 @@ func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 		}
 		switch *patch.Status {
 		case "draft":
-			// ponytail: P3 must refuse this once orders exist.
 			e.Status = "draft"
 		case "live":
 			if err := goLive(ctx, tx, e); err != nil {
@@ -197,6 +202,11 @@ func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 	if sameEvent(e, before) {
 		return before, nil
 	}
+	if field := saleTermsChange(e, before); field != "" {
+		if err := guardSales(ctx, tx, id, nil, field, "tickets to this event"); err != nil {
+			return Event{}, err
+		}
+	}
 	e, err = scan(tx.QueryRow(ctx, `update events set slug = $13, name = $2, description = $3, venue_name = $4, venue_address = $5, timezone = $6,
 			starts_at = $7, ends_at = $8, status = $9, fee_mode = $10, tax_rate_bp = $11, prices_include_tax = $12, updated_at = clock_timestamp()
 		where id = $1 returning `+cols,
@@ -205,6 +215,25 @@ func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 		return Event{}, dbError(err)
 	}
 	return e, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "event.updated", EntityType: "event", EntityID: id, Before: before, After: e})
+}
+
+// saleTermsChange names the first field a buyer's order depends on that
+// differs: tax, fee mode, the zone its times are shown in, or going back to
+// draft. "" when none does.
+func saleTermsChange(a, b Event) string {
+	switch {
+	case a.TaxRateBP != b.TaxRateBP:
+		return "tax_rate_bp"
+	case a.PricesIncludeTax != b.PricesIncludeTax:
+		return "prices_include_tax"
+	case a.FeeMode != b.FeeMode:
+		return "fee_mode"
+	case a.Timezone != b.Timezone:
+		return "timezone"
+	case a.Status == "draft" && b.Status == "live":
+		return "status"
+	}
+	return ""
 }
 
 // sameEvent: a patch that changed nothing. Instants compare by Equal, since
@@ -254,7 +283,12 @@ func DeleteEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 	if before.Status != "draft" {
 		return ErrConflict{"event_not_draft", "", "Only a draft can be deleted. This event has already gone on sale."}
 	}
+	// 23503: an order or ticket still points at it. Those have no cascade.
 	if _, err := tx.Exec(ctx, `delete from events where id = $1`, id); err != nil {
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.Code == "23503" {
+			return errHasSales("", "tickets to this event")
+		}
 		return err
 	}
 	return audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "event.deleted", EntityType: "event", EntityID: id, Before: before})

@@ -253,6 +253,8 @@ func UpdateQuestion(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, ac
 	return q, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "question.updated", EntityType: "question", EntityID: id, Before: before, After: q})
 }
 
+var errAnswered = ErrConflict{"has_sales", "", "Buyers have already answered this question, so it has to stay. You can reword it instead."}
+
 // DeleteQuestion removes a question and records question.deleted.
 func DeleteQuestion(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor audit.Actor) error {
 	if _, err := lockEvent(ctx, tx, event); err != nil {
@@ -262,8 +264,19 @@ func DeleteQuestion(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, ac
 	if err != nil {
 		return err
 	}
-	// ponytail: P3 must guard this once orders hold answers to it.
+	var answered bool
+	if err := tx.QueryRow(ctx, `select exists (select 1 from answers where question_id = $1)`, id).Scan(&answered); err != nil {
+		return err
+	}
+	if answered {
+		return errAnswered
+	}
+	// 23503: an answer written since the check; the foreign key has no cascade.
 	if _, err := tx.Exec(ctx, `delete from questions where id = $1`, id); err != nil {
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.Code == "23503" {
+			return errAnswered
+		}
 		return err
 	}
 	return audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "question.deleted", EntityType: "question", EntityID: id, Before: before})
