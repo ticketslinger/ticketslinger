@@ -48,6 +48,10 @@ var (
 	errNotConnected          = &apiError{409, "not_connected", "There's no Stripe account to check yet. Connect one first."}
 )
 
+// errTurnstileUnavailable: Cloudflare couldn't check a Turnstile token. A 5xx,
+// so Idempotency-Key never keeps it.
+var errTurnstileUnavailable = &apiError{503, "turnstile_unavailable", "We couldn't run the quick person check just now. Try again in a minute."}
+
 func notFound() error {
 	return &apiError{404, "not_found", "That doesn't exist, or you don't have access to it."}
 }

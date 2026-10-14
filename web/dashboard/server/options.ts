@@ -13,6 +13,7 @@ export function serverOptions(env: Record<string, string | undefined>) {
       apiUrl: env.TS_API_URL ?? "http://127.0.0.1:3000/v1",
       staticDir: env.TS_DASHBOARD_STATIC ?? "./dist",
       secureCookies: env.TS_DASHBOARD_DEV !== "1",
+      turnstileSiteKey: env.TS_TURNSTILE_SITEKEY ?? "",
     } satisfies AppOptions,
   };
 }

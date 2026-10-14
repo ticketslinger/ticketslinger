@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"regexp"
@@ -22,6 +23,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/idempotency"
 	"github.com/ticketslinger/ticketslinger/api/internal/organizers"
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
+	"github.com/ticketslinger/ticketslinger/api/internal/turnstile"
 )
 
 type Deps struct {
@@ -243,9 +245,45 @@ func me(u auth.User, sess auth.Session) Me {
 	return Me{Id: u.ID, Email: u.Email, Name: u.Name, EmailVerified: u.EmailVerified, TotpEnabled: u.TOTPEnabled, HasPasskey: u.HasPasskey, HasSecondFactor: u.HasPasskey || u.TOTPEnabled, Mfa: sess.MFA}
 }
 
+// turnstileError maps a Turnstile answer; nil when err isn't one. An outage
+// refuses the attempt: nothing gets through unchecked.
+func turnstileError(ctx context.Context, err error) error {
+	switch {
+	case errors.Is(err, turnstile.ErrFailed):
+		return errTurnstileFailed
+	case errors.Is(err, auth.ErrTurnstileRequired):
+		return fieldError{&apiError{401, "turnstile_required", "Before you sign in, we need one quick check that you're a person."}, "turnstile_token"}
+	case errors.Is(err, turnstile.ErrUnavailable):
+		slog.WarnContext(ctx, "turnstile check unavailable", "err", err)
+		return errTurnstileUnavailable
+	}
+	return nil
+}
+
+var errTurnstileFailed = invalidField("turnstile_failed", "turnstile_token", "That check didn't go through. Give it another try.")
+
+// turnstileToken is the request's token, or "" without one. Cloudflare's
+// tokens run to 2,048 characters; anything longer can't be one.
+func turnstileToken(p *TurnstileToken) (string, error) {
+	switch {
+	case p == nil:
+		return "", nil
+	case len(*p) > 2048:
+		return "", errTurnstileFailed
+	}
+	return *p, nil
+}
+
 func (s *server) Signup(ctx context.Context, req SignupRequestObject) (SignupResponseObject, error) {
 	c := clientFrom(ctx)
-	sess, u, err := s.Auth.Signup(ctx, string(req.Body.Email), req.Body.Password, req.Body.Name, c.ip, c.ua)
+	tok, err := turnstileToken(req.Body.TurnstileToken)
+	if err != nil {
+		return nil, err
+	}
+	sess, u, err := s.Auth.Signup(ctx, string(req.Body.Email), req.Body.Password, req.Body.Name, tok, c.ip, c.ua)
+	if te := turnstileError(ctx, err); te != nil {
+		return nil, te
+	}
 	switch {
 	case errors.Is(err, auth.ErrEmailTaken):
 		return nil, fieldError{&apiError{409, "email_taken", "There's already an account with that email. Try signing in instead."}, "email"}
@@ -278,7 +316,14 @@ func (s *server) Login(ctx context.Context, req LoginRequestObject) (LoginRespon
 	if len(recovery) > 64 || len(strings.NewReplacer(" ", "", "-", "").Replace(recovery)) > 32 {
 		return nil, invalidField("invalid_recovery_code", "recovery_code", "That recovery code is too long. Copy it again from where you saved it.")
 	}
-	sess, u, err := s.Auth.Login(ctx, string(req.Body.Email), req.Body.Password, code, recovery, c.ip, c.ua)
+	tok, err := turnstileToken(req.Body.TurnstileToken)
+	if err != nil {
+		return nil, err
+	}
+	sess, u, err := s.Auth.Login(ctx, string(req.Body.Email), req.Body.Password, code, recovery, tok, c.ip, c.ua)
+	if te := turnstileError(ctx, err); te != nil {
+		return nil, te
+	}
 	switch {
 	case errors.Is(err, auth.ErrBadCredentials):
 		return nil, &apiError{401, "bad_credentials", "That email and password don't match."}
@@ -370,7 +415,7 @@ func (s *server) BeginPasskeyRegistration(ctx context.Context, req BeginPasskeyR
 	if req.Body != nil && req.Body.Password != nil {
 		password = *req.Body.Password
 	}
-	id, opts, err := s.Auth.BeginPasskeyRegistration(ctx, u.ID, sess.MFA, password)
+	id, opts, err := s.Auth.BeginPasskeyRegistration(ctx, u.ID, sess.MFA, password, clientFrom(ctx).ip)
 	if err != nil {
 		return nil, passkeyError(err, "That password doesn't match.")
 	}
@@ -480,7 +525,7 @@ func (s *server) StartTotp(ctx context.Context, req StartTotpRequestObject) (Sta
 	if req.Body != nil && req.Body.Password != nil {
 		password = *req.Body.Password
 	}
-	secret, url, err := s.Auth.StartTOTP(ctx, u.ID, sess.MFA, password)
+	secret, url, err := s.Auth.StartTOTP(ctx, u.ID, sess.MFA, password, clientFrom(ctx).ip)
 	if err != nil {
 		return nil, totpError(err)
 	}

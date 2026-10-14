@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"log/slog"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -21,6 +22,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
+	"github.com/ticketslinger/ticketslinger/api/internal/ratelimit"
+	"github.com/ticketslinger/ticketslinger/api/internal/turnstile"
 )
 
 var (
@@ -35,6 +38,8 @@ var (
 	ErrInvalidName      = errors.New("auth: invalid name")
 	ErrPasswordRequired = errors.New("auth: password required")
 	ErrMFARequired      = errors.New("auth: mfa required")
+	// ErrTurnstileRequired: this sign-in needs a Turnstile token first.
+	ErrTurnstileRequired = errors.New("auth: turnstile required")
 )
 
 const (
@@ -44,8 +49,15 @@ const (
 	sessionLifetime = 30 * 24 * time.Hour
 	verifyLifetime  = 48 * time.Hour
 	maxSessionAge   = 90 * 24 * time.Hour // absolute cap, however often a session slides
-	maxFailures     = 5
-	lockout         = 15 * time.Minute
+	// Failed sign-ins count per account and address (see addrKey) over a
+	// window that restarts with each failure. turnstileAfter failures put that
+	// address behind Turnstile; maxFailures lock it out for the window.
+	// accountBrake failures over all addresses put every address behind
+	// Turnstile, and never lock, so a stranger can't lock the owner out.
+	turnstileAfter = 3
+	maxFailures    = 5
+	accountBrake   = 10
+	lockout        = 15 * time.Minute
 )
 
 type Session struct {
@@ -67,27 +79,32 @@ type Options struct {
 	Origin string // dashboard origin, used for links in email
 	// SecretKey is the 32-byte AES-256 key that encrypts TOTP secrets at rest.
 	SecretKey []byte
+	// Turnstile guards sign-up and repeated failed sign-ins; nil turns it off.
+	Turnstile *turnstile.Verifier
 }
 
 type Service struct {
 	pool    *pgxpool.Pool
 	mail    mailer.Mailer
 	opts    Options
-	ipLimit *limiter
-	emLimit *limiter
+	ipLimit *ratelimit.Limiter
+	emLimit *ratelimit.Limiter
 	// recLimit caps recovery-code generation per user; each call costs ten Argon2 hashes.
-	recLimit   *limiter
+	recLimit   *ratelimit.Limiter
 	beforeHash func()             // test hook, nil in production
 	wa         *webauthn.WebAuthn // nil when RPID or Origin is unusable; passkey calls then return waErr
 	waErr      error
 }
 
 func NewService(pool *pgxpool.Pool, m mailer.Mailer, o Options) *Service {
-	s := &Service{pool: pool, mail: m, opts: o,
-		ipLimit: newLimiter(20, time.Minute), emLimit: newLimiter(10, time.Minute),
-		recLimit: newLimiter(5, time.Hour)}
+	s := &Service{pool: pool, mail: m, opts: o}
+	s.ipLimit, s.emLimit, s.recLimit = newLimits()
 	s.wa, s.waErr = newWebAuthn(o)
 	return s
+}
+
+func newLimits() (ip, email, recovery *ratelimit.Limiter) {
+	return ratelimit.New(20, time.Minute), ratelimit.New(10, time.Minute), ratelimit.New(5, time.Hour)
 }
 
 // dummyHash is checked when no user matches, so a login takes as long
@@ -117,8 +134,10 @@ func newToken() (string, []byte, error) {
 
 func hashToken(tok string) []byte { h := sha256.Sum256([]byte(tok)); return h[:] }
 
-func (s *Service) Signup(ctx context.Context, email, password, name, ip, ua string) (Session, User, error) {
-	if !s.ipLimit.allow("signup:"+ip, time.Now()) {
+// Signup creates an account. With Turnstile on, turnstileToken must pass
+// (turnstile.ErrFailed, or turnstile.ErrUnavailable when Cloudflare can't say).
+func (s *Service) Signup(ctx context.Context, email, password, name, turnstileToken, ip, ua string) (Session, User, error) {
+	if !s.ipLimit.Allow("signup:"+ip, time.Now()) {
 		return Session{}, User{}, ErrRateLimited
 	}
 	email, name = normEmail(email), strings.TrimSpace(name)
@@ -130,6 +149,9 @@ func (s *Service) Signup(ctx context.Context, email, password, name, ip, ua stri
 	}
 	if name == "" || utf8.RuneCountInString(name) > maxName {
 		return Session{}, User{}, ErrInvalidName
+	}
+	if err := s.opts.Turnstile.Verify(ctx, turnstileToken, ip); err != nil {
+		return Session{}, User{}, err
 	}
 	hash, err := hashPassword(ctx, password)
 	if err != nil {
@@ -174,13 +196,16 @@ func (s *Service) Signup(ctx context.Context, email, password, name, ip, ua stri
 	return sess, u, nil
 }
 
-func (s *Service) Login(ctx context.Context, email, password, totpCode, recoveryCode, ip, ua string) (Session, User, error) {
+// Login signs in with a password and, when the account has one, a second
+// step. Repeated failures from one address need turnstileToken
+// (ErrTurnstileRequired), then lock that address out (ErrLocked).
+func (s *Service) Login(ctx context.Context, email, password, totpCode, recoveryCode, turnstileToken, ip, ua string) (Session, User, error) {
 	if totpCode != "" && recoveryCode != "" {
 		return Session{}, User{}, ErrOneSecondStep
 	}
 	email = normEmail(email)
 	now := time.Now()
-	if !s.ipLimit.allow("login:"+ip, now) || !s.emLimit.allow(email, now) {
+	if !s.ipLimit.Allow("login:"+ip, now) || !s.emLimit.Allow(email, now) {
 		return Session{}, User{}, ErrRateLimited
 	}
 	var (
@@ -189,15 +214,14 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, recovery
 		totpOn bool
 		sealed []byte
 		last   *int64
-		locked bool
 		hasKey bool
 	)
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, email, name, email_verified_at IS NOT NULL, totp_enabled_at IS NOT NULL,
-		        password_hash, coalesce(locked_until > now(), false), totp_secret, totp_last_step,
+		        password_hash, totp_secret, totp_last_step,
 		        EXISTS (SELECT 1 FROM passkeys p WHERE p.user_id = users.id)
 		   FROM users WHERE email = $1`, email).
-		Scan(&u.ID, &u.Email, &u.Name, &u.EmailVerified, &totpOn, &hash, &locked, &sealed, &last, &hasKey)
+		Scan(&u.ID, &u.Email, &u.Name, &u.EmailVerified, &totpOn, &hash, &sealed, &last, &hasKey)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && hash == nil) {
 		_, _ = checkPassword(ctx, dummyHash(), password)
 		return Session{}, User{}, ErrBadCredentials
@@ -205,8 +229,20 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, recovery
 	if err != nil {
 		return Session{}, User{}, err
 	}
-	if locked {
+	f, err := s.failures(ctx, u.ID, ip)
+	if err != nil {
+		return Session{}, User{}, err
+	}
+	if f.locked {
 		return Session{}, User{}, ErrLocked
+	}
+	if s.opts.Turnstile.Enabled() && (f.here >= turnstileAfter || f.account >= accountBrake) {
+		if turnstileToken == "" {
+			return Session{}, User{}, ErrTurnstileRequired
+		}
+		if err := s.opts.Turnstile.Verify(ctx, turnstileToken, ip); err != nil {
+			return Session{}, User{}, err
+		}
 	}
 	u.TOTPEnabled = totpOn
 	ok, err := checkPassword(ctx, *hash, password)
@@ -214,19 +250,19 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, recovery
 		return Session{}, User{}, err
 	}
 	if !ok {
-		return Session{}, User{}, s.recordFailure(ctx, u.ID)
+		return Session{}, User{}, s.recordFailure(ctx, u.ID, ip)
 	}
 	var codeID uuid.UUID
 	if recoveryCode != "" {
 		if !totpOn && !hasKey { // stale codes from a factor since removed
-			return Session{}, User{}, s.recordFailure(ctx, u.ID)
+			return Session{}, User{}, s.recordFailure(ctx, u.ID, ip)
 		}
 		// Accepted for any account with a second factor; it stands in for the TOTP code or the passkey.
 		if codeID, err = s.matchRecovery(ctx, u.ID, recoveryCode); err != nil {
 			return Session{}, User{}, err
 		}
 		if codeID == uuid.Nil {
-			return Session{}, User{}, s.recordFailure(ctx, u.ID)
+			return Session{}, User{}, s.recordFailure(ctx, u.ID, ip)
 		}
 	} else if totpOn && totpCode == "" {
 		return Session{}, User{}, ErrTOTPRequired
@@ -238,7 +274,7 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, recovery
 			return Session{}, User{}, err
 		}
 		if !ok {
-			return Session{}, User{}, s.recordFailure(ctx, u.ID)
+			return Session{}, User{}, s.recordFailure(ctx, u.ID, ip)
 		}
 	}
 	var sess Session
@@ -265,25 +301,62 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, recovery
 				return nil
 			}
 		}
-		if _, err := tx.Exec(ctx, `UPDATE users SET failed_logins = 0 WHERE id = $1`, u.ID); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM login_failures WHERE user_id = $1 AND ip = $2`, u.ID, addrKey(ip)); err != nil {
 			return err
 		}
 		sess, err = createSession(ctx, tx, u.ID, totpOn || codeID != uuid.Nil, ip, ua)
 		return err
 	})
 	if err == nil && replay {
-		return Session{}, User{}, s.recordFailure(ctx, u.ID)
+		return Session{}, User{}, s.recordFailure(ctx, u.ID, ip)
 	}
 	return sess, u, err
 }
 
-// recordFailure counts a failed login and locks the account at the limit.
-func (s *Service) recordFailure(ctx context.Context, id uuid.UUID) error {
+// addrKey is the address failures count against: an IPv4 address, an IPv6
+// /64 (one host usually owns a whole /64, so single addresses would hand out
+// endless fresh counters), or "" when the address is unknown.
+func addrKey(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	switch {
+	case err != nil:
+		return ""
+	case a.Is6():
+		return netip.PrefixFrom(a, 64).Masked().String()
+	}
+	return a.String()
+}
+
+// A row's count lapses once lockout has passed since its last failure; the
+// sweep deletes it a day later.
+const fresh = `updated_at > now() - $3::interval`
+
+type failureCounts struct {
+	here, account int // this address's failures, and the account's over all addresses
+	locked        bool
+}
+
+// failures reads the account's live failure counts as seen from ip.
+func (s *Service) failures(ctx context.Context, id uuid.UUID, ip string) (failureCounts, error) {
+	var f failureCounts
+	err := s.pool.QueryRow(ctx,
+		`SELECT coalesce(sum(failures) FILTER (WHERE ip = $2), 0), coalesce(sum(failures), 0),
+		        coalesce(bool_or(ip = $2 AND locked_until > now()), false)
+		   FROM login_failures WHERE user_id = $1 AND (`+fresh+` OR locked_until > now())`,
+		id, addrKey(ip), lockout.String()).Scan(&f.here, &f.account, &f.locked)
+	return f, err
+}
+
+// recordFailure counts a failed sign-in from ip and locks that address out
+// of the account at maxFailures. It always returns ErrBadCredentials.
+func (s *Service) recordFailure(ctx context.Context, id uuid.UUID, ip string) error {
 	if _, err := s.pool.Exec(ctx,
-		`UPDATE users SET
-		   locked_until  = CASE WHEN failed_logins + 1 >= $2 THEN now() + $3::interval ELSE locked_until END,
-		   failed_logins = CASE WHEN failed_logins + 1 >= $2 THEN 0 ELSE failed_logins + 1 END
-		 WHERE id = $1`, id, maxFailures, lockout.String()); err != nil {
+		`INSERT INTO login_failures AS f (user_id, ip, failures) VALUES ($1, $2, 1)
+		 ON CONFLICT (user_id, ip) DO UPDATE SET
+		   failures     = CASE WHEN f.`+fresh+` THEN f.failures + 1 ELSE 1 END,
+		   locked_until = CASE WHEN f.`+fresh+` AND f.failures + 1 >= $4 THEN now() + $3::interval ELSE f.locked_until END,
+		   updated_at   = now()`,
+		id, addrKey(ip), lockout.String(), maxFailures); err != nil {
 		return err
 	}
 	return ErrBadCredentials
@@ -356,20 +429,22 @@ func (s *Service) VerifyEmail(ctx context.Context, token string) error {
 
 // reauthenticate checks the signed-in user's current password before a
 // sensitive change, so a stolen session token alone can't make it. A wrong
-// password counts toward the login lockout. It returns the user's email.
-func (s *Service) reauthenticate(ctx context.Context, userID uuid.UUID, password string) (string, error) {
+// password counts toward the sign-in lockout for ip. It returns the user's email.
+func (s *Service) reauthenticate(ctx context.Context, userID uuid.UUID, password, ip string) (string, error) {
 	var email string
 	var hash *string
-	var locked bool
-	if err := s.pool.QueryRow(ctx,
-		`SELECT email, password_hash, coalesce(locked_until > now(), false) FROM users WHERE id = $1`, userID).
-		Scan(&email, &hash, &locked); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT email, password_hash FROM users WHERE id = $1`, userID).
+		Scan(&email, &hash); err != nil {
 		return "", err
 	}
-	if !s.emLimit.allow(email, time.Now()) {
+	if !s.emLimit.Allow(email, time.Now()) {
 		return "", ErrRateLimited
 	}
-	if locked {
+	f, err := s.failures(ctx, userID, ip)
+	if err != nil {
+		return "", err
+	}
+	if f.locked {
 		return "", ErrLocked
 	}
 	if hash == nil {
@@ -380,7 +455,7 @@ func (s *Service) reauthenticate(ctx context.Context, userID uuid.UUID, password
 		return "", err
 	}
 	if !ok {
-		return "", s.recordFailure(ctx, userID)
+		return "", s.recordFailure(ctx, userID, ip)
 	}
 	return email, nil
 }

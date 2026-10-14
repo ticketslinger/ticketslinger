@@ -1,10 +1,14 @@
 import { useState } from "react";
-import { ApiFailure, session } from "../api";
+import { ApiFailure, checkPending, session } from "../api";
+import { useTurnstile } from "../turnstile";
 import { ErrorText, Field, Link, useAction } from "../ui";
 
 export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
   const [needCode, setNeedCode] = useState(false);
   const [useRecovery, setUseRecovery] = useState(false);
+  // After a few wrong passwords the API asks for a Turnstile check.
+  const [needCheck, setNeedCheck] = useState(false);
+  const check = useTurnstile(needCheck);
   const { busy, error, run } = useAction();
 
   const withPasskey = () =>
@@ -25,14 +29,19 @@ export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
           e.preventDefault();
           const f = new FormData(e.currentTarget);
           run(async () => {
+            if (check.shown && !check.token) throw checkPending();
             try {
               await session.login(
                 String(f.get("email")),
                 String(f.get("password")),
                 needCode && !useRecovery ? String(f.get("code")) : undefined,
                 useRecovery ? String(f.get("recovery")) : undefined,
+                check.shown ? check.token : undefined,
               );
             } catch (err) {
+              if (check.shown) check.reset(); // the token is spent
+              if (err instanceof ApiFailure && err.code === "turnstile_required")
+                setNeedCheck(true);
               if (err instanceof ApiFailure && err.code === "totp_required" && !needCode) {
                 setNeedCode(true);
                 return;
@@ -76,6 +85,12 @@ export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
             required
             autoFocus
           />
+        )}
+        {check.shown && (
+          <div className="field">
+            <p className="hint">One quick check that you're a person.</p>
+            <div ref={check.ref} />
+          </div>
         )}
         <ErrorText>{error}</ErrorText>
         <button type="submit" disabled={busy}>

@@ -24,6 +24,8 @@ const apiEnv = {
   TS_TEST_MODE: "1",
   // Test mode always takes payments through the built-in fake provider.
   TS_STRIPE_WEBHOOK_SECRET: "whsec_e2e",
+  // Cloudflare's published test secret: every token passes.
+  TS_TURNSTILE_SECRET: "1x0000000000000000000000000000000AA",
 };
 
 function run(cmd: string[], opts: { cwd?: string; env?: Record<string, string | undefined> } = {}) {
@@ -72,6 +74,8 @@ children.push(
       TS_API_URL: "http://127.0.0.1:3001/v1",
       TS_DASHBOARD_PORT: "3002",
       TS_DASHBOARD_STATIC: "./dist",
+      // Cloudflare's published test site key: the widget always passes.
+      TS_TURNSTILE_SITEKEY: "1x00000000000000000000AA",
     },
     stdout: "inherit",
     stderr: "inherit",

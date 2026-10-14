@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -24,6 +25,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/payments"
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
+	"github.com/ticketslinger/ticketslinger/api/internal/turnstile"
 )
 
 var version = "dev"
@@ -69,6 +71,9 @@ func serve() error {
 	}
 	if cfg.SecretKey == nil {
 		return errors.New("TS_SECRET_KEY is required (base64 of 32 random bytes, e.g. `openssl rand -base64 32`)")
+	}
+	if cfg.TurnstileSecret == "" {
+		slog.Warn("TS_TURNSTILE_SECRET is unset: sign-up and repeated failed sign-ins go without a Turnstile check")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
@@ -135,7 +140,8 @@ func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Hand
 		}
 		mail = mem
 	}
-	h := httpapi.New(httpapi.Deps{Pool: pool, Auth: auth.NewService(pool, mail, auth.Options{RPID: cfg.WebAuthnRPID, Origin: cfg.DashboardOrigin, SecretKey: cfg.SecretKey}),
+	h := httpapi.New(httpapi.Deps{Pool: pool, Auth: auth.NewService(pool, mail, auth.Options{RPID: cfg.WebAuthnRPID, Origin: cfg.DashboardOrigin, SecretKey: cfg.SecretKey,
+		Turnstile: &turnstile.Verifier{Secret: cfg.TurnstileSecret, URL: cfg.TurnstileVerifyURL, Client: &http.Client{Timeout: 2 * time.Second}}}),
 		Config: cfg, Payments: paymentProvider(cfg, testMode)})
 	if testMode {
 		h = testMail(h, mem)

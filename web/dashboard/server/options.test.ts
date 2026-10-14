@@ -24,6 +24,18 @@ test("environment overrides", () => {
   expect(o).toEqual({
     hostname: "0.0.0.0",
     port: 4000,
-    app: { apiUrl: "http://api/v1", staticDir: "/srv/dash", secureCookies: true },
+    app: {
+      apiUrl: "http://api/v1",
+      staticDir: "/srv/dash",
+      secureCookies: true,
+      turnstileSiteKey: "",
+    },
   });
+});
+
+test("Turnstile site key", () => {
+  expect(serverOptions({}).app.turnstileSiteKey).toBe("");
+  expect(
+    serverOptions({ TS_TURNSTILE_SITEKEY: "1x00000000000000000000AA" }).app.turnstileSiteKey,
+  ).toBe("1x00000000000000000000AA");
 });

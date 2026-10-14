@@ -123,3 +123,17 @@ func TestLoadStripe(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadTurnstile(t *testing.T) {
+	t.Setenv("TS_DATABASE_URL", "postgres://x")
+	t.Setenv("TS_TURNSTILE_SECRET", "")
+	c, err := Load()
+	if err != nil || c.TurnstileSecret != "" || c.TurnstileVerifyURL != "https://challenges.cloudflare.com/turnstile/v0/siteverify" {
+		t.Fatalf("defaults: %q %q %v", c.TurnstileSecret, c.TurnstileVerifyURL, err)
+	}
+	t.Setenv("TS_TURNSTILE_SECRET", "1x0000000000000000000000000000000AA")
+	t.Setenv("TS_TURNSTILE_VERIFY_URL", "http://127.0.0.1:9/siteverify")
+	if c, err = Load(); err != nil || c.TurnstileSecret != "1x0000000000000000000000000000000AA" || c.TurnstileVerifyURL != "http://127.0.0.1:9/siteverify" {
+		t.Fatalf("set: %q %q %v", c.TurnstileSecret, c.TurnstileVerifyURL, err)
+	}
+}

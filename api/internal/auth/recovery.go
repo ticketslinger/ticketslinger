@@ -58,7 +58,7 @@ func (s *Service) GenerateRecoveryCodes(ctx context.Context, userID uuid.UUID, m
 	if !mfa {
 		return nil, ErrMFARequired
 	}
-	if !s.recLimit.allow("recovery:"+userID.String(), time.Now()) {
+	if !s.recLimit.Allow("recovery:"+userID.String(), time.Now()) {
 		return nil, ErrRateLimited
 	}
 	codes := make([]string, recoveryCount)

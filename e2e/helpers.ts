@@ -24,6 +24,10 @@ export async function signUp(page: Page, name: string, email: string) {
   await page.getByLabel("Name").fill(name);
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(PASSWORD);
+  // The Turnstile widget fills its hidden input once the check passes.
+  await expect(page.locator('input[name="cf-turnstile-response"]')).not.toHaveValue("", {
+    timeout: 15_000,
+  });
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page.getByText("Check your inbox")).toBeVisible();
   const mail = await fetch(`${API}/__test/last-email?to=${encodeURIComponent(email)}`);

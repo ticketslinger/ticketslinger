@@ -29,7 +29,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
+        /** @description When the server has Turnstile on, send a turnstile_token: a missing or refused one is 422 turnstile_failed, and 503 turnstile_unavailable means Cloudflare couldn't check it just now, so try again with a fresh token. Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["signup"];
         delete?: never;
         options?: never;
@@ -46,7 +46,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description 401 totp_required means the account has an authenticator app; send totp_code, or a recovery_code instead. A valid recovery code is accepted for any account with a second factor and gives a session that passed it. Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
+        /** @description 401 totp_required means the account has an authenticator app; send totp_code, or a recovery_code instead. Wrong passwords count per account and address (an IPv6 /64 counts as one address): from the third, that address must send a turnstile_token when the server has Turnstile on (401 turnstile_required; 422 turnstile_failed when it's refused; 503 turnstile_unavailable when Cloudflare can't check it), and the fifth locks that address out of the account for 15 minutes (423 locked). Ten across all addresses within 15 minutes put every sign-in for the account behind Turnstile, without locking it. A valid recovery code is accepted for any account with a second factor and gives a session that passed it. Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["login"];
         delete?: never;
         options?: never;
@@ -609,7 +609,10 @@ export interface components {
             email: string;
             password: string;
             name: string;
+            turnstile_token?: components["schemas"]["TurnstileToken"];
         };
+        /** @description The token from the Cloudflare Turnstile widget. Each one works once. */
+        TurnstileToken: string;
         LoginRequest: {
             /** Format: email */
             email: string;
@@ -617,6 +620,7 @@ export interface components {
             totp_code?: string;
             /** @description One of the account's unused recovery codes, in place of an authenticator code or passkey. Spaces, hyphens and case don't matter; up to 64 characters are read, and 422 invalid_recovery_code means more than 32 are left once spaces and hyphens are dropped. Sending it together with totp_code is 422 one_second_step. */
             recovery_code?: string;
+            turnstile_token?: components["schemas"]["TurnstileToken"];
         };
         SessionCreated: {
             session_token: string;
@@ -1044,6 +1048,7 @@ export interface operations {
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
             429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     login: {
@@ -1077,6 +1082,7 @@ export interface operations {
             422: components["responses"]["Error"];
             423: components["responses"]["Error"];
             429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     logout: {
