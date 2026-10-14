@@ -96,3 +96,18 @@ func TestPublicOperationsAreExactlyThese(t *testing.T) {
 		t.Fatalf("public operations = %v, want %v", got, want)
 	}
 }
+
+// The storefront keeps these first URL segments for itself.
+func TestCreateOrganizerRefusesReservedSlugs(t *testing.T) {
+	h := newHarness(t)
+	tok := h.signupVerified("owner@example.com")
+	for _, slug := range []string{"checkout", "orders", "assets", "api", "healthz"} {
+		res := h.do(tok, "POST", "/v1/organizers", `{"name":"Acme","slug":"`+slug+`"}`)
+		e, _ := h.json(res)["error"].(map[string]any)
+		if res.StatusCode != 422 || e["code"] != "invalid_slug" || e["field"] != "slug" ||
+			e["message"] != "That web address is taken by the ticket site itself. Pick another." {
+			t.Errorf("%s: got %d %v", slug, res.StatusCode, e)
+		}
+	}
+	h.must(h.do(tok, "POST", "/v1/organizers", `{"name":"Acme","slug":"orders-co"}`), 201)
+}

@@ -1006,6 +1006,7 @@ export interface components {
         };
         CreateOrganizer: {
             name: string;
+            /** @description The organizer's storefront address. checkout, orders, assets, api and healthz belong to the storefront itself (422 invalid_slug). */
             slug: string;
         };
         Organizer: {

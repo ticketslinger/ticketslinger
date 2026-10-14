@@ -1034,7 +1034,7 @@ components:
       required: [name, slug]
       properties:
         name: { type: string, minLength: 1, maxLength: 120 }
-        slug: { type: string, pattern: "^[a-z0-9](-?[a-z0-9])*$", minLength: 3, maxLength: 40 }
+        slug: { type: string, pattern: "^[a-z0-9](-?[a-z0-9])*$", minLength: 3, maxLength: 40, description: "The organizer's storefront address. checkout, orders, assets, api and healthz belong to the storefront itself (422 invalid_slug)." }
     Organizer:
       type: object
       required: [id, name, slug, role]

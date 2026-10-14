@@ -65,7 +65,7 @@ func TestDBRefusesBadSlugAndName(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.New(t)
 	ann := newUser(t, pool, "ann@example.com")
-	for _, c := range [][2]string{{"A", "ACME"}, {"A", "ab"}, {"A", "a--b"}, {"", "acme"}, {strings.Repeat("n", 121), "acme"}} {
+	for _, c := range [][2]string{{"A", "ACME"}, {"A", "ab"}, {"A", "a--b"}, {"A", "orders"}, {"A", "healthz"}, {"", "acme"}, {strings.Repeat("n", 121), "acme"}} {
 		err := db.WithUser(ctx, pool, ann, func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `select create_organizer($1, $2)`, c[0], c[1])
 			return err
