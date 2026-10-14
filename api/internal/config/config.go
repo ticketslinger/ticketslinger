@@ -76,15 +76,15 @@ func env(k, def string) string {
 	return def
 }
 
-// intEnv reads an integer in [0, max], or def when unset.
-func intEnv(k string, def, max int) (int, error) {
+// intEnv reads an integer in [0, hi], or def when unset.
+func intEnv(k string, def, hi int) (int, error) {
 	v := os.Getenv(k)
 	if v == "" {
 		return def, nil
 	}
 	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 || n > max {
-		return 0, fmt.Errorf("%s must be a whole number from 0 to %d", k, max)
+	if err != nil || n < 0 || n > hi {
+		return 0, fmt.Errorf("%s must be a whole number from 0 to %d", k, hi)
 	}
 	return n, nil
 }

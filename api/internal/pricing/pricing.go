@@ -7,6 +7,12 @@ import "github.com/google/uuid"
 // MinimumChargeCents is Stripe's USD minimum for a charge.
 const MinimumChargeCents = 50
 
+// Fee modes. Anything other than FeeAbsorb is priced as FeePass.
+const (
+	FeePass   = "pass"
+	FeeAbsorb = "absorb"
+)
+
 // Fee is the platform fee, charged per paid ticket.
 type Fee struct {
 	BP    int   // basis points of the ticket's pre-tax price
@@ -49,7 +55,12 @@ type Quote struct {
 func bp(amount, rate int64) int64 { return (amount*rate + 5000) / 10000 }
 
 // Compute prices every ticket in lines. Free tickets (including ones a promo
-// makes free) carry no fee. In absorb mode a ticket's fee is capped at its charge.
+// makes free) carry no fee. In absorb mode a ticket's fee is capped at its charge;
+// any other feeMode is treated as pass.
+//
+// Inputs must be within the database CHECK bounds: non-negative prices and
+// values, tax 0-10000 bp, percent promo at most 10000. Callers must not pass
+// unvalidated request data.
 func Compute(lines []Line, promo *Promo, feeMode string, fee Fee) Quote {
 	q := Quote{FeeMode: feeMode}
 	for _, l := range lines {
@@ -76,7 +87,7 @@ func Compute(lines []Line, promo *Promo, feeMode string, fee Fee) Quote {
 			}
 			if net > 0 {
 				t.FeeCents = bp(preTax, int64(fee.BP)) + fee.Cents
-				if feeMode == "absorb" {
+				if feeMode == FeeAbsorb {
 					t.FeeCents = min(t.FeeCents, t.ChargeCents)
 				}
 			}
@@ -88,7 +99,7 @@ func Compute(lines []Line, promo *Promo, feeMode string, fee Fee) Quote {
 			q.TotalCents += t.ChargeCents
 		}
 	}
-	if feeMode == "pass" {
+	if feeMode != FeeAbsorb {
 		q.TotalCents += q.FeeCents
 	}
 	return q

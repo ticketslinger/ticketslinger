@@ -94,3 +94,18 @@ func TestTicketsSumToTotals(t *testing.T) {
 		t.Fatalf("tickets don't add up: %d tickets, charges %d + fees %d vs total %d", len(q.Tickets), charge, fee, q.TotalCents)
 	}
 }
+
+// Anything that isn't absorb behaves exactly as pass: fee uncapped and added to the total.
+func TestUnknownFeeModeIsPass(t *testing.T) {
+	for _, l := range [][]pricing.Line{one(2500, 825, false, false), one(40, 0, false, false)} {
+		want := pricing.Compute(l, nil, pricing.FeePass, std)
+		got := pricing.Compute(l, nil, "", std)
+		got.FeeMode = want.FeeMode
+		if got.SubtotalCents != want.SubtotalCents || got.FeeCents != want.FeeCents || got.TotalCents != want.TotalCents || got.TaxCents != want.TaxCents {
+			t.Fatalf("empty mode %+v; want same as pass %+v", got, want)
+		}
+	}
+	if q := pricing.Compute(one(40, 0, false, false), nil, pricing.FeeAbsorb, std); q.FeeCents != 40 {
+		t.Fatalf("absorb fee %d", q.FeeCents)
+	}
+}
