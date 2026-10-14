@@ -18,11 +18,11 @@ import { canEdit, type Org } from "./Organizer";
 type TicketType = components["schemas"]["TicketType"];
 type Quota = components["schemas"]["Quota"];
 
-const LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
+export const LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
 const MAX_CENTS = 10_000_000;
 
 /** A field that failed, and what to tell the organizer about it. */
-type Problem = { field: string; message: string };
+export type Problem = { field: string; message: string };
 
 /** Which form field an API error code is about; "" when it's about the form as a whole. */
 export function fieldFor(code: string, message: string): string {
@@ -169,11 +169,11 @@ export function quotaBody(d: QuotaDraft): { body: components["schemas"]["QuotaFi
 export const needsCapacity = (status: Event["status"]) => status === "live";
 
 const price = (c: number) => (c === 0 ? "Free" : formatCents(c));
-const toggle = (list: string[], id: string) =>
+export const toggle = (list: string[], id: string) =>
   list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
 
 /** A native modal: closes on Escape or Cancel, and asks before throwing away typing. */
-function FormDialog({
+export function FormDialog({
   title,
   dirty,
   onClose,
@@ -234,8 +234,14 @@ function FormDialog({
 }
 
 /** Marks the field a problem is about and moves focus to it. */
-function useProblem(prefix: string, local: Problem | null, error: string, code: string) {
-  const field = local?.field ?? (code ? fieldFor(code, error) : "");
+export function useProblem(
+  prefix: string,
+  local: Problem | null,
+  error: string,
+  code: string,
+  fieldOf = fieldFor,
+) {
+  const field = local?.field ?? (code ? fieldOf(code, error) : "");
   const message = local?.message ?? error;
   // biome-ignore lint/correctness/useExhaustiveDependencies: message re-runs it, so a repeat mistake pulls focus back
   useEffect(() => {
@@ -570,7 +576,15 @@ function QuotaDialog({
 }
 
 /** Asks "sure?" in place of the Delete button, then deletes. */
-function Remove({ label, noun, run }: { label: string; noun: string; run: () => Promise<void> }) {
+export function Remove({
+  label,
+  noun,
+  run,
+}: {
+  label: string;
+  noun: string;
+  run: () => Promise<void>;
+}) {
   const { busy, error, run: go } = useAction();
   const [asking, setAsking] = useState<boolean | null>(null);
   return (
