@@ -235,11 +235,70 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/ticket-types:
+    get:
+      operationId: listTicketTypes
+      description: Any member, or any API key. In position order.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/TicketType" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createTicketType
+      description: Owners and admins, or a write API key. It goes to the end of the list.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateTicketType" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/TicketType" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/ticket-types/{ticketType}:
+    get:
+      operationId: getTicketType
+      description: Any member, or any API key.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/TicketTypePath" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TicketType" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateTicketType
+      description: Owners and admins, or a write API key. Send only what changes.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/TicketTypePath" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TicketTypeFields" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TicketType" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteTicketType
+      description: Owners and admins, or a write API key. The last ticket type of a live event answers 409 last_ticket_type_live.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/TicketTypePath" }
+      responses:
+        "204": { description: Deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     session: { type: http, scheme: bearer, description: "A session token, or an organizer API key (tsk_...). A key acts only within its own organizer, and gets 403 session_required on anything that needs a person: your account, your organizer list, the audit log and key management. A read key gets 403 scope_read_only on writes." }
   parameters:
     OrganizerPath: { name: organizer, in: path, required: true, schema: { type: string } }
+    TicketTypePath: { name: ticketType, in: path, required: true, schema: { type: string, format: uuid } }
     EventPath: { name: event, in: path, required: true, schema: { type: string, format: uuid } }
   responses:
     Error: { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -389,5 +448,41 @@ components:
         currency: { type: string, enum: [USD] }
         tax_rate_bp: { type: integer }
         prices_include_tax: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TicketTypeFields:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 2000 }
+        price_cents: { type: integer, format: int64, minimum: 0, maximum: 10000000, description: "In cents: 2500 is $25. Up to $100,000." }
+        tax_rate_bp: { type: integer, minimum: 0, maximum: 10000, description: "Overrides the event's tax rate. Leave it out to use the event's." }
+        prices_include_tax: { type: boolean, description: "Overrides the event's setting. Leave it out to use the event's." }
+        sales_start: { type: string, format: date-time }
+        sales_end: { type: string, format: date-time, description: Must be after sales_start. }
+        min_per_order: { type: integer, minimum: 1, maximum: 100, description: "Defaults to 1." }
+        max_per_order: { type: integer, minimum: 1, maximum: 100, description: "Defaults to 10. Never below min_per_order." }
+        hidden: { type: boolean }
+    CreateTicketType:
+      allOf:
+        - { $ref: "#/components/schemas/TicketTypeFields" }
+        - { type: object, required: [name, price_cents] }
+    TicketType:
+      type: object
+      required: [id, event_id, name, description, price_cents, min_per_order, max_per_order, hidden, position, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        event_id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        price_cents: { type: integer, format: int64 }
+        tax_rate_bp: { type: integer, description: "null means the event's rate." }
+        prices_include_tax: { type: boolean, description: "null means the event's setting." }
+        sales_start: { type: string, format: date-time }
+        sales_end: { type: string, format: date-time }
+        min_per_order: { type: integer }
+        max_per_order: { type: integer }
+        hidden: { type: boolean }
+        position: { type: integer }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }

@@ -118,3 +118,64 @@ func TestEventOfAnotherOrganizerIs404(t *testing.T) {
 		}
 	}
 }
+
+func TestTicketTypeRoundTrip(t *testing.T) {
+	h := newHarness(t)
+	owner := h.signupWithMFA("owner@example.com")
+	h.createOrganizer(owner, "acme")
+	ev := h.must(h.do(owner, "POST", "/v1/organizers/acme/events", eventBody), 201)["id"].(string)
+	base := "/v1/organizers/acme/events/" + ev + "/ticket-types"
+
+	if res := h.do(owner, "POST", base, `{"name":"Free","price_cents":-5}`); res.StatusCode != 422 || h.errorCode(res) != "bad_price" {
+		t.Fatalf("bad price: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	tk := h.must(h.do(owner, "POST", base, `{"name":"General","price_cents":2500}`), 201)
+	id := tk["id"].(string)
+	if tk["price_cents"] != float64(2500) || tk["min_per_order"] != float64(1) || tk["max_per_order"] != float64(10) || tk["position"] != float64(1) {
+		t.Fatalf("created: %v", tk)
+	}
+	h.must(h.do(owner, "POST", base, `{"name":"VIP","price_cents":9000}`), 201)
+	up := h.must(h.do(owner, "PATCH", base+"/"+id, `{"price_cents":3000,"tax_rate_bp":825}`), 200)
+	if up["price_cents"] != float64(3000) || up["tax_rate_bp"] != float64(825) || up["name"] != "General" {
+		t.Fatalf("patched: %v", up)
+	}
+	if res := h.do(owner, "PATCH", base+"/"+id, `{"min_per_order":50}`); res.StatusCode != 422 || h.errorCode(res) != "bad_limits" {
+		t.Fatalf("bad limits: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	h.must(h.do(owner, "GET", base+"/"+id, ""), 200)
+	var list []map[string]any
+	res := h.do(owner, "GET", base, "")
+	_ = json.NewDecoder(res.Body).Decode(&list)
+	if res.StatusCode != 200 || len(list) != 2 || list[0]["id"] != id {
+		t.Fatalf("list: %d %v", res.StatusCode, list)
+	}
+
+	// Live, then the last ticket type is protected.
+	h.must(h.do(owner, "PATCH", "/v1/organizers/acme/events/"+ev, `{"status":"live"}`), 200)
+	h.must(h.do(owner, "DELETE", base+"/"+id, ""), 204)
+	var other string
+	for _, x := range list {
+		if x["id"] != id {
+			other = x["id"].(string)
+		}
+	}
+	if res := h.do(owner, "DELETE", base+"/"+other, ""); res.StatusCode != 409 || h.errorCode(res) != "last_ticket_type_live" {
+		t.Fatalf("delete last live: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	h.must(h.do(owner, "DELETE", base+"/"+id, ""), 404)
+}
+
+func TestTicketTypesUnderAnotherTenantsEvent(t *testing.T) {
+	h := newHarness(t)
+	owner := h.signupWithMFA("owner@example.com")
+	h.createOrganizer(owner, "acme")
+	h.createOrganizer(owner, "other")
+	ev := h.must(h.do(owner, "POST", "/v1/organizers/acme/events", eventBody), 201)["id"].(string)
+	tk := h.must(h.do(owner, "POST", "/v1/organizers/acme/events/"+ev+"/ticket-types", `{"name":"General","price_cents":2500}`), 201)["id"].(string)
+	// The caller owns both organizers, so only the event's own tenant can answer.
+	base := "/v1/organizers/other/events/" + ev + "/ticket-types"
+	h.must(h.do(owner, "POST", base, `{"name":"Sneak","price_cents":1}`), 404)
+	h.must(h.do(owner, "PATCH", base+"/"+tk, `{"name":"Sneak"}`), 404)
+	h.must(h.do(owner, "GET", base, ""), 404)
+	h.must(h.do(owner, "DELETE", base+"/"+tk, ""), 404)
+}

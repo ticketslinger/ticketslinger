@@ -17,4 +17,10 @@ func TestDBErrorBackstop(t *testing.T) {
 	if err := dbError(&pgconn.PgError{Code: "23505"}); !errors.As(err, &con) || con.Code != "slug_taken" {
 		t.Errorf("23505: %v", err)
 	}
+	if err := ttDBError(&pgconn.PgError{Code: "23514"}); !errors.As(err, &inv) || inv.Code != "invalid_ticket_type" {
+		t.Errorf("ticket 23514: %v", err)
+	}
+	if err := ttDBError(&pgconn.PgError{Code: "23505"}); !errors.As(err, &con) || con.Code != "ticket_type_exists" {
+		t.Errorf("ticket 23505: %v", err)
+	}
 }
