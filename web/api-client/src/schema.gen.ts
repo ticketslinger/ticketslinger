@@ -370,7 +370,7 @@ export interface paths {
         delete: operations["deleteTicketType"];
         options?: never;
         head?: never;
-        /** @description Owners and admins, or a write API key. Send only what changes. */
+        /** @description Owners and admins, or a write API key. Send only what changes. Showing a hidden ticket type that a promo code unlocks answers 409 unlocked_by_promo. */
         patch: operations["updateTicketType"];
         trace?: never;
     };
@@ -409,6 +409,43 @@ export interface paths {
         head?: never;
         /** @description Owners and admins, or a write API key. Send only what changes. A ticket_type_ids list replaces the whole set. On a live event, leaving a ticket type in no quota answers 409 live_needs_capacity. */
         patch: operations["updateQuota"];
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/promo-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Any member, or any API key. Oldest first. */
+        get: operations["listPromoCodes"];
+        put?: never;
+        /** @description Owners and admins, or a write API key. code, kind and value are required (422 missing_field). The code is trimmed and upper-cased, and is unique within the event (409 code_taken). Every id in applies_to and unlocks must be a ticket type of this event (422 unknown_ticket_type); unlocks may list only hidden ones (422 unlock_not_hidden). */
+        post: operations["createPromoCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/promo-codes/{promoCode}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Any member, or any API key. */
+        get: operations["getPromoCode"];
+        put?: never;
+        post?: never;
+        /** @description Owners and admins, or a write API key. */
+        delete: operations["deletePromoCode"];
+        options?: never;
+        head?: never;
+        /** @description Owners and admins, or a write API key. Send only what changes. Changing kind needs value too (422 value_required_with_kind). applies_to and unlocks replace the whole set when sent. null clears max_uses, valid_from or valid_until; leaving one out keeps it. used_count can't be set. */
+        patch: operations["updatePromoCode"];
         trace?: never;
     };
 }
@@ -618,6 +655,64 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        PromoCodeFields: {
+            /** @description 3 to 32 letters, numbers and hyphens. Stored upper-case; unique within the event. */
+            code?: string;
+            /** @enum {string} */
+            kind?: "percent" | "amount";
+            /**
+             * Format: int64
+             * @description percent: basis points, 1 to 10000 (1000 is 10%). amount: cents, up to 10000000 ($100,000).
+             */
+            value?: number;
+            /** @description null means unlimited. */
+            max_uses?: number | null;
+            /** Format: date-time */
+            valid_from?: string | null;
+            /**
+             * Format: date-time
+             * @description Must be after valid_from.
+             */
+            valid_until?: string | null;
+            /** @description true (the default) discounts every ticket type; then applies_to must be empty (422 applies_to_conflict). false limits it to applies_to, which must not be empty (422 applies_to_required). If every listed ticket type is later deleted, the code applies to nothing, never to everything. */
+            applies_to_all?: boolean;
+            /** @description Ticket types the discount covers when applies_to_all is false. On a patch the list replaces the current one. */
+            applies_to?: string[];
+            /** @description Hidden ticket types this code reveals. On a patch the list replaces the current one. */
+            unlocks?: string[];
+        };
+        CreatePromoCode: components["schemas"]["PromoCodeFields"] & {
+            code: string;
+            /** @enum {string} */
+            kind: "percent" | "amount";
+            /** Format: int64 */
+            value: number;
+        };
+        PromoCode: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            event_id: string;
+            code: string;
+            /** @enum {string} */
+            kind: "percent" | "amount";
+            /** Format: int64 */
+            value: number;
+            max_uses: number | null;
+            /** @description Read-only. Checkout counts it. */
+            used_count: number;
+            /** Format: date-time */
+            valid_from: string | null;
+            /** Format: date-time */
+            valid_until: string | null;
+            applies_to_all: boolean;
+            applies_to: string[];
+            unlocks: string[];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
         TicketTypeFields: {
             name?: string;
             description?: string;
@@ -690,6 +785,7 @@ export interface components {
     parameters: {
         OrganizerPath: string;
         QuotaPath: string;
+        PromoCodePath: string;
         TicketTypePath: string;
         EventPath: string;
     };
@@ -1599,6 +1695,142 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Quota"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    listPromoCodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromoCode"][];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    createPromoCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePromoCode"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromoCode"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    getPromoCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                promoCode: components["parameters"]["PromoCodePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromoCode"];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    deletePromoCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                promoCode: components["parameters"]["PromoCodePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    updatePromoCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                promoCode: components["parameters"]["PromoCodePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromoCodeFields"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromoCode"];
                 };
             };
             403: components["responses"]["Error"];

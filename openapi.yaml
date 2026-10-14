@@ -271,7 +271,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
     patch:
       operationId: updateTicketType
-      description: Owners and admins, or a write API key. Send only what changes.
+      description: "Owners and admins, or a write API key. Send only what changes. Showing a hidden ticket type that a promo code unlocks answers 409 unlocked_by_promo."
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
@@ -353,12 +353,72 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/promo-codes:
+    get:
+      operationId: listPromoCodes
+      description: Any member, or any API key. Oldest first.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/PromoCode" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createPromoCode
+      description: "Owners and admins, or a write API key. code, kind and value are required (422 missing_field). The code is trimmed and upper-cased, and is unique within the event (409 code_taken). Every id in applies_to and unlocks must be a ticket type of this event (422 unknown_ticket_type); unlocks may list only hidden ones (422 unlock_not_hidden)."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreatePromoCode" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/PromoCode" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/promo-codes/{promoCode}:
+    get:
+      operationId: getPromoCode
+      description: Any member, or any API key.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/PromoCodePath" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PromoCode" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updatePromoCode
+      description: "Owners and admins, or a write API key. Send only what changes. Changing kind needs value too (422 value_required_with_kind). applies_to and unlocks replace the whole set when sent. null clears max_uses, valid_from or valid_until; leaving one out keeps it. used_count can't be set."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/PromoCodePath" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PromoCodeFields" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PromoCode" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deletePromoCode
+      description: Owners and admins, or a write API key.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/PromoCodePath" }
+      responses:
+        "204": { description: Deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     session: { type: http, scheme: bearer, description: "A session token, or an organizer API key (tsk_...). A key acts only within its own organizer, and gets 403 session_required on anything that needs a person: your account, your organizer list, the audit log and key management. A read key gets 403 scope_read_only on writes." }
   parameters:
     OrganizerPath: { name: organizer, in: path, required: true, schema: { type: string } }
     QuotaPath: { name: quota, in: path, required: true, schema: { type: string, format: uuid } }
+    PromoCodePath: { name: promoCode, in: path, required: true, schema: { type: string, format: uuid } }
     TicketTypePath: { name: ticketType, in: path, required: true, schema: { type: string, format: uuid } }
     EventPath: { name: event, in: path, required: true, schema: { type: string, format: uuid } }
   responses:
@@ -530,6 +590,40 @@ components:
         name: { type: string }
         size: { type: integer }
         ticket_type_ids: { type: array, items: { type: string, format: uuid } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PromoCodeFields:
+      type: object
+      properties:
+        code: { type: string, description: "3 to 32 letters, numbers and hyphens. Stored upper-case; unique within the event." }
+        kind: { type: string, enum: [percent, amount] }
+        value: { type: integer, format: int64, minimum: 1, maximum: 10000000, description: "percent: basis points, 1 to 10000 (1000 is 10%). amount: cents, up to 10000000 ($100,000)." }
+        max_uses: { type: [integer, "null"], minimum: 1, description: "null means unlimited." }
+        valid_from: { type: [string, "null"], format: date-time }
+        valid_until: { type: [string, "null"], format: date-time, description: Must be after valid_from. }
+        applies_to_all: { type: boolean, description: "true (the default) discounts every ticket type; then applies_to must be empty (422 applies_to_conflict). false limits it to applies_to, which must not be empty (422 applies_to_required). If every listed ticket type is later deleted, the code applies to nothing, never to everything." }
+        applies_to: { type: array, items: { type: string, format: uuid }, description: "Ticket types the discount covers when applies_to_all is false. On a patch the list replaces the current one." }
+        unlocks: { type: array, items: { type: string, format: uuid }, description: "Hidden ticket types this code reveals. On a patch the list replaces the current one." }
+    CreatePromoCode:
+      allOf:
+        - { $ref: "#/components/schemas/PromoCodeFields" }
+        - { type: object, required: [code, kind, value], properties: { code: { type: string, x-go-type: "*string" }, kind: { type: string, enum: [percent, amount], x-go-type: "*string" }, value: { type: integer, format: int64, x-go-type: "*int64" } } }
+    PromoCode:
+      type: object
+      required: [id, event_id, code, kind, value, max_uses, used_count, valid_from, valid_until, applies_to_all, applies_to, unlocks, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        event_id: { type: string, format: uuid }
+        code: { type: string }
+        kind: { type: string, enum: [percent, amount] }
+        value: { type: integer, format: int64 }
+        max_uses: { type: [integer, "null"] }
+        used_count: { type: integer, description: Read-only. Checkout counts it. }
+        valid_from: { type: [string, "null"], format: date-time }
+        valid_until: { type: [string, "null"], format: date-time }
+        applies_to_all: { type: boolean }
+        applies_to: { type: array, items: { type: string, format: uuid } }
+        unlocks: { type: array, items: { type: string, format: uuid } }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     TicketTypeFields:

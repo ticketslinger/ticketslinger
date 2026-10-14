@@ -182,6 +182,42 @@ func (e OrganizerRole) Valid() bool {
 	}
 }
 
+// Defines values for PromoCodeKind.
+const (
+	PromoCodeKindAmount  PromoCodeKind = "amount"
+	PromoCodeKindPercent PromoCodeKind = "percent"
+)
+
+// Valid indicates whether the value is a known member of the PromoCodeKind enum.
+func (e PromoCodeKind) Valid() bool {
+	switch e {
+	case PromoCodeKindAmount:
+		return true
+	case PromoCodeKindPercent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PromoCodeFieldsKind.
+const (
+	PromoCodeFieldsKindAmount  PromoCodeFieldsKind = "amount"
+	PromoCodeFieldsKindPercent PromoCodeFieldsKind = "percent"
+)
+
+// Valid indicates whether the value is a known member of the PromoCodeFieldsKind enum.
+func (e PromoCodeFieldsKind) Valid() bool {
+	switch e {
+	case PromoCodeFieldsKindAmount:
+		return true
+	case PromoCodeFieldsKindPercent:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UpdateEventFeeMode.
 const (
 	UpdateEventFeeModeAbsorb UpdateEventFeeMode = "absorb"
@@ -306,6 +342,28 @@ type CreateEventFeeMode string
 type CreateOrganizer struct {
 	Name string `json:"name"`
 	Slug string `json:"slug"`
+}
+
+// CreatePromoCode defines model for CreatePromoCode.
+type CreatePromoCode struct {
+	// AppliesTo Ticket types the discount covers when applies_to_all is false. On a patch the list replaces the current one.
+	AppliesTo *[]openapi_types.UUID `json:"applies_to,omitempty"`
+
+	// AppliesToAll true (the default) discounts every ticket type; then applies_to must be empty (422 applies_to_conflict). false limits it to applies_to, which must not be empty (422 applies_to_required). If every listed ticket type is later deleted, the code applies to nothing, never to everything.
+	AppliesToAll *bool   `json:"applies_to_all,omitempty"`
+	Code         *string `json:"code"`
+	Kind         *string `json:"kind"`
+
+	// MaxUses null means unlimited.
+	MaxUses nullable.Nullable[int] `json:"max_uses,omitempty"`
+
+	// Unlocks Hidden ticket types this code reveals. On a patch the list replaces the current one.
+	Unlocks   *[]openapi_types.UUID        `json:"unlocks,omitempty"`
+	ValidFrom nullable.Nullable[time.Time] `json:"valid_from,omitempty"`
+
+	// ValidUntil Must be after valid_from.
+	ValidUntil nullable.Nullable[time.Time] `json:"valid_until,omitempty"`
+	Value      *int64                       `json:"value"`
 }
 
 // CreateQuota defines model for CreateQuota.
@@ -457,6 +515,58 @@ type Passkey struct {
 	Name      string             `json:"name"`
 }
 
+// PromoCode defines model for PromoCode.
+type PromoCode struct {
+	AppliesTo    []openapi_types.UUID   `json:"applies_to"`
+	AppliesToAll bool                   `json:"applies_to_all"`
+	Code         string                 `json:"code"`
+	CreatedAt    time.Time              `json:"created_at"`
+	EventId      openapi_types.UUID     `json:"event_id"`
+	Id           openapi_types.UUID     `json:"id"`
+	Kind         PromoCodeKind          `json:"kind"`
+	MaxUses      nullable.Nullable[int] `json:"max_uses"`
+	Unlocks      []openapi_types.UUID   `json:"unlocks"`
+	UpdatedAt    time.Time              `json:"updated_at"`
+
+	// UsedCount Read-only. Checkout counts it.
+	UsedCount  int                          `json:"used_count"`
+	ValidFrom  nullable.Nullable[time.Time] `json:"valid_from"`
+	ValidUntil nullable.Nullable[time.Time] `json:"valid_until"`
+	Value      int64                        `json:"value"`
+}
+
+// PromoCodeKind defines model for PromoCode.Kind.
+type PromoCodeKind string
+
+// PromoCodeFields defines model for PromoCodeFields.
+type PromoCodeFields struct {
+	// AppliesTo Ticket types the discount covers when applies_to_all is false. On a patch the list replaces the current one.
+	AppliesTo *[]openapi_types.UUID `json:"applies_to,omitempty"`
+
+	// AppliesToAll true (the default) discounts every ticket type; then applies_to must be empty (422 applies_to_conflict). false limits it to applies_to, which must not be empty (422 applies_to_required). If every listed ticket type is later deleted, the code applies to nothing, never to everything.
+	AppliesToAll *bool `json:"applies_to_all,omitempty"`
+
+	// Code 3 to 32 letters, numbers and hyphens. Stored upper-case; unique within the event.
+	Code *string              `json:"code,omitempty"`
+	Kind *PromoCodeFieldsKind `json:"kind,omitempty"`
+
+	// MaxUses null means unlimited.
+	MaxUses nullable.Nullable[int] `json:"max_uses,omitempty"`
+
+	// Unlocks Hidden ticket types this code reveals. On a patch the list replaces the current one.
+	Unlocks   *[]openapi_types.UUID        `json:"unlocks,omitempty"`
+	ValidFrom nullable.Nullable[time.Time] `json:"valid_from,omitempty"`
+
+	// ValidUntil Must be after valid_from.
+	ValidUntil nullable.Nullable[time.Time] `json:"valid_until,omitempty"`
+
+	// Value percent: basis points, 1 to 10000 (1000 is 10%). amount: cents, up to 10000000 ($100,000).
+	Value *int64 `json:"value,omitempty"`
+}
+
+// PromoCodeFieldsKind defines model for PromoCodeFields.Kind.
+type PromoCodeFieldsKind string
+
 // Quota defines model for Quota.
 type Quota struct {
 	CreatedAt     time.Time            `json:"created_at"`
@@ -591,6 +701,9 @@ type EventPath = openapi_types.UUID
 // OrganizerPath defines model for OrganizerPath.
 type OrganizerPath = string
 
+// PromoCodePath defines model for PromoCodePath.
+type PromoCodePath = openapi_types.UUID
+
 // QuotaPath defines model for QuotaPath.
 type QuotaPath = openapi_types.UUID
 
@@ -663,6 +776,12 @@ type CreateEventJSONRequestBody = CreateEvent
 
 // UpdateEventJSONRequestBody defines body for UpdateEvent for application/json ContentType.
 type UpdateEventJSONRequestBody = UpdateEvent
+
+// CreatePromoCodeJSONRequestBody defines body for CreatePromoCode for application/json ContentType.
+type CreatePromoCodeJSONRequestBody = CreatePromoCode
+
+// UpdatePromoCodeJSONRequestBody defines body for UpdatePromoCode for application/json ContentType.
+type UpdatePromoCodeJSONRequestBody = PromoCodeFields
 
 // CreateQuotaJSONRequestBody defines body for CreateQuota for application/json ContentType.
 type CreateQuotaJSONRequestBody = CreateQuota
@@ -753,6 +872,21 @@ type ServerInterface interface {
 
 	// (PATCH /organizers/{organizer}/events/{event})
 	UpdateEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+
+	// (GET /organizers/{organizer}/events/{event}/promo-codes)
+	ListPromoCodes(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+
+	// (POST /organizers/{organizer}/events/{event}/promo-codes)
+	CreatePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+
+	// (DELETE /organizers/{organizer}/events/{event}/promo-codes/{promoCode})
+	DeletePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath)
+
+	// (GET /organizers/{organizer}/events/{event}/promo-codes/{promoCode})
+	GetPromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath)
+
+	// (PATCH /organizers/{organizer}/events/{event}/promo-codes/{promoCode})
+	UpdatePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath)
 
 	// (GET /organizers/{organizer}/events/{event}/quotas)
 	ListQuotas(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
@@ -1340,6 +1474,208 @@ func (siw *ServerInterfaceWrapper) UpdateEvent(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// ListPromoCodes operation middleware
+func (siw *ServerInterfaceWrapper) ListPromoCodes(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListPromoCodes(w, r, organizer, event)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreatePromoCode operation middleware
+func (siw *ServerInterfaceWrapper) CreatePromoCode(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreatePromoCode(w, r, organizer, event)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeletePromoCode operation middleware
+func (siw *ServerInterfaceWrapper) DeletePromoCode(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "promoCode" -------------
+	var promoCode PromoCodePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "promoCode", r.PathValue("promoCode"), &promoCode, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "promoCode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeletePromoCode(w, r, organizer, event, promoCode)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetPromoCode operation middleware
+func (siw *ServerInterfaceWrapper) GetPromoCode(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "promoCode" -------------
+	var promoCode PromoCodePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "promoCode", r.PathValue("promoCode"), &promoCode, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "promoCode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetPromoCode(w, r, organizer, event, promoCode)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdatePromoCode operation middleware
+func (siw *ServerInterfaceWrapper) UpdatePromoCode(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "promoCode" -------------
+	var promoCode PromoCodePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "promoCode", r.PathValue("promoCode"), &promoCode, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "promoCode", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdatePromoCode(w, r, organizer, event, promoCode)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListQuotas operation middleware
 func (siw *ServerInterfaceWrapper) ListQuotas(w http.ResponseWriter, r *http.Request) {
 
@@ -1899,6 +2235,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/quotas/{quota}", wrapper.DeleteQuota)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/quotas/{quota}", wrapper.GetQuota)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/quotas/{quota}", wrapper.UpdateQuota)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/promo-codes", wrapper.ListPromoCodes)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/promo-codes", wrapper.CreatePromoCode)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/promo-codes/{promoCode}", wrapper.DeletePromoCode)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/promo-codes/{promoCode}", wrapper.GetPromoCode)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/promo-codes/{promoCode}", wrapper.UpdatePromoCode)
 
 	return m
 }
@@ -3187,6 +3528,288 @@ func (response UpdateEvent422JSONResponse) VisitUpdateEventResponse(w http.Respo
 	return err
 }
 
+type ListPromoCodesRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+}
+
+type ListPromoCodesResponseObject interface {
+	VisitListPromoCodesResponse(w http.ResponseWriter) error
+}
+
+type ListPromoCodes200JSONResponse []PromoCode
+
+func (response ListPromoCodes200JSONResponse) VisitListPromoCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPromoCodes404JSONResponse struct{ ErrorJSONResponse }
+
+func (response ListPromoCodes404JSONResponse) VisitListPromoCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePromoCodeRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+	Body      *CreatePromoCodeJSONRequestBody
+}
+
+type CreatePromoCodeResponseObject interface {
+	VisitCreatePromoCodeResponse(w http.ResponseWriter) error
+}
+
+type CreatePromoCode201JSONResponse PromoCode
+
+func (response CreatePromoCode201JSONResponse) VisitCreatePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePromoCode403JSONResponse struct{ ErrorJSONResponse }
+
+func (response CreatePromoCode403JSONResponse) VisitCreatePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePromoCode404JSONResponse Error
+
+func (response CreatePromoCode404JSONResponse) VisitCreatePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePromoCode409JSONResponse Error
+
+func (response CreatePromoCode409JSONResponse) VisitCreatePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePromoCode422JSONResponse Error
+
+func (response CreatePromoCode422JSONResponse) VisitCreatePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePromoCodeRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+	PromoCode PromoCodePath `json:"promoCode"`
+}
+
+type DeletePromoCodeResponseObject interface {
+	VisitDeletePromoCodeResponse(w http.ResponseWriter) error
+}
+
+type DeletePromoCode204Response struct {
+}
+
+func (response DeletePromoCode204Response) VisitDeletePromoCodeResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeletePromoCode403JSONResponse struct{ ErrorJSONResponse }
+
+func (response DeletePromoCode403JSONResponse) VisitDeletePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePromoCode404JSONResponse Error
+
+func (response DeletePromoCode404JSONResponse) VisitDeletePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPromoCodeRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+	PromoCode PromoCodePath `json:"promoCode"`
+}
+
+type GetPromoCodeResponseObject interface {
+	VisitGetPromoCodeResponse(w http.ResponseWriter) error
+}
+
+type GetPromoCode200JSONResponse PromoCode
+
+func (response GetPromoCode200JSONResponse) VisitGetPromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPromoCode404JSONResponse struct{ ErrorJSONResponse }
+
+func (response GetPromoCode404JSONResponse) VisitGetPromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdatePromoCodeRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+	PromoCode PromoCodePath `json:"promoCode"`
+	Body      *UpdatePromoCodeJSONRequestBody
+}
+
+type UpdatePromoCodeResponseObject interface {
+	VisitUpdatePromoCodeResponse(w http.ResponseWriter) error
+}
+
+type UpdatePromoCode200JSONResponse PromoCode
+
+func (response UpdatePromoCode200JSONResponse) VisitUpdatePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdatePromoCode403JSONResponse struct{ ErrorJSONResponse }
+
+func (response UpdatePromoCode403JSONResponse) VisitUpdatePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdatePromoCode404JSONResponse Error
+
+func (response UpdatePromoCode404JSONResponse) VisitUpdatePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdatePromoCode409JSONResponse Error
+
+func (response UpdatePromoCode409JSONResponse) VisitUpdatePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdatePromoCode422JSONResponse Error
+
+func (response UpdatePromoCode422JSONResponse) VisitUpdatePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListQuotasRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
@@ -3828,6 +4451,21 @@ type StrictServerInterface interface {
 
 	// (PATCH /organizers/{organizer}/events/{event})
 	UpdateEvent(ctx context.Context, request UpdateEventRequestObject) (UpdateEventResponseObject, error)
+
+	// (GET /organizers/{organizer}/events/{event}/promo-codes)
+	ListPromoCodes(ctx context.Context, request ListPromoCodesRequestObject) (ListPromoCodesResponseObject, error)
+
+	// (POST /organizers/{organizer}/events/{event}/promo-codes)
+	CreatePromoCode(ctx context.Context, request CreatePromoCodeRequestObject) (CreatePromoCodeResponseObject, error)
+
+	// (DELETE /organizers/{organizer}/events/{event}/promo-codes/{promoCode})
+	DeletePromoCode(ctx context.Context, request DeletePromoCodeRequestObject) (DeletePromoCodeResponseObject, error)
+
+	// (GET /organizers/{organizer}/events/{event}/promo-codes/{promoCode})
+	GetPromoCode(ctx context.Context, request GetPromoCodeRequestObject) (GetPromoCodeResponseObject, error)
+
+	// (PATCH /organizers/{organizer}/events/{event}/promo-codes/{promoCode})
+	UpdatePromoCode(ctx context.Context, request UpdatePromoCodeRequestObject) (UpdatePromoCodeResponseObject, error)
 
 	// (GET /organizers/{organizer}/events/{event}/quotas)
 	ListQuotas(ctx context.Context, request ListQuotasRequestObject) (ListQuotasResponseObject, error)
@@ -4618,6 +5256,158 @@ func (sh *strictHandler) UpdateEvent(w http.ResponseWriter, r *http.Request, org
 	}
 }
 
+// ListPromoCodes operation middleware
+func (sh *strictHandler) ListPromoCodes(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+	var request ListPromoCodesRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListPromoCodes(ctx, request.(ListPromoCodesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListPromoCodes")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListPromoCodesResponseObject); ok {
+		if err := validResponse.VisitListPromoCodesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreatePromoCode operation middleware
+func (sh *strictHandler) CreatePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+	var request CreatePromoCodeRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+
+	var body CreatePromoCodeJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreatePromoCode(ctx, request.(CreatePromoCodeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreatePromoCode")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreatePromoCodeResponseObject); ok {
+		if err := validResponse.VisitCreatePromoCodeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeletePromoCode operation middleware
+func (sh *strictHandler) DeletePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath) {
+	var request DeletePromoCodeRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+	request.PromoCode = promoCode
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeletePromoCode(ctx, request.(DeletePromoCodeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeletePromoCode")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeletePromoCodeResponseObject); ok {
+		if err := validResponse.VisitDeletePromoCodeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetPromoCode operation middleware
+func (sh *strictHandler) GetPromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath) {
+	var request GetPromoCodeRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+	request.PromoCode = promoCode
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetPromoCode(ctx, request.(GetPromoCodeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetPromoCode")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetPromoCodeResponseObject); ok {
+		if err := validResponse.VisitGetPromoCodeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdatePromoCode operation middleware
+func (sh *strictHandler) UpdatePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath) {
+	var request UpdatePromoCodeRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+	request.PromoCode = promoCode
+
+	var body UpdatePromoCodeJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdatePromoCode(ctx, request.(UpdatePromoCodeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdatePromoCode")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdatePromoCodeResponseObject); ok {
+		if err := validResponse.VisitUpdatePromoCodeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListQuotas operation middleware
 func (sh *strictHandler) ListQuotas(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
 	var request ListQuotasRequestObject
@@ -4927,82 +5717,95 @@ func (sh *strictHandler) UpdateTicketType(w http.ResponseWriter, r *http.Request
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"5F17c9tGkv8qXbhcrbNFkZQsuxL6jytv4s264qy8lrNbVy4fawQ0yYnAGWRmIJpW6btfdQ8AAsSAD4mS",
-	"5cT/mCTm2e/+TWN0HcV6nmmFytlodB1lwog5OjT87dUVKvdWuBl9kSoaRRl96UVKzDEaRUjPo15k8Pdc",
-	"GkyikTM59iIbz3AuqNNEm7lw0SjKc5lEvcgtM+ponZFqGt3c9KIzMxVKfkazYR5dttk4V3vsf+XaiQ3j",
-	"/k7P77j+9zK+RPd+meGGiVzV6E6z3VBnm2ll0fPHGG3oQ6yVI1aMriORZamMhZNaDX6zWtFvqxm+MTiJ",
-	"RtF/DVZsH/induBH41kStLGRGQ0SjaLyQblUnvtlJn/GJX3KjM7QOOnXFBsUDpOxcI0dJcLhkZNzbG+r",
-	"F8lkh933olRYN85tNXhzlS/jODfCITgN4kLnDgTMpcod9uHlhUXlQE5A4RUaoEH6UW/H5XkmXrcfZAYn",
-	"8lN7Ke9nCBNprIPvIJ4JI2LSKBAThwacvRz3wGpY6hxiocBhmtIXA5e4tCAyYVw/tA6DV/pyT9LaWGe8",
-	"eFT5PBp9iAwKIu7CSIfRx5BEr+TzQ8SM4P1Xuy3H7NVZvRpIX/yGsaOpvYT84Bu1BUVkcnyJy21S6Ueh",
-	"8Zy+RBUm9iUuQTqL6aQPP+iMvoDSixEsELRKl3CJmIGAmbAzpr10RPq/OLhAsDO9UCCmQqp+tI0g5arL",
-	"5QQ3nifSvVLOBNRDxH7ZAWkSsdNmXEwwlkl7q+foQCrrUCSgJ+A75BbNWCawmKECoeDl29dMj0QmIF1D",
-	"yrsUqzHQTqq4jwiictItdx25aO1/v76lrQhJcUH55gz11fGuQvz0Itxl8ErrMBef3qCakg/4btiL5lKV",
-	"X4836WWTw6yWbBVEajWQsvaj3i2Vt9BbP1X3xtjLs2ym6dkkGn3Y4iao+d8lpomNbnrr1LBpPm1v660w",
-	"jiTWzRA4aPiLhQVegEgSg9b24TXrIxlLNUVYzGSKq8YgLQhIjJiwONcI/bxJ6Kc98rsODc35fx/E0efh",
-	"0fcfnxz9T/nx279+s1VYeAeV0SOh/qwVfbROGGfJ2hFDEhu2ex8rulaRzU4yc3yyg9AUxK11O70HCpRy",
-	"Q7N1iw0HV7uLDTfvFhv5uSSInJOsHw/5H2/O/zKsViKVwykHg5+Opvqo+PWvUrnOrdDwm3i1iuJ239Gq",
-	"T+e2MiNjHMdldF1ZLanc81Mvyo3t7rvf56fEDw5jxzKxbcVjqluvetIW6uQ0/Kal6sMZNxMpaFUq2AsQ",
-	"kMqrUvMUYmJBOEhRWAdaITw5HX7PTcb8cByLTMTSLb/tw0sFMoGJ0XMQSrsZmpUCn56cQK4ulV6oMS+Y",
-	"VFk6nNud3ELxgzBGLLu4XKd2mNlVwNxkE4Z/jnUS9kFztFZMMZx01BfGI6zatxe11t4vJKRzlZG+e7Qd",
-	"58agipf1qPDX8x8D/mQtEbgOeevE7jX5BHE8L+haTi4urDYXxEBhbXAZO8YOGwJ1GaMdSxWneYJjJz7V",
-	"ml1onaJQdQPbGmBl+3feqXXC5ba+T1awqBeR8ngfgrSNWKgY0xST4Nad+DQ2wuH4IqutrDQJNzUPFVp3",
-	"niV7y8cVqhzHhWsOjupbdFA7FHs1fWpdqBqDrc+91f1WVK4JVk3Am9QLikEji2nQq1MLC2vf0sU1Xak5",
-	"6RNv2jdpT6Nz9EtuOTXxGWO1891T1rqaNYcmHYMnFFslOBF56r6lKMwC5Z8T5OyZHl7kSzR/seC0E+kL",
-	"8CoKTlyipeSJ0ms98VkrU7UepW7X51D883x7/LOzGu+vrWtqtpZiik8gFVwIKy1kWipnR/DdyTPya9/1",
-	"T579d7/lyzc68jWtXcMxFLx++c+XQC2AmgBRqwepvER4lZPIDd5olWjV30l7azR+Nhx29uhiSVu7W1rx",
-	"DxSpm7UVYmUBt0Tcvl1I4d7oqVTv8PccbcD74VzItMFj/0tIdIS1C22SoD0zGOsrNMtxHFSZM4Vl8iLi",
-	"WOecvuSKQCQouwJ1tT0SkywVMXegLC53M1SOADltuA1oA7SYS1z24TwTMfWaLbMZKgtCJRALi5BoAifm",
-	"HMr34RxVItWUFM/pKXJgtZBuRtqZ8aLLCEsrHFuMtUrG1mG2li49PQlJfjmGx39XyQOlC9fPb7bnCyXR",
-	"KxqHOPkLbuBf2zLSk/EVGjmRmIS1fCbsuKBkd4OCGBOGONqs/c/MU7PGWwKJQJQ8Ina1+CiyrKZ7tRl3",
-	"jFPmE7FpKdKCRWulVrwKTECA3wf4ffCiKikKrqQzFGJ2oxIXaZiuIfddMrhw0mvMWRuzyZgQFzwBQkKy",
-	"IWW+awhodBpQ7f8lB0aPYIYGOYMp8TOL7OosEDrIGAoIS09GhvE3hmtHDMXUnZ9eKE7VRDKXKupF8Qzj",
-	"S/5Udi0+doE4nVHoBmi2iK94jyG6vl2pyYOh9XuEh8UutuDJFeBw9y1wVrorInlXySuxjVAQQAgCI5Fl",
-	"+n7bjPg2oX5Q1UvK9BrYSXut+wXOdfTnYGiY/BzQ6H/oBcyFWoJfsPX2tAQpYKZTAjRio60Fkaas4b4p",
-	"0Ay2H4BltgdzLT62zyjqk4CbCUeAywK0aq6wD2eKjbuLZ+yWUmkdGOSowvIvPr9hNOYFATNXWIbkTvuT",
-	"Do/73wFdaTHw3DukztOcwmGNq0OadipqvVnfBKn9gu3gsDFwMUxIxM7lVOXZIWLFW8pjPcSsJ3/Pnje7",
-	"nuwdTxVLCu26CVze3TJuBXz2sZwzmSSoQlHG7qGS+DTO0Iy1Sbz4tLVvLtW2Jt3AkLZyba+1btvg244e",
-	"rQy1aQxUnqYwR6Fs4zzEonNSTVfh3IeKXD3uExGCaUWKdowq2cLSD+UmW305Ob5F740ZcseeqH19Qysk",
-	"uxr2vtxWE2Sqc3InVKhOqzrV18VtXUIroa/J1n6usnWssCfQtKcethSsydgfPUhkybUcD/vwT66fuMCU",
-	"3GydEut+s+Yzj3u7aO2Gefcd+7YGvKnuzQW9VsBPRnDybDikfPubk2d9+DWjFX5DixoOhw2A7naHPDsa",
-	"kbMrNEYmGLYhjBgAK6XTMNVwIeLLEtorGvfhTTh0oDRHOpB2H1O0Eb9c6dIWBPOBrVaYiE588obrcFTc",
-	"jg0GbGMoDHuvXXaOLs/aVkG7jFCKcW7CkIrF2KDbAY3z7XqNAUOG6le2Yw9QPXBGFTzdNQEvgI8aF9Ii",
-	"0NkkDTJOdXzpa7wOXS5woJOdm+AB5X/w4mXuZuqHmUhTVNNQVFc+2jUK00xH7iuSRPoj37e1MX0Z4uaT",
-	"ycasqzGDJ5oW49xItzwnnjfSgwDaXUFdHOD3Crytqvis4JgnVDfX7/fpmJl/ELGzvriLoFCpKqym6ttj",
-	"PHWKzsLp8Gk50bjcFp96qyX1nfqErDjthgyN1WrkjzcKWLDnv60WRnlZzwOHVO8FqZ7yfLS2uVBiinNU",
-	"jlbLeBH9vFpKrDMc0+9j3oFWwHAQGwtWFfbSKAwbhILEM+cyX58p1UQTLVMZo7Lo8TFUjgA5Q1T96e2b",
-	"o6f94RGNvipDbf7MiasjVKyIOc5Tqaae5HwUZzzLomH/uD/0koRKZDIaRU/5J9afGTN4QKZikBJcT18z",
-	"bQPHWqfDYw9ZVyxYhYwN9DUAuL4AS9a4Qqu9pEADui+L44joVyKVa/A824w4xsxhAhPqrpbVvIynr+Os",
-	"LD/yCi2IUny8pBS4rM+zSZO44PZ1Eo38kUVR5ovW/U0ny4OV6DaOQ26aOkpavF4gfDIcHmzuNQQgUCd8",
-	"9jMJyenwuGuoam1lrXEvOj052av1071af79z65rZikYf2PlWIq1zV5fpFrvpeYvwp4HyTTlVZHZy5l01",
-	"QwGV27b2NGf6G06lKpDclZDdE7fbjijEcP5gD0brJiUG15XTeZ3cdNPl71JJO1sjTP1Fhg/Bmvza4Hcq",
-	"yv94e1Xfxx0/Ul0f7qOPe1qGQ0qUwam0Dk1djNa0k4sGqBiC4oHV8Rr8qlK0dpdzuV7ho2oYbYnhEawb",
-	"45ZzxnWf1/PxTdj3aIUwF0tacFVt94SCi/lEVA7227Z/qpuRd0wV//AOLmut6LH7qP0mINc3j8mK7Seh",
-	"w6ePw3dtkPdbGdE1sXg4W9orRv89R1OLW6tC9nKcdWDn8drk44PJcsGbkARXdnp/i/z0nmK1mkyWMfgR",
-	"l8h0G+B39TOuVaFNs8KmqHtBBQoXYKWapniUWyRz6OtnDLrc+KRi3of3M0oVTfmWDxtxrWIkJNMneyHb",
-	"up4HtO0qTyVUuU7fmyx6VSKtdLPsIWCKPd/eFRv8gclzR2vYrmBuHivvV1jt+38MSn77hJM4EhebIBpH",
-	"I0Ky7tusDr+/f7Nq+Wyx23r6s8d7SvqaB5sPbHW2R4IN4/P9PaZ+BwgHnXbZ1giwANEhz8KVXw8YEKpb",
-	"xoSMloeiQbKHtME8A/yUSYOWX4rVDmKtJtLMMSnhtONh8fqsbRsuphRh0X/EoHGFsR8K49jDoN00hXVQ",
-	"sGWD0C6ki2el11yXFtCqD+9wwrWqAS8mG2WtQO/AshSXQmilikuBYaGipyppyv5MWKpWrTCxFyCKLjpN",
-	"uKJR1MWJa1WHQw/lKe3GxcAB/+g3f1BBu1OlK3f+eKtAMIAHvSoqJu81bKsJFFdsLo+qSpiwL/s3t3rF",
-	"jQ5F9K6qoDXydr1SfUv6/rusUN2TwCH3Matq3KcYINpP6Ioq+Hs0TMUMHVYptOo5blrxL3ifq/0FD2M/",
-	"vQBX5y62c0dvpHVnq2Z33FoVMW/aYzVdIJIOM8nXHAVWv/7O8P3EkuuzPHA0uTbxhkDyPlOAk1vL3uC6",
-	"+nyzSbPqbFxDT0LzrpoMmtfheCDjnhR0IzPOfr4NH04PQtmByOQRoVg1Eq+tjorsfbrPdfb+ILhXvHoM",
-	"lg9ajqQqQ5RGYX/ngXDgLE9a5+99sF+akzvZo9plKTsYo/vlb68jYN2fd1w9TaEBRY6yAHHKGXkgpRcz",
-	"NAiYWuxRgYjpAlsKCh2CmfdlnUsmPqxpbt7Wc1jzfPoFzHNlRAbXgrd240UxRYeHEkrOkJzOLCy0ueRj",
-	"I8fo4gvgu5qKd/b4aqHibhMLSnPFSVtA31GXAwloLwjTi3LsO552bgu8/U6SL+lBqCRnY6TIlzR9HUZ9",
-	"dZ3UozDsG8jOpXndbvulWsIc5xdoijqvZemU+3CutULr/L1pYU/86qqo3378POOl7sOue/Gsnsq+tGxF",
-	"6fdVDaUtjrwb1yuFvOar4qLHx+s0C4I/rM+sTfplfOUXSXwKLR9c8//7udWwRP5Isudd7tr9Q0LZBY1A",
-	"B2r8CwOGHbL6I6/iILLa29phdTfqbj7RL+5RiQTxeF873SL6T+geA8WH96/UtzTV9CLnrTWD30DwRc50",
-	"zFPEkH3wJegw11SbeoFugai8CechSYNeAJeh8/eqEB2EQcLqxZWQKaHPsEQ6KDo5KYZk/RJpqhfB4qF6",
-	"zf+DM/zwvqO+nQcusdsqZl9BitV0BAO+1u120d9ZmmwJ/vxNdl+VldkpUuR9PdJIkd6wB8ZainJ9NhRz",
-	"aanuZjyht3i+7cPa2+98AH2BgPPMLV8wGLOkawHn/p2wVKupf4equo/wSf1uwNponRUz/yru7f7q7U99",
-	"Ow8cu9Ym/bpxnqARGlzz/4cITvk6hlVI2qNciUf0lRd8/wIlULX7HQikVBp4CY0QNnBtZlcY+/Ayvr3x",
-	"6j79P33M+9WxZ3j/luMxBcgvW26pfY/KYqZTLm4JKDmptX8P4GB67YPNr0FwDu/oGrc/P2ygvVVc/+D4",
-	"zMALMF8bfbvg/LWC8i4LqO56aEfoq4sr/oBh+mpzjzRWf+1gqtFW1xOopLyzkgxfH2qXW2wN6TvC7vf1",
-	"v2LzB4m963x92AB8feY/L4LcsFCD69UfSzpE+E6nHamwruHH6XLWLpiZGtez0DG164rSv5BKbG+89mep",
-	"/vTx+lfMqOEDmZxHFL53xM5fFxMP77Laf3HkYUPp3eTn0WBGzYro2iU0Hz4Shyyaq1J6+NIkvmDFjgZU",
-	"OtT3HsD6K1H6sZ4Pro7pjp7/HwA=",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,
