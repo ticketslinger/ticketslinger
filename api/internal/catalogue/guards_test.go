@@ -435,6 +435,10 @@ func TestPromoAndQuestionGuards(t *testing.T) {
 				return err
 			},
 		}
+		edits["applies_to_all"] = func(ctx context.Context, tx pgx.Tx) error {
+			_, err := catalogue.UpdatePromo(ctx, tx, f.org, f.event, p.ID, f.actor, catalogue.PromoPatch{AppliesToAll: ptr(false), AppliesTo: &[]uuid.UUID{f.vip}})
+			return err
+		}
 		for name, edit := range edits {
 			if code, _ := conflictOf(f.inScope(t, edit)); code != "has_sales" {
 				t.Errorf("%s %s: got %q, want has_sales", p.Code, name, code)
@@ -446,6 +450,30 @@ func TestPromoAndQuestionGuards(t *testing.T) {
 			return err
 		}); err != nil {
 			t.Errorf("%s max uses: %v", p.Code, err)
+		}
+	}
+	// Which tickets a used code discounts can't change either.
+	var listed catalogue.PromoCode
+	if err := f.inScope(t, func(ctx context.Context, tx pgx.Tx) (err error) {
+		listed, err = catalogue.CreatePromo(ctx, tx, f.org, f.event, f.actor, catalogue.PromoInput{Code: "LISTED", Kind: "percent", Value: 1000,
+			AppliesToAll: ptr(false), AppliesTo: []uuid.UUID{f.general}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.owner.Exec(ctx, `update promo_codes set used_count = 1 where id = $1`, listed.ID); err != nil {
+		t.Fatal(err)
+	}
+	for field, patch := range map[string]catalogue.PromoPatch{
+		"applies_to":     {AppliesTo: &[]uuid.UUID{f.vip}},
+		"applies_to_all": {AppliesToAll: ptr(true), AppliesTo: &[]uuid.UUID{}},
+	} {
+		err := f.inScope(t, func(ctx context.Context, tx pgx.Tx) error {
+			_, err := catalogue.UpdatePromo(ctx, tx, f.org, f.event, listed.ID, f.actor, patch)
+			return err
+		})
+		if code, got := conflictOf(err); code != "has_sales" || got != field {
+			t.Errorf("used code, change %s: %v (field %q), want has_sales on %s", field, err, got, field)
 		}
 	}
 	err := f.inScope(t, func(ctx context.Context, tx pgx.Tx) error {
