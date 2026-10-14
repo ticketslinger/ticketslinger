@@ -183,11 +183,64 @@ paths:
         "204": { description: Revoked }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events:
+    get:
+      operationId: listEvents
+      description: Any member, or any API key. Soonest first.
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Event" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createEvent
+      description: Owners and admins, or a write API key. The event starts as a draft.
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateEvent" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Event" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}:
+    get:
+      operationId: getEvent
+      description: Any member, or any API key.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Event" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateEvent
+      description: "Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed)."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateEvent" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Event" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteEvent
+      description: Owners and admins, or a write API key. Drafts only; a live event answers 409 event_not_draft.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      responses:
+        "204": { description: Deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     session: { type: http, scheme: bearer, description: "A session token, or an organizer API key (tsk_...). A key acts only within its own organizer, and gets 403 session_required on anything that needs a person: your account, your organizer list, the audit log and key management. A read key gets 403 scope_read_only on writes." }
   parameters:
     OrganizerPath: { name: organizer, in: path, required: true, schema: { type: string } }
+    EventPath: { name: event, in: path, required: true, schema: { type: string, format: uuid } }
   responses:
     Error: { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   schemas:
@@ -291,3 +344,50 @@ components:
       properties:
         api_key: { $ref: "#/components/schemas/ApiKey" }
         token: { type: string, description: "The key itself. Copy it now: we only keep a hash, so it can't be shown again." }
+    EventFields:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 160 }
+        description: { type: string, maxLength: 20000 }
+        venue_name: { type: string, maxLength: 160 }
+        venue_address: { type: string, maxLength: 500 }
+        timezone: { type: string, description: "An IANA time zone name, like Europe/London." }
+        starts_at: { type: string, format: date-time }
+        ends_at: { type: string, format: date-time, description: Must be after starts_at. }
+        fee_mode: { type: string, enum: [absorb, pass], description: "pass (the default) adds our fee to the buyer's total; absorb takes it out of your price." }
+        tax_rate_bp: { type: integer, minimum: 0, maximum: 10000, description: "Tax in basis points: 825 is 8.25%." }
+        prices_include_tax: { type: boolean }
+    CreateEvent:
+      allOf:
+        - { $ref: "#/components/schemas/EventFields" }
+        - type: object
+          required: [slug, name, timezone, starts_at, ends_at]
+          properties:
+            slug: { type: string, pattern: "^[a-z0-9](-?[a-z0-9])*$", minLength: 3, maxLength: 60, description: Part of the event's web address. It can change while the event is a draft. }
+    UpdateEvent:
+      allOf:
+        - { $ref: "#/components/schemas/EventFields" }
+        - type: object
+          properties:
+            slug: { type: string, pattern: "^[a-z0-9](-?[a-z0-9])*$", minLength: 3, maxLength: 60, description: "Only while the event is a draft; otherwise 409 slug_locked." }
+            status: { type: string, enum: [draft, live, ended, cancelled] }
+    Event:
+      type: object
+      required: [id, slug, name, description, venue_name, venue_address, timezone, starts_at, ends_at, status, fee_mode, currency, tax_rate_bp, prices_include_tax, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+        description: { type: string }
+        venue_name: { type: string }
+        venue_address: { type: string }
+        timezone: { type: string }
+        starts_at: { type: string, format: date-time }
+        ends_at: { type: string, format: date-time }
+        status: { type: string, enum: [draft, live, ended, cancelled] }
+        fee_mode: { type: string, enum: [absorb, pass] }
+        currency: { type: string, enum: [USD] }
+        tax_rate_bp: { type: integer }
+        prices_include_tax: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }

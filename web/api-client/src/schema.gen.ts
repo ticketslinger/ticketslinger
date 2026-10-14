@@ -300,6 +300,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Any member, or any API key. Soonest first. */
+        get: operations["listEvents"];
+        put?: never;
+        /** @description Owners and admins, or a write API key. The event starts as a draft. */
+        post: operations["createEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Any member, or any API key. */
+        get: operations["getEvent"];
+        put?: never;
+        post?: never;
+        /** @description Owners and admins, or a write API key. Drafts only; a live event answers 409 event_not_draft. */
+        delete: operations["deleteEvent"];
+        options?: never;
+        head?: never;
+        /** @description Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed). */
+        patch: operations["updateEvent"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -425,6 +462,65 @@ export interface components {
             /** @description The key itself. Copy it now: we only keep a hash, so it can't be shown again. */
             token: string;
         };
+        EventFields: {
+            name?: string;
+            description?: string;
+            venue_name?: string;
+            venue_address?: string;
+            /** @description An IANA time zone name, like Europe/London. */
+            timezone?: string;
+            /** Format: date-time */
+            starts_at?: string;
+            /**
+             * Format: date-time
+             * @description Must be after starts_at.
+             */
+            ends_at?: string;
+            /**
+             * @description pass (the default) adds our fee to the buyer's total; absorb takes it out of your price.
+             * @enum {string}
+             */
+            fee_mode?: "absorb" | "pass";
+            /** @description Tax in basis points: 825 is 8.25%. */
+            tax_rate_bp?: number;
+            prices_include_tax?: boolean;
+        };
+        CreateEvent: components["schemas"]["EventFields"] & {
+            /** @description Part of the event's web address. It can change while the event is a draft. */
+            slug: string;
+        };
+        UpdateEvent: components["schemas"]["EventFields"] & {
+            /** @description Only while the event is a draft; otherwise 409 slug_locked. */
+            slug?: string;
+            /** @enum {string} */
+            status?: "draft" | "live" | "ended" | "cancelled";
+        };
+        Event: {
+            /** Format: uuid */
+            id: string;
+            slug: string;
+            name: string;
+            description: string;
+            venue_name: string;
+            venue_address: string;
+            timezone: string;
+            /** Format: date-time */
+            starts_at: string;
+            /** Format: date-time */
+            ends_at: string;
+            /** @enum {string} */
+            status: "draft" | "live" | "ended" | "cancelled";
+            /** @enum {string} */
+            fee_mode: "absorb" | "pass";
+            /** @enum {string} */
+            currency: "USD";
+            tax_rate_bp: number;
+            prices_include_tax: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
     };
     responses: {
         /** @description Error */
@@ -439,6 +535,7 @@ export interface components {
     };
     parameters: {
         OrganizerPath: string;
+        EventPath: string;
     };
     requestBodies: never;
     headers: never;
@@ -949,6 +1046,137 @@ export interface operations {
             };
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    listEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Event"][];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    createEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateEvent"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Event"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    getEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Event"];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    updateEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateEvent"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Event"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
 }

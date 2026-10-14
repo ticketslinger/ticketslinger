@@ -13,7 +13,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
 )
 
-// No write operation is open to keys yet, so drive inOrganizer directly: a
+// Drive inOrganizer directly, with no route in the way: a
 // read key may read but not write; a write key may do both.
 func TestKeyScopeGatesWrites(t *testing.T) {
 	pool := testdb.New(t)
