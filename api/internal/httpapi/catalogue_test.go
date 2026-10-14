@@ -283,7 +283,7 @@ func TestPromoCodeOverHTTP(t *testing.T) {
 	}
 	p := h.must(h.do(owner, "POST", base+"/promo-codes", `{"code":" early ","kind":"percent","value":1000,"max_uses":3,"unlocks":["`+secret+`"],"used_count":9}`), 201)
 	id := p["id"].(string)
-	if p["code"] != "EARLY" || p["used_count"] != float64(0) || p["max_uses"] != float64(3) || p["valid_from"] != nil {
+	if p["code"] != "EARLY" || p["used_count"] != float64(0) || p["max_uses"] != float64(3) || p["valid_from"] != nil || p["applies_to_all"] != true {
 		t.Fatalf("created: %v", p)
 	}
 	if res := h.do(owner, "POST", base+"/promo-codes", `{"code":"early","kind":"amount","value":500}`); res.StatusCode != 409 || h.errorCode(res) != "code_taken" {
@@ -295,6 +295,9 @@ func TestPromoCodeOverHTTP(t *testing.T) {
 	}
 	if res := h.do(owner, "PATCH", base+"/ticket-types/"+secret, `{"hidden":false}`); res.StatusCode != 409 || h.errorCode(res) != "unlocked_by_promo" {
 		t.Fatalf("show unlocked: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	if res := h.do(owner, "PATCH", base+"/promo-codes/"+id, `{"kind":"amount"}`); res.StatusCode != 422 || h.errorCode(res) != "value_required_with_kind" {
+		t.Fatalf("kind alone: %d %q", res.StatusCode, h.errorCode(res))
 	}
 	h.must(h.do(owner, "GET", base+"/promo-codes/"+id, ""), 200)
 	h.must(h.do(owner, "DELETE", base+"/promo-codes/"+id, ""), 204)

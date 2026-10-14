@@ -45,6 +45,10 @@ func (e *qenv) patchPromo(id uuid.UUID, p catalogue.PromoPatch) (out catalogue.P
 	return
 }
 
+func yes() *bool { t := true; return &t }
+
+func no() *bool { f := false; return &f }
+
 func pc(code, kind string, value int64) catalogue.PromoInput {
 	return catalogue.PromoInput{Code: code, Kind: kind, Value: value}
 }
@@ -73,7 +77,7 @@ func TestPromoRejectsForeignTicketTypes(t *testing.T) {
 	}
 	for _, id := range []uuid.UUID{e.foreign.ID, other.ID} {
 		for _, c := range []catalogue.PromoInput{
-			{Code: "A1B", Kind: "percent", Value: 100, AppliesTo: []uuid.UUID{e.general.ID, id}},
+			{Code: "A1B", Kind: "percent", Value: 100, AppliesToAll: no(), AppliesTo: []uuid.UUID{e.general.ID, id}},
 			{Code: "A1B", Kind: "percent", Value: 100, Unlocks: []uuid.UUID{id}},
 		} {
 			if _, err := e.promo(c); !invalidCode(err, "unknown_ticket_type") {
@@ -179,7 +183,7 @@ func TestPromoUnlocksOnlyHiddenAndPatchSemantics(t *testing.T) {
 	max := 5
 	from := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	p, err := e.promo(catalogue.PromoInput{Code: "VIP", Kind: "amount", Value: 500, MaxUses: &max, ValidFrom: &from,
-		AppliesTo: []uuid.UUID{e.vip.ID, e.vip.ID}, Unlocks: []uuid.UUID{secret.ID, secret.ID}})
+		AppliesToAll: no(), AppliesTo: []uuid.UUID{e.vip.ID, e.vip.ID}, Unlocks: []uuid.UUID{secret.ID, secret.ID}})
 	if err != nil || len(p.AppliesTo) != 1 || len(p.Unlocks) != 1 || p.MaxUses == nil || *p.MaxUses != 5 {
 		t.Fatalf("create: %v %+v", err, p)
 	}
@@ -200,7 +204,7 @@ func TestPromoUnlocksOnlyHiddenAndPatchSemantics(t *testing.T) {
 	}
 	// Explicit null clears; empty list clears a set.
 	up, err = e.patchPromo(p.ID, catalogue.PromoPatch{MaxUses: nullable.NewNullNullable[int](), ValidFrom: nullable.NewNullNullable[time.Time](),
-		AppliesTo: &[]uuid.UUID{}, Unlocks: &[]uuid.UUID{}})
+		AppliesToAll: yes(), AppliesTo: &[]uuid.UUID{}, Unlocks: &[]uuid.UUID{}})
 	if err != nil || up.MaxUses != nil || up.ValidFrom != nil || len(up.AppliesTo) != 0 || len(up.Unlocks) != 0 {
 		t.Fatalf("clear: %v %+v", err, up)
 	}
@@ -247,7 +251,7 @@ func TestDeletingTicketTypeUnlinksPromos(t *testing.T) {
 	ctx := context.Background()
 	secret := e.hidden(t, "Secret")
 	p, err := e.promo(catalogue.PromoInput{Code: "BOTH", Kind: "percent", Value: 1000,
-		AppliesTo: []uuid.UUID{e.general.ID, secret.ID}, Unlocks: []uuid.UUID{secret.ID}})
+		AppliesToAll: no(), AppliesTo: []uuid.UUID{e.general.ID, secret.ID}, Unlocks: []uuid.UUID{secret.ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,8 +267,80 @@ func TestDeletingTicketTypeUnlinksPromos(t *testing.T) {
 	if len(got.AppliesTo) != 1 || got.AppliesTo[0] != e.general.ID || len(got.Unlocks) != 0 {
 		t.Fatalf("links after delete: %+v", got)
 	}
-	// Deleting the event takes the codes with it.
+	if got.AppliesToAll {
+		t.Fatalf("applies_to_all flipped on: %+v", got)
+	}
+	// A VIP-only code whose only ticket type is deleted applies to nothing,
+	// never to everything.
+	vipOnly, err := e.promo(catalogue.PromoInput{Code: "VIPONLY", Kind: "percent", Value: 1000, AppliesToAll: no(), AppliesTo: []uuid.UUID{e.vip.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.run(e.a, func(tx pgx.Tx) error {
+		return catalogue.DeleteTicketType(ctx, tx, e.a, e.ev.ID, e.vip.ID, e.actor)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.run(e.a, func(tx pgx.Tx) (err error) { got, err = catalogue.GetPromo(ctx, tx, e.ev.ID, vipOnly.ID); return }); err != nil {
+		t.Fatal(err)
+	}
+	if got.AppliesToAll || len(got.AppliesTo) != 0 {
+		t.Fatalf("emptied code should apply to nothing: %+v", got)
+	}
+	// Other fields still edit; widening to all tickets must be asked for.
+	v := int64(2000)
+	if got, err = e.patchPromo(vipOnly.ID, catalogue.PromoPatch{Value: &v}); err != nil || got.AppliesToAll || got.Value != 2000 {
+		t.Fatalf("edit emptied code: %v %+v", err, got)
+	}
+	// Deleting the event takes the codes and both link tables' rows with it.
 	if err := e.run(e.a, func(tx pgx.Tx) error { return catalogue.DeleteEvent(ctx, tx, e.a, e.ev.ID, e.actor) }); err != nil {
 		t.Fatal(err)
+	}
+	var n int
+	if err := testdb.Owner(t, e.pool).QueryRow(ctx, `select (select count(*) from promo_codes where event_id = $1)
+		+ (select count(*) from promo_applies_to where event_id = $1) + (select count(*) from promo_unlocks where event_id = $1)`, e.ev.ID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("rows left after event delete: %d %v", n, err)
+	}
+}
+
+func TestPromoScopeAndKindRules(t *testing.T) {
+	e := newQEnv(t)
+	for name, in := range map[string]catalogue.PromoInput{
+		"applies_to_conflict": {Code: "ALL", Kind: "percent", Value: 100, AppliesTo: []uuid.UUID{e.vip.ID}},
+		"applies_to_required": {Code: "NONE", Kind: "percent", Value: 100, AppliesToAll: no()},
+	} {
+		if _, err := e.promo(in); !invalidCode(err, name) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	p, err := e.promo(pc("SCOPE", "percent", 1000))
+	if err != nil || !p.AppliesToAll {
+		t.Fatalf("default scope: %v %+v", err, p)
+	}
+	if _, err := e.patchPromo(p.ID, catalogue.PromoPatch{AppliesTo: &[]uuid.UUID{e.vip.ID}}); !invalidCode(err, "applies_to_conflict") {
+		t.Fatalf("list on an all-tickets code: %v", err)
+	}
+	if _, err := e.patchPromo(p.ID, catalogue.PromoPatch{AppliesToAll: no()}); !invalidCode(err, "applies_to_required") {
+		t.Fatalf("limit with no list: %v", err)
+	}
+	up, err := e.patchPromo(p.ID, catalogue.PromoPatch{AppliesToAll: no(), AppliesTo: &[]uuid.UUID{e.vip.ID}})
+	if err != nil || up.AppliesToAll || len(up.AppliesTo) != 1 {
+		t.Fatalf("limit: %v %+v", err, up)
+	}
+	// Switching kind needs a new value.
+	amount := "amount"
+	if _, err := e.patchPromo(p.ID, catalogue.PromoPatch{Kind: &amount}); !invalidCode(err, "value_required_with_kind") {
+		t.Fatalf("kind alone: %v", err)
+	}
+	v := int64(500)
+	if up, err = e.patchPromo(p.ID, catalogue.PromoPatch{Kind: &amount, Value: &v}); err != nil || up.Kind != "amount" || up.Value != 500 {
+		t.Fatalf("kind and value: %v %+v", err, up)
+	}
+	same := "amount"
+	if _, err := e.patchPromo(p.ID, catalogue.PromoPatch{Kind: &same}); err != nil {
+		t.Fatalf("same kind: %v", err)
+	}
+	if catalogue.NormalizePromoCode(" ab-1 ") != "AB-1" {
+		t.Fatal("normalise")
 	}
 }

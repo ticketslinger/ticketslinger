@@ -9,6 +9,9 @@ CREATE TABLE promo_codes (
   value        bigint NOT NULL CHECK ((kind = 'percent' AND value BETWEEN 1 AND 10000) OR (kind = 'amount' AND value BETWEEN 1 AND 10000000)),
   max_uses     int CHECK (max_uses > 0),
   used_count   int NOT NULL DEFAULT 0 CHECK (used_count >= 0),
+  -- true: every ticket type. false: only those in promo_applies_to, which can
+  -- run empty if they are deleted; then the code applies to nothing.
+  applies_to_all boolean NOT NULL DEFAULT true,
   valid_from   timestamptz,
   valid_until  timestamptz,
   created_at   timestamptz NOT NULL DEFAULT now(),
@@ -19,7 +22,7 @@ CREATE TABLE promo_codes (
   UNIQUE (id, organizer_id),
   UNIQUE (id, event_id)
 );
--- Which ticket types a code discounts (no rows: all of them).
+-- Which ticket types a code discounts when applies_to_all is false.
 CREATE TABLE promo_applies_to (
   organizer_id   uuid NOT NULL,
   event_id       uuid NOT NULL,

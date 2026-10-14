@@ -389,7 +389,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
     patch:
       operationId: updatePromoCode
-      description: "Owners and admins, or a write API key. Send only what changes. applies_to and unlocks replace the whole set when sent. null clears max_uses, valid_from or valid_until; leaving one out keeps it. used_count can't be set."
+      description: "Owners and admins, or a write API key. Send only what changes. Changing kind needs value too (422 value_required_with_kind). applies_to and unlocks replace the whole set when sent. null clears max_uses, valid_from or valid_until; leaving one out keeps it. used_count can't be set."
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
@@ -601,7 +601,8 @@ components:
         max_uses: { type: [integer, "null"], minimum: 1, description: "null means unlimited." }
         valid_from: { type: [string, "null"], format: date-time }
         valid_until: { type: [string, "null"], format: date-time, description: Must be after valid_from. }
-        applies_to: { type: array, items: { type: string, format: uuid }, description: "Ticket types the discount covers; empty means all of them. On a patch the list replaces the current one." }
+        applies_to_all: { type: boolean, description: "true (the default) discounts every ticket type; then applies_to must be empty (422 applies_to_conflict). false limits it to applies_to, which must not be empty (422 applies_to_required). If every listed ticket type is later deleted, the code applies to nothing, never to everything." }
+        applies_to: { type: array, items: { type: string, format: uuid }, description: "Ticket types the discount covers when applies_to_all is false. On a patch the list replaces the current one." }
         unlocks: { type: array, items: { type: string, format: uuid }, description: "Hidden ticket types this code reveals. On a patch the list replaces the current one." }
     CreatePromoCode:
       allOf:
@@ -609,7 +610,7 @@ components:
         - { type: object, required: [code, kind, value], properties: { code: { type: string, x-go-type: "*string" }, kind: { type: string, enum: [percent, amount], x-go-type: "*string" }, value: { type: integer, format: int64, x-go-type: "*int64" } } }
     PromoCode:
       type: object
-      required: [id, event_id, code, kind, value, max_uses, used_count, valid_from, valid_until, applies_to, unlocks, created_at, updated_at]
+      required: [id, event_id, code, kind, value, max_uses, used_count, valid_from, valid_until, applies_to_all, applies_to, unlocks, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         event_id: { type: string, format: uuid }
@@ -620,6 +621,7 @@ components:
         used_count: { type: integer, description: Read-only. Checkout counts it. }
         valid_from: { type: [string, "null"], format: date-time }
         valid_until: { type: [string, "null"], format: date-time }
+        applies_to_all: { type: boolean }
         applies_to: { type: array, items: { type: string, format: uuid } }
         unlocks: { type: array, items: { type: string, format: uuid } }
         created_at: { type: string, format: date-time }

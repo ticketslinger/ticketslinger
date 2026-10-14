@@ -346,7 +346,7 @@ func (s *server) DeleteQuota(ctx context.Context, req DeleteQuotaRequestObject) 
 
 func toPromo(p catalogue.PromoCode) PromoCode {
 	return PromoCode{Id: p.ID, EventId: p.EventID, Code: p.Code, Kind: PromoCodeKind(p.Kind), Value: p.Value, MaxUses: nullOf(p.MaxUses),
-		UsedCount: p.UsedCount, ValidFrom: nullOf(p.ValidFrom), ValidUntil: nullOf(p.ValidUntil), AppliesTo: p.AppliesTo, Unlocks: p.Unlocks,
+		UsedCount: p.UsedCount, AppliesToAll: p.AppliesToAll, ValidFrom: nullOf(p.ValidFrom), ValidUntil: nullOf(p.ValidUntil), AppliesTo: p.AppliesTo, Unlocks: p.Unlocks,
 		CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
 }
 
@@ -367,7 +367,7 @@ func (s *server) ListPromoCodes(ctx context.Context, req ListPromoCodesRequestOb
 
 func (s *server) CreatePromoCode(ctx context.Context, req CreatePromoCodeRequestObject) (CreatePromoCodeResponseObject, error) {
 	b := req.Body
-	in := catalogue.PromoInput{MaxUses: orNil(b.MaxUses), ValidFrom: orNil(b.ValidFrom), ValidUntil: orNil(b.ValidUntil)}
+	in := catalogue.PromoInput{AppliesToAll: b.AppliesToAll, MaxUses: orNil(b.MaxUses), ValidFrom: orNil(b.ValidFrom), ValidUntil: orNil(b.ValidUntil)}
 	if b.AppliesTo != nil {
 		in.AppliesTo = *b.AppliesTo
 	}
@@ -411,7 +411,7 @@ func (s *server) GetPromoCode(ctx context.Context, req GetPromoCodeRequestObject
 
 func (s *server) UpdatePromoCode(ctx context.Context, req UpdatePromoCodeRequestObject) (UpdatePromoCodeResponseObject, error) {
 	b := req.Body
-	p := catalogue.PromoPatch{Code: b.Code, Value: b.Value, MaxUses: b.MaxUses, ValidFrom: b.ValidFrom, ValidUntil: b.ValidUntil,
+	p := catalogue.PromoPatch{AppliesToAll: b.AppliesToAll, Code: b.Code, Value: b.Value, MaxUses: b.MaxUses, ValidFrom: b.ValidFrom, ValidUntil: b.ValidUntil,
 		AppliesTo: b.AppliesTo, Unlocks: b.Unlocks}
 	if b.Kind != nil {
 		k := string(*b.Kind)

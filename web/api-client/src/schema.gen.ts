@@ -444,7 +444,7 @@ export interface paths {
         delete: operations["deletePromoCode"];
         options?: never;
         head?: never;
-        /** @description Owners and admins, or a write API key. Send only what changes. applies_to and unlocks replace the whole set when sent. null clears max_uses, valid_from or valid_until; leaving one out keeps it. used_count can't be set. */
+        /** @description Owners and admins, or a write API key. Send only what changes. Changing kind needs value too (422 value_required_with_kind). applies_to and unlocks replace the whole set when sent. null clears max_uses, valid_from or valid_until; leaving one out keeps it. used_count can't be set. */
         patch: operations["updatePromoCode"];
         trace?: never;
     };
@@ -674,7 +674,9 @@ export interface components {
              * @description Must be after valid_from.
              */
             valid_until?: string | null;
-            /** @description Ticket types the discount covers; empty means all of them. On a patch the list replaces the current one. */
+            /** @description true (the default) discounts every ticket type; then applies_to must be empty (422 applies_to_conflict). false limits it to applies_to, which must not be empty (422 applies_to_required). If every listed ticket type is later deleted, the code applies to nothing, never to everything. */
+            applies_to_all?: boolean;
+            /** @description Ticket types the discount covers when applies_to_all is false. On a patch the list replaces the current one. */
             applies_to?: string[];
             /** @description Hidden ticket types this code reveals. On a patch the list replaces the current one. */
             unlocks?: string[];
@@ -703,6 +705,7 @@ export interface components {
             valid_from: string | null;
             /** Format: date-time */
             valid_until: string | null;
+            applies_to_all: boolean;
             applies_to: string[];
             unlocks: string[];
             /** Format: date-time */

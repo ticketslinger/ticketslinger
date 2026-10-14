@@ -16,26 +16,29 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 )
 
-// PromoCode is a discount a buyer types in. AppliesTo empty means every
-// ticket type; Unlocks lists the hidden ticket types the code reveals.
+// PromoCode is a discount a buyer types in. AppliesToAll means every ticket
+// type; otherwise only those in AppliesTo (empty then means none, e.g. after
+// they were deleted, never everything). Unlocks lists the hidden ticket types the code reveals.
 // UsedCount is read-only here: checkout (P3) counts it.
 type PromoCode struct {
-	ID         uuid.UUID   `json:"id"`
-	EventID    uuid.UUID   `json:"event_id"`
-	Code       string      `json:"code"`
-	Kind       string      `json:"kind"`  // percent | amount
-	Value      int64       `json:"value"` // basis points for percent, cents for amount
-	MaxUses    *int        `json:"max_uses"`
-	UsedCount  int         `json:"used_count"`
-	ValidFrom  *time.Time  `json:"valid_from"`
-	ValidUntil *time.Time  `json:"valid_until"`
-	AppliesTo  []uuid.UUID `json:"applies_to"`
-	Unlocks    []uuid.UUID `json:"unlocks"`
-	CreatedAt  time.Time   `json:"created_at"`
-	UpdatedAt  time.Time   `json:"updated_at"`
+	ID           uuid.UUID   `json:"id"`
+	EventID      uuid.UUID   `json:"event_id"`
+	Code         string      `json:"code"`
+	Kind         string      `json:"kind"`  // percent | amount
+	Value        int64       `json:"value"` // basis points for percent, cents for amount
+	MaxUses      *int        `json:"max_uses"`
+	UsedCount    int         `json:"used_count"`
+	ValidFrom    *time.Time  `json:"valid_from"`
+	ValidUntil   *time.Time  `json:"valid_until"`
+	AppliesToAll bool        `json:"applies_to_all"`
+	AppliesTo    []uuid.UUID `json:"applies_to"`
+	Unlocks      []uuid.UUID `json:"unlocks"`
+	CreatedAt    time.Time   `json:"created_at"`
+	UpdatedAt    time.Time   `json:"updated_at"`
 }
 
 type PromoInput struct {
+	AppliesToAll          *bool // nil means true
 	Code, Kind            string
 	Value                 int64
 	MaxUses               *int
@@ -48,6 +51,7 @@ type PromoInput struct {
 // absent keeps and an explicit null clears.
 type PromoPatch struct {
 	Code, Kind         *string
+	AppliesToAll       *bool
 	Value              *int64
 	MaxUses            nullable.Nullable[int]
 	ValidFrom          nullable.Nullable[time.Time]
@@ -55,14 +59,14 @@ type PromoPatch struct {
 	AppliesTo, Unlocks *[]uuid.UUID
 }
 
-const promoCols = `id, event_id, code, kind, value, max_uses, used_count, valid_from, valid_until,
+const promoCols = `id, event_id, code, kind, value, max_uses, used_count, valid_from, valid_until, applies_to_all,
 	coalesce((select array_agg(ticket_type_id order by ticket_type_id) from promo_applies_to where promo_code_id = promo_codes.id), '{}'),
 	coalesce((select array_agg(ticket_type_id order by ticket_type_id) from promo_unlocks where promo_code_id = promo_codes.id), '{}'),
 	created_at, updated_at`
 
 func scanPromo(row pgx.Row) (PromoCode, error) {
 	var p PromoCode
-	err := row.Scan(&p.ID, &p.EventID, &p.Code, &p.Kind, &p.Value, &p.MaxUses, &p.UsedCount, &p.ValidFrom, &p.ValidUntil,
+	err := row.Scan(&p.ID, &p.EventID, &p.Code, &p.Kind, &p.Value, &p.MaxUses, &p.UsedCount, &p.ValidFrom, &p.ValidUntil, &p.AppliesToAll,
 		&p.AppliesTo, &p.Unlocks, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PromoCode{}, ErrNotFound
@@ -92,7 +96,21 @@ func validatePromo(p *PromoCode) error {
 	return nil
 }
 
-func normCode(s string) string { return strings.ToUpper(strings.TrimSpace(s)) }
+// NormalizePromoCode is the one way to turn what a person typed into a stored
+// code. Checkout must use it for every lookup, or SPRING won't find spring.
+func NormalizePromoCode(s string) string { return strings.ToUpper(strings.TrimSpace(s)) }
+
+// validateAppliesTo: all-tickets and a list are mutually exclusive, and a list
+// can't be empty.
+func validateAppliesTo(all bool, applies []uuid.UUID) error {
+	switch {
+	case all && len(applies) > 0:
+		return invalid("applies_to_conflict", "A code for all tickets can't also list ticket types. Send applies_to_all: false to limit it, or leave applies_to empty.")
+	case !all && len(applies) == 0:
+		return invalid("applies_to_required", "Pick at least one ticket type, or set applies_to_all to true.")
+	}
+	return nil
+}
 
 // promoDBError is dbError for promo codes: 23514 a failed CHECK, 23505 the
 // per-event code.
@@ -147,8 +165,12 @@ func setPromoLinks(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, app
 // CreatePromo adds a code and records promo_code.created by actor. tx must be
 // scoped to org.
 func CreatePromo(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor audit.Actor, in PromoInput) (PromoCode, error) {
-	p := PromoCode{Code: normCode(in.Code), Kind: in.Kind, Value: in.Value, MaxUses: in.MaxUses, ValidFrom: in.ValidFrom, ValidUntil: in.ValidUntil}
+	p := PromoCode{Code: NormalizePromoCode(in.Code), Kind: in.Kind, Value: in.Value, MaxUses: in.MaxUses, ValidFrom: in.ValidFrom, ValidUntil: in.ValidUntil}
+	p.AppliesToAll = in.AppliesToAll == nil || *in.AppliesToAll
 	if err := validatePromo(&p); err != nil {
+		return PromoCode{}, err
+	}
+	if err := validateAppliesTo(p.AppliesToAll, dedupe(in.AppliesTo)); err != nil {
 		return PromoCode{}, err
 	}
 	if _, err := lockEvent(ctx, tx, event); err != nil {
@@ -159,9 +181,9 @@ func CreatePromo(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor aud
 		return PromoCode{}, err
 	}
 	var id uuid.UUID
-	if err := tx.QueryRow(ctx, `insert into promo_codes(organizer_id, event_id, code, kind, value, max_uses, valid_from, valid_until)
-		values ($1, $2, $3, $4, $5, $6, $7, $8) returning id`,
-		org, event, p.Code, p.Kind, p.Value, p.MaxUses, p.ValidFrom, p.ValidUntil).Scan(&id); err != nil {
+	if err := tx.QueryRow(ctx, `insert into promo_codes(organizer_id, event_id, code, kind, value, max_uses, valid_from, valid_until, applies_to_all)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id`,
+		org, event, p.Code, p.Kind, p.Value, p.MaxUses, p.ValidFrom, p.ValidUntil, p.AppliesToAll).Scan(&id); err != nil {
 		return PromoCode{}, promoDBError(err)
 	}
 	if err := setPromoLinks(ctx, tx, org, event, id, applies, unlocks); err != nil {
@@ -209,13 +231,19 @@ func UpdatePromo(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 	}
 	p := before
 	if patch.Code != nil {
-		p.Code = normCode(*patch.Code)
+		p.Code = NormalizePromoCode(*patch.Code)
 	}
 	if patch.Kind != nil {
 		p.Kind = *patch.Kind
 	}
 	if patch.Value != nil {
 		p.Value = *patch.Value
+	}
+	if patch.Kind != nil && *patch.Kind != before.Kind && patch.Value == nil {
+		return PromoCode{}, invalid("value_required_with_kind", "Set the amount again when you switch between a percentage and a fixed amount.")
+	}
+	if patch.AppliesToAll != nil {
+		p.AppliesToAll = *patch.AppliesToAll
 	}
 	setNull(&p.MaxUses, patch.MaxUses)
 	setNull(&p.ValidFrom, patch.ValidFrom)
@@ -235,13 +263,20 @@ func UpdatePromo(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 			return PromoCode{}, err
 		}
 	}
-	if p.Code == before.Code && p.Kind == before.Kind && p.Value == before.Value && samePtr(p.MaxUses, before.MaxUses) &&
+	// Only when the patch touches the scope: a code emptied by a deleted
+	// ticket type can still have its other fields edited.
+	if patch.AppliesTo != nil || patch.AppliesToAll != nil {
+		if err := validateAppliesTo(p.AppliesToAll, p.AppliesTo); err != nil {
+			return PromoCode{}, err
+		}
+	}
+	if p.Code == before.Code && p.Kind == before.Kind && p.Value == before.Value && samePtr(p.MaxUses, before.MaxUses) && p.AppliesToAll == before.AppliesToAll &&
 		sameTime(p.ValidFrom, before.ValidFrom) && sameTime(p.ValidUntil, before.ValidUntil) &&
 		slices.Equal(p.AppliesTo, before.AppliesTo) && slices.Equal(p.Unlocks, before.Unlocks) {
 		return before, nil
 	}
 	if _, err := tx.Exec(ctx, `update promo_codes set code = $2, kind = $3, value = $4, max_uses = $5, valid_from = $6, valid_until = $7,
-		updated_at = clock_timestamp() where id = $1`, id, p.Code, p.Kind, p.Value, p.MaxUses, p.ValidFrom, p.ValidUntil); err != nil {
+		applies_to_all = $8, updated_at = clock_timestamp() where id = $1`, id, p.Code, p.Kind, p.Value, p.MaxUses, p.ValidFrom, p.ValidUntil, p.AppliesToAll); err != nil {
 		return PromoCode{}, promoDBError(err)
 	}
 	if err := setPromoLinks(ctx, tx, org, event, id, p.AppliesTo, p.Unlocks); err != nil {
