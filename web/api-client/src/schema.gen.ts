@@ -829,7 +829,7 @@ export interface components {
             scope: "order" | "ticket";
             applies_to_all: boolean;
             applies_to: string[];
-            /** @description 1 is first. Change it with the order endpoint. */
+            /** @description 1 is first. Change it with a PATCH, or all at once with the order endpoint. */
             position: number;
             /** Format: date-time */
             created_at: string;

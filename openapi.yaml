@@ -740,7 +740,7 @@ components:
         scope: { type: string, enum: [order, ticket] }
         applies_to_all: { type: boolean }
         applies_to: { type: array, items: { type: string, format: uuid } }
-        position: { type: integer, minimum: 1, description: "1 is first. Change it with the order endpoint." }
+        position: { type: integer, minimum: 1, description: "1 is first. Change it with a PATCH, or all at once with the order endpoint." }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     TicketTypeFields:

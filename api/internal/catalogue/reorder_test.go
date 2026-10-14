@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -49,18 +50,29 @@ func TestReorderTicketTypes(t *testing.T) {
 		t.Fatalf("create appends: position %d, want 3", third.Position)
 	}
 	want := []uuid.UUID{third.ID, e.general.ID, e.vip.ID}
+	var before time.Time
+	if err := testdb.Owner(t, e.pool).QueryRow(context.Background(), `select updated_at from ticket_types where id = $1`, e.general.ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
 	list, err := e.reorderTT(want)
 	if err != nil || len(list) != 3 || list[0].ID != third.ID || list[1].ID != e.general.ID || list[2].ID != e.vip.ID || list[0].Position != 1 || list[2].Position != 3 {
 		t.Fatalf("reorder: %v %+v", err, list)
 	}
-	if n := e.auditCount(t, "ticket_types.reordered"); n != 1 {
+	if n := e.auditCount(t, "ticket_type.reordered"); n != 1 {
 		t.Fatalf("audit entries: %d, want 1", n)
+	}
+	if list[1].ID != e.general.ID || !list[1].UpdatedAt.After(before) {
+		t.Fatalf("moved row updated_at not bumped: %v vs %v", list[1].UpdatedAt, before)
+	}
+	noop, err := e.reorderTT(want)
+	if err != nil || !noop[1].UpdatedAt.Equal(list[1].UpdatedAt) {
+		t.Fatalf("no-op touched updated_at: %v", err)
 	}
 	// Same order again writes nothing.
 	if _, err := e.reorderTT(want); err != nil {
 		t.Fatal(err)
 	}
-	if n := e.auditCount(t, "ticket_types.reordered"); n != 1 {
+	if n := e.auditCount(t, "ticket_type.reordered"); n != 1 {
 		t.Fatalf("no-op audited: %d entries", n)
 	}
 	// A new ticket type lands after the reordered ones.
@@ -106,7 +118,7 @@ func TestReorderQuestions(t *testing.T) {
 	if _, err := e.reorderQ(want); err != nil {
 		t.Fatal(err)
 	}
-	if n := e.auditCount(t, "questions.reordered"); n != 1 {
+	if n := e.auditCount(t, "question.reordered"); n != 1 {
 		t.Fatalf("audit entries: %d, want 1", n)
 	}
 	for name, ids := range map[string][]uuid.UUID{

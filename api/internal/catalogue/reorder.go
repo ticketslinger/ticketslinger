@@ -38,7 +38,7 @@ func reorder(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor audit.A
 	if slices.Equal(ids, current) {
 		return nil
 	}
-	if _, err := tx.Exec(ctx, `update `+table+` t set position = o.n from unnest($1::uuid[]) with ordinality as o(id, n) where t.id = o.id`, ids); err != nil {
+	if _, err := tx.Exec(ctx, `update `+table+` t set position = o.n, updated_at = clock_timestamp() from unnest($1::uuid[]) with ordinality as o(id, n) where t.id = o.id and t.position <> o.n`, ids); err != nil {
 		return err
 	}
 	return audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: action, EntityType: "event", EntityID: event,

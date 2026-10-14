@@ -9,6 +9,8 @@ import { bpToPercent, type Event, percentToBp } from "./EventForm";
 import { canEdit, type Org } from "./Organizer";
 import { moveOption } from "./optionList";
 
+const arrow = { "-1": "up", "1": "down" } as const;
+
 type TicketType = components["schemas"]["TicketType"];
 type Quota = components["schemas"]["Quota"];
 
@@ -514,7 +516,7 @@ export function Tickets({ org, event }: { org: Org; event: Event }) {
     move.run(async () => {
       const ids = tickets.map((x) => x.id);
       const edge = i + dir === 0 || i + dir === ids.length - 1;
-      focusAfter.current = `tt-${ids[i]}-${edge ? (dir === 1 ? "up" : "down") : dir === 1 ? "down" : "up"}`;
+      focusAfter.current = `tt-${ids[i]}-${arrow[edge ? (-dir as -1 | 1) : dir]}`;
       try {
         must(
           await api.PUT("/organizers/{organizer}/events/{event}/ticket-types/order", {

@@ -299,9 +299,9 @@ func DeleteTicketType(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, 
 
 // ReorderTicketTypes gives the event's ticket types positions 1..n in the
 // order of ids, which must be exactly the current set, and records
-// ticket_types.reordered. The same order again writes nothing.
+// ticket_type.reordered. The same order again writes nothing.
 func ReorderTicketTypes(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor audit.Actor, ids []uuid.UUID) ([]TicketType, error) {
-	if err := reorder(ctx, tx, org, event, actor, "ticket_types", "ticket_types.reordered", ids); err != nil {
+	if err := reorder(ctx, tx, org, event, actor, "ticket_types", "ticket_type.reordered", ids); err != nil {
 		return nil, err
 	}
 	return ListTicketTypes(ctx, tx, event)
