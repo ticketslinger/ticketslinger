@@ -5,13 +5,14 @@ import { ErrorText, Link, type Me, NotFound, useLoad } from "../ui";
 import { ROLE, SecondStepNotice } from "./Home";
 
 export type Org = components["schemas"]["Organizer"];
-export type Section = "events" | "api-keys" | "audit";
+export type Section = "events" | "payments" | "api-keys" | "audit";
 
 /** Owners and admins change things; check-in staff only look. */
 export const canEdit = (org: Org) => org.role === "owner" || org.role === "admin";
 
 const NAV: { section: Section; label: string; path: string; editorsOnly?: boolean }[] = [
   { section: "events", label: "Events", path: "" },
+  { section: "payments", label: "Payments", path: "/payments" },
   { section: "api-keys", label: "API keys", path: "/api-keys", editorsOnly: true },
   { section: "audit", label: "Audit log", path: "/audit", editorsOnly: true },
 ];

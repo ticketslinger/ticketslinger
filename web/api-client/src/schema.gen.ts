@@ -481,6 +481,23 @@ export interface paths {
         patch: operations["updateQuota"];
         trace?: never;
     };
+    "/organizers/{organizer}/events/{event}/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Any member, or any API key. The event's orders, newest first. Orders still waiting for payment aren't listed. email is the buyer's address. */
+        get: operations["listOrders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/events/{event}/promo-codes": {
         parameters: {
             query?: never;
@@ -910,6 +927,25 @@ export interface components {
             charges_enabled: boolean;
             /** @description Whether the organizer has finished Stripe's onboarding form. */
             details_submitted: boolean;
+        };
+        OrderSummary: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            email: string;
+            /** @enum {string} */
+            status: "paid" | "cancelled" | "refunded" | "partially_refunded";
+            ticket_count: number;
+            /** Format: int64 */
+            total_cents: number;
+            /** Format: int64 */
+            fee_cents: number;
+            /** @enum {string} */
+            fee_mode: "absorb" | "pass";
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            paid_at: string | null;
         };
         OnboardingLink: {
             /** @description Stripe's onboarding page. It works once and expires within minutes, so redirect to it straight away. */
@@ -2492,6 +2528,31 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+        };
+    };
+    listOrders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderSummary"][];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     listPromoCodes: {

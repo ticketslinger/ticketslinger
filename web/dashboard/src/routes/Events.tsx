@@ -3,6 +3,7 @@ import { api, must } from "../api";
 import { formatWhen } from "../time";
 import { ErrorText, focusOnMount, Link, navigate, useAction, useLoad } from "../ui";
 import { type Event, EventForm } from "./EventForm";
+import { Orders } from "./Orders";
 import { canEdit, type Org } from "./Organizer";
 import { Promos } from "./Promos";
 import { Questions } from "./Questions";
@@ -97,6 +98,7 @@ const TABS = [
   { path: "/tickets", label: "Tickets" },
   { path: "/promo-codes", label: "Promo codes" },
   { path: "/questions", label: "Questions" },
+  { path: "/orders", label: "Orders" },
 ];
 
 export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: string }) {
@@ -192,6 +194,7 @@ export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: s
           {tab === "/tickets" && <Tickets org={org} event={event} />}
           {tab === "/promo-codes" && <Promos org={org} event={event} />}
           {tab === "/questions" && <Questions org={org} event={event} />}
+          {tab === "/orders" && <Orders org={org} event={event} />}
 
           {tab === "" && canEdit(org) && event.status === "draft" && (
             <section className="danger">

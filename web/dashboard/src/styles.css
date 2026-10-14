@@ -342,7 +342,8 @@ main.wide {
   white-space: nowrap;
 }
 
-.pill.live {
+.pill.live,
+.pill.paid {
   color: var(--success);
   border-color: var(--success);
 }
