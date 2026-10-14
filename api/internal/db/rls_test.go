@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/db"
 	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
 )
@@ -233,5 +234,181 @@ func TestCreateOrganizerResistsTempTableShadowing(t *testing.T) {
 	})
 	if err != nil || n != 0 {
 		t.Fatalf("attacker memberships on victim=%d err=%v, want 0", n, err)
+	}
+}
+
+// seedKey inserts an API key for org as the schema owner and returns its id.
+func seedKey(t *testing.T, pool *pgxpool.Pool, org uuid.UUID, scope string, revoked bool) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := testdb.Owner(t, pool).QueryRow(context.Background(),
+		`insert into api_keys(organizer_id, name, key_hash, prefix, scope, revoked_at)
+		 values ($1, 'k', sha256(gen_random_uuid()::text::bytea), 'abcdefgh', $2, case when $3 then now() end) returning id`,
+		org, scope, revoked).Scan(&id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// countTenant counts org's rows in every tenant table from inside tx.
+func countTenant(ctx context.Context, t *testing.T, tx pgx.Tx, org uuid.UUID) map[string]int {
+	t.Helper()
+	out := map[string]int{}
+	for table, q := range map[string]string{
+		"organizers":  `select count(*) from organizers where id = $1`,
+		"memberships": `select count(*) from memberships where organizer_id = $1`,
+		"audit_log":   `select count(*) from audit_log where organizer_id = $1`,
+		"api_keys":    `select count(*) from api_keys where organizer_id = $1`,
+	} {
+		var n int
+		if err := tx.QueryRow(ctx, q, org).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		out[table] = n
+	}
+	return out
+}
+
+func TestRLSKeySeesItsOwnOrganizer(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	_, oa := seedOrg(t, pool, "a@example.com", "org-a")
+	_, ob := seedOrg(t, pool, "b@example.com", "org-b")
+	seedKey(t, pool, ob, "write", false)
+	key := seedKey(t, pool, oa, "read", false)
+	if _, err := testdb.Owner(t, pool).Exec(ctx, `insert into audit_log(organizer_id, action, entity_type, entity_id)
+		select id, 'test', 'organizer', id from organizers`); err != nil {
+		t.Fatal(err)
+	}
+	p := db.Principal{KeyID: key, KeyOrg: oa, KeyScope: "read"}
+	err := db.WithPrincipal(ctx, pool, p, oa, func(tx pgx.Tx, role string) error {
+		if role != "key:read" {
+			t.Errorf("role=%q, want key:read", role)
+		}
+		got := countTenant(ctx, t, tx, oa)
+		for table, n := range got {
+			if n != 1 {
+				t.Errorf("%s: key saw %d rows of its own organizer, want 1", table, n)
+			}
+		}
+		var all int
+		if err := tx.QueryRow(ctx, `select count(*) from api_keys`).Scan(&all); err != nil {
+			return err
+		}
+		if all != 1 {
+			t.Errorf("key saw %d api_keys, want only its organizer's 1", all)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWithPrincipalRejectsKeyForAnotherOrganizer(t *testing.T) {
+	pool := testdb.New(t)
+	_, oa := seedOrg(t, pool, "a@example.com", "org-a")
+	_, ob := seedOrg(t, pool, "b@example.com", "org-b")
+	key := seedKey(t, pool, oa, "write", false)
+	err := db.WithPrincipal(context.Background(), pool, db.Principal{KeyID: key, KeyOrg: oa, KeyScope: "write"}, ob,
+		func(pgx.Tx, string) error { t.Error("fn must not run for another organizer"); return nil })
+	if !errors.Is(err, db.ErrNotMember) {
+		t.Errorf("err=%v, want ErrNotMember", err)
+	}
+	err = db.WithPrincipal(context.Background(), pool, db.Principal{UserID: uuid.New(), KeyID: key, KeyOrg: oa, KeyScope: "write"}, oa,
+		func(pgx.Tx, string) error { t.Error("a user and a key together must not run"); return nil })
+	if err == nil {
+		t.Error("user and key in one principal: want an error")
+	}
+}
+
+// Bypass Go: set the key GUCs by hand. A key with another tenant's
+// organizer_id, a revoked key, and a key alongside a user all get no scope.
+func TestRLSForgedKeyScopesSeeNothing(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	ua, oa := seedOrg(t, pool, "a@example.com", "org-a")
+	_, ob := seedOrg(t, pool, "b@example.com", "org-b")
+	seedKey(t, pool, ob, "write", false)
+	keyA := seedKey(t, pool, oa, "write", false)
+	revokedB := seedKey(t, pool, ob, "write", true)
+	cases := []struct {
+		name           string
+		user, key, org string
+		target         uuid.UUID
+	}{
+		{"key with another tenant's organizer", "", keyA.String(), ob.String(), ob},
+		{"revoked key", "", revokedB.String(), ob.String(), ob},
+		{"user and key together", ua.String(), keyA.String(), oa.String(), oa},
+	}
+	for _, c := range cases {
+		err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `select set_config('app.user_id', $1, true), set_config('app.api_key_id', $2, true), set_config('app.organizer_id', $3, true)`,
+				c.user, c.key, c.org); err != nil {
+				return err
+			}
+			var scoped *uuid.UUID
+			if err := tx.QueryRow(ctx, `select app_organizer()`).Scan(&scoped); err != nil {
+				return err
+			}
+			if scoped != nil {
+				t.Errorf("%s: app_organizer() = %v, want NULL", c.name, scoped)
+			}
+			got := countTenant(ctx, t, tx, c.target)
+			for _, table := range []string{"audit_log", "api_keys"} {
+				if got[table] != 0 {
+					t.Errorf("%s: saw %d %s rows", c.name, got[table], table)
+				}
+			}
+			if c.user == "" && (got["organizers"] != 0 || got["memberships"] != 0) {
+				t.Errorf("%s: saw %v", c.name, got)
+			}
+			tag, err := tx.Exec(ctx, `update organizers set name = 'pwned' where id = $1`, c.target)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() != 0 {
+				t.Errorf("%s: updated %d organizers", c.name, tag.RowsAffected())
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+	}
+}
+
+func TestAuditRowWrittenByKeyNamesTheKey(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	_, oa := seedOrg(t, pool, "a@example.com", "org-a")
+	key := seedKey(t, pool, oa, "write", false)
+	p := db.Principal{KeyID: key, KeyOrg: oa, KeyScope: "write"}
+	err := db.WithPrincipal(ctx, pool, p, oa, func(tx pgx.Tx, _ string) error {
+		if err := audit.Write(ctx, tx, audit.Entry{Organizer: oa, Actor: audit.Actor{Key: key}, Action: "test.done", EntityType: "organizer", EntityID: oa}); err != nil {
+			return err
+		}
+		var user, k *uuid.UUID
+		if err := tx.QueryRow(ctx, `select actor_user_id, actor_api_key_id from audit_log where action = 'test.done'`).Scan(&user, &k); err != nil {
+			return err
+		}
+		if user != nil || k == nil || *k != key {
+			t.Errorf("actor_user_id=%v actor_api_key_id=%v, want NULL and %v", user, k, key)
+		}
+		// Both actors at once: Go refuses, and so does the database.
+		if err := audit.Write(ctx, tx, audit.Entry{Organizer: oa, Actor: audit.Actor{User: uuid.New(), Key: key}, Action: "x", EntityType: "organizer", EntityID: oa}); err == nil {
+			t.Error("audit.Write with two actors: want an error")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = testdb.Owner(t, pool).Exec(ctx, `insert into audit_log(organizer_id, actor_user_id, actor_api_key_id, action, entity_type, entity_id)
+		select $1, user_id, $2, 'x', 'organizer', $1 from memberships where organizer_id = $1`, oa, key)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		t.Fatalf("two actors in the database: err=%v, want check violation", err)
 	}
 }

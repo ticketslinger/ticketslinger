@@ -25,11 +25,49 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for ApiKeyScope.
+const (
+	ApiKeyScopeRead  ApiKeyScope = "read"
+	ApiKeyScopeWrite ApiKeyScope = "write"
+)
+
+// Valid indicates whether the value is a known member of the ApiKeyScope enum.
+func (e ApiKeyScope) Valid() bool {
+	switch e {
+	case ApiKeyScopeRead:
+		return true
+	case ApiKeyScopeWrite:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateApiKeyScope.
+const (
+	CreateApiKeyScopeRead  CreateApiKeyScope = "read"
+	CreateApiKeyScopeWrite CreateApiKeyScope = "write"
+)
+
+// Valid indicates whether the value is a known member of the CreateApiKeyScope enum.
+func (e CreateApiKeyScope) Valid() bool {
+	switch e {
+	case CreateApiKeyScopeRead:
+		return true
+	case CreateApiKeyScopeWrite:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OrganizerRole.
 const (
-	Admin   OrganizerRole = "admin"
-	Checkin OrganizerRole = "checkin"
-	Owner   OrganizerRole = "owner"
+	Admin    OrganizerRole = "admin"
+	Checkin  OrganizerRole = "checkin"
+	KeyRead  OrganizerRole = "key:read"
+	KeyWrite OrganizerRole = "key:write"
+	Owner    OrganizerRole = "owner"
 )
 
 // Valid indicates whether the value is a known member of the OrganizerRole enum.
@@ -39,6 +77,10 @@ func (e OrganizerRole) Valid() bool {
 		return true
 	case Checkin:
 		return true
+	case KeyRead:
+		return true
+	case KeyWrite:
+		return true
 	case Owner:
 		return true
 	default:
@@ -46,15 +88,55 @@ func (e OrganizerRole) Valid() bool {
 	}
 }
 
+// ApiKey defines model for ApiKey.
+type ApiKey struct {
+	CreatedAt time.Time          `json:"created_at"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// LastUsedAt Accurate to about a minute. Absent if never used.
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	Name       string     `json:"name"`
+
+	// Prefix The first 8 characters after tsk_, so you can tell your keys apart.
+	Prefix    string      `json:"prefix"`
+	RevokedAt *time.Time  `json:"revoked_at,omitempty"`
+	Scope     ApiKeyScope `json:"scope"`
+}
+
+// ApiKeyScope defines model for ApiKey.Scope.
+type ApiKeyScope string
+
+// ApiKeyCreated defines model for ApiKeyCreated.
+type ApiKeyCreated struct {
+	ApiKey ApiKey `json:"api_key"`
+
+	// Token The key itself. Copy it now: we only keep a hash, so it can't be shown again.
+	Token string `json:"token"`
+}
+
 // AuditEntry defines model for AuditEntry.
 type AuditEntry struct {
-	Action      string              `json:"action"`
-	ActorUserId *openapi_types.UUID `json:"actor_user_id,omitempty"`
-	At          time.Time           `json:"at"`
-	EntityId    openapi_types.UUID  `json:"entity_id"`
-	EntityType  string              `json:"entity_type"`
-	Id          openapi_types.UUID  `json:"id"`
+	Action string `json:"action"`
+
+	// ActorApiKeyId Set instead of actor_user_id when an API key did it.
+	ActorApiKeyId *openapi_types.UUID `json:"actor_api_key_id,omitempty"`
+	ActorUserId   *openapi_types.UUID `json:"actor_user_id,omitempty"`
+	At            time.Time           `json:"at"`
+	EntityId      openapi_types.UUID  `json:"entity_id"`
+	EntityType    string              `json:"entity_type"`
+	Id            openapi_types.UUID  `json:"id"`
 }
+
+// CreateApiKey defines model for CreateApiKey.
+type CreateApiKey struct {
+	Name string `json:"name"`
+
+	// Scope write can also read.
+	Scope CreateApiKeyScope `json:"scope"`
+}
+
+// CreateApiKeyScope write can also read.
+type CreateApiKeyScope string
 
 // CreateOrganizer defines model for CreateOrganizer.
 type CreateOrganizer struct {
@@ -105,11 +187,13 @@ type Me struct {
 type Organizer struct {
 	Id   openapi_types.UUID `json:"id"`
 	Name string             `json:"name"`
-	Role OrganizerRole      `json:"role"`
-	Slug string             `json:"slug"`
+
+	// Role Your role here. An API key sees its own scope as key:read or key:write.
+	Role OrganizerRole `json:"role"`
+	Slug string        `json:"slug"`
 }
 
-// OrganizerRole defines model for Organizer.Role.
+// OrganizerRole Your role here. An API key sees its own scope as key:read or key:write.
 type OrganizerRole string
 
 // Passkey defines model for Passkey.
@@ -205,6 +289,9 @@ type VerifyEmailJSONRequestBody VerifyEmailJSONBody
 // CreateOrganizerJSONRequestBody defines body for CreateOrganizer for application/json ContentType.
 type CreateOrganizerJSONRequestBody = CreateOrganizer
 
+// CreateApiKeyJSONRequestBody defines body for CreateApiKey for application/json ContentType.
+type CreateApiKeyJSONRequestBody = CreateApiKey
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 
@@ -255,6 +342,15 @@ type ServerInterface interface {
 
 	// (GET /organizers/{organizer})
 	GetOrganizer(w http.ResponseWriter, r *http.Request, organizer OrganizerPath)
+
+	// (GET /organizers/{organizer}/api-keys)
+	ListApiKeys(w http.ResponseWriter, r *http.Request, organizer OrganizerPath)
+
+	// (POST /organizers/{organizer}/api-keys)
+	CreateApiKey(w http.ResponseWriter, r *http.Request, organizer OrganizerPath)
+
+	// (DELETE /organizers/{organizer}/api-keys/{apiKey})
+	RevokeApiKey(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, apiKey openapi_types.UUID)
 
 	// (GET /organizers/{organizer}/audit)
 	ListAudit(w http.ResponseWriter, r *http.Request, organizer OrganizerPath)
@@ -545,6 +641,93 @@ func (siw *ServerInterfaceWrapper) GetOrganizer(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// ListApiKeys operation middleware
+func (siw *ServerInterfaceWrapper) ListApiKeys(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListApiKeys(w, r, organizer)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateApiKey operation middleware
+func (siw *ServerInterfaceWrapper) CreateApiKey(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateApiKey(w, r, organizer)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeApiKey operation middleware
+func (siw *ServerInterfaceWrapper) RevokeApiKey(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "apiKey" -------------
+	var apiKey openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "apiKey", r.PathValue("apiKey"), &apiKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "apiKey", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeApiKey(w, r, organizer, apiKey)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListAudit operation middleware
 func (siw *ServerInterfaceWrapper) ListAudit(w http.ResponseWriter, r *http.Request) {
 
@@ -708,6 +891,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/organizers", wrapper.CreateOrganizer)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}", wrapper.GetOrganizer)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/audit", wrapper.ListAudit)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/api-keys", wrapper.ListApiKeys)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/organizers/{organizer}/api-keys", wrapper.CreateApiKey)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/organizers/{organizer}/api-keys/{apiKey}", wrapper.RevokeApiKey)
 
 	return m
 }
@@ -1509,6 +1695,166 @@ func (response GetOrganizer404JSONResponse) VisitGetOrganizerResponse(w http.Res
 	return err
 }
 
+type ListApiKeysRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+}
+
+type ListApiKeysResponseObject interface {
+	VisitListApiKeysResponse(w http.ResponseWriter) error
+}
+
+type ListApiKeys200JSONResponse []ApiKey
+
+func (response ListApiKeys200JSONResponse) VisitListApiKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListApiKeys403JSONResponse struct{ ErrorJSONResponse }
+
+func (response ListApiKeys403JSONResponse) VisitListApiKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListApiKeys404JSONResponse Error
+
+func (response ListApiKeys404JSONResponse) VisitListApiKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateApiKeyRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Body      *CreateApiKeyJSONRequestBody
+}
+
+type CreateApiKeyResponseObject interface {
+	VisitCreateApiKeyResponse(w http.ResponseWriter) error
+}
+
+type CreateApiKey201JSONResponse ApiKeyCreated
+
+func (response CreateApiKey201JSONResponse) VisitCreateApiKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateApiKey403JSONResponse struct{ ErrorJSONResponse }
+
+func (response CreateApiKey403JSONResponse) VisitCreateApiKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateApiKey404JSONResponse Error
+
+func (response CreateApiKey404JSONResponse) VisitCreateApiKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateApiKey422JSONResponse Error
+
+func (response CreateApiKey422JSONResponse) VisitCreateApiKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeApiKeyRequestObject struct {
+	Organizer OrganizerPath      `json:"organizer"`
+	ApiKey    openapi_types.UUID `json:"apiKey"`
+}
+
+type RevokeApiKeyResponseObject interface {
+	VisitRevokeApiKeyResponse(w http.ResponseWriter) error
+}
+
+type RevokeApiKey204Response struct {
+}
+
+func (response RevokeApiKey204Response) VisitRevokeApiKeyResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type RevokeApiKey403JSONResponse struct{ ErrorJSONResponse }
+
+func (response RevokeApiKey403JSONResponse) VisitRevokeApiKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeApiKey404JSONResponse Error
+
+func (response RevokeApiKey404JSONResponse) VisitRevokeApiKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListAuditRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 }
@@ -1609,6 +1955,15 @@ type StrictServerInterface interface {
 
 	// (GET /organizers/{organizer})
 	GetOrganizer(ctx context.Context, request GetOrganizerRequestObject) (GetOrganizerResponseObject, error)
+
+	// (GET /organizers/{organizer}/api-keys)
+	ListApiKeys(ctx context.Context, request ListApiKeysRequestObject) (ListApiKeysResponseObject, error)
+
+	// (POST /organizers/{organizer}/api-keys)
+	CreateApiKey(ctx context.Context, request CreateApiKeyRequestObject) (CreateApiKeyResponseObject, error)
+
+	// (DELETE /organizers/{organizer}/api-keys/{apiKey})
+	RevokeApiKey(ctx context.Context, request RevokeApiKeyRequestObject) (RevokeApiKeyResponseObject, error)
 
 	// (GET /organizers/{organizer}/audit)
 	ListAudit(ctx context.Context, request ListAuditRequestObject) (ListAuditResponseObject, error)
@@ -2113,6 +2468,92 @@ func (sh *strictHandler) GetOrganizer(w http.ResponseWriter, r *http.Request, or
 	}
 }
 
+// ListApiKeys operation middleware
+func (sh *strictHandler) ListApiKeys(w http.ResponseWriter, r *http.Request, organizer OrganizerPath) {
+	var request ListApiKeysRequestObject
+
+	request.Organizer = organizer
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListApiKeys(ctx, request.(ListApiKeysRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListApiKeys")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListApiKeysResponseObject); ok {
+		if err := validResponse.VisitListApiKeysResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateApiKey operation middleware
+func (sh *strictHandler) CreateApiKey(w http.ResponseWriter, r *http.Request, organizer OrganizerPath) {
+	var request CreateApiKeyRequestObject
+
+	request.Organizer = organizer
+
+	var body CreateApiKeyJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateApiKey(ctx, request.(CreateApiKeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateApiKey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateApiKeyResponseObject); ok {
+		if err := validResponse.VisitCreateApiKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RevokeApiKey operation middleware
+func (sh *strictHandler) RevokeApiKey(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, apiKey openapi_types.UUID) {
+	var request RevokeApiKeyRequestObject
+
+	request.Organizer = organizer
+	request.ApiKey = apiKey
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RevokeApiKey(ctx, request.(RevokeApiKeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RevokeApiKey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RevokeApiKeyResponseObject); ok {
+		if err := validResponse.VisitRevokeApiKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListAudit operation middleware
 func (sh *strictHandler) ListAudit(w http.ResponseWriter, r *http.Request, organizer OrganizerPath) {
 	var request ListAuditRequestObject
@@ -2144,41 +2585,52 @@ func (sh *strictHandler) ListAudit(w http.ResponseWriter, r *http.Request, organ
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"ZzMdjUQuh+QOio0/KB5GKhvdn/LV3eq/AwA=",
+	"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",
+	"vFn+ZwA=",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

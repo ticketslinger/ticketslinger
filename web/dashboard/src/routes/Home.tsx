@@ -5,7 +5,13 @@ import { ErrorText, Link, type Me, useAction } from "../ui";
 
 type Organizer = components["schemas"]["Organizer"];
 
-const ROLE = { owner: "Owner", admin: "Admin", checkin: "Check-in" } as const;
+const ROLE = {
+  owner: "Owner",
+  admin: "Admin",
+  checkin: "Check-in",
+  "key:read": "API key, read only",
+  "key:write": "API key",
+} as const;
 
 export function Home({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
   const [orgs, setOrgs] = useState<Organizer[] | null>(null);

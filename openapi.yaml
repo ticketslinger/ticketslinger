@@ -153,9 +153,39 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AuditEntry" } } } } }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/api-keys:
+    get:
+      operationId: listApiKeys
+      description: Owners and admins only, from a signed-in session. An API key gets 403 session_required.
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/ApiKey" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createApiKey
+      description: Owners and admins only, from a signed-in session. The token is in this response and nowhere else, ever.
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateApiKey" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ApiKeyCreated" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/api-keys/{apiKey}:
+    delete:
+      operationId: revokeApiKey
+      description: Owners and admins only, from a signed-in session. The key stops working at once; revoking it again changes nothing.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { name: apiKey, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Revoked }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
-    session: { type: http, scheme: bearer }
+    session: { type: http, scheme: bearer, description: "A session token, or an organizer API key (tsk_...). A key acts only within its own organizer, and gets 403 session_required on anything that needs a person: your account, your organizer list, the audit log and key management. A read key gets 403 scope_read_only on writes." }
   parameters:
     OrganizerPath: { name: organizer, in: path, required: true, schema: { type: string } }
   responses:
@@ -226,7 +256,7 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         slug: { type: string }
-        role: { type: string, enum: [owner, admin, checkin] }
+        role: { type: string, enum: [owner, admin, checkin, "key:read", "key:write"], description: "Your role here. An API key sees its own scope as key:read or key:write." }
     AuditEntry:
       type: object
       required: [id, action, entity_type, entity_id, at]
@@ -236,4 +266,28 @@ components:
         entity_type: { type: string }
         entity_id: { type: string, format: uuid }
         actor_user_id: { type: string, format: uuid }
+        actor_api_key_id: { type: string, format: uuid, description: Set instead of actor_user_id when an API key did it. }
         at: { type: string, format: date-time }
+    CreateApiKey:
+      type: object
+      required: [name, scope]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        scope: { type: string, enum: [read, write], description: "write can also read." }
+    ApiKey:
+      type: object
+      required: [id, name, prefix, scope, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        prefix: { type: string, description: "The first 8 characters after tsk_, so you can tell your keys apart." }
+        scope: { type: string, enum: [read, write] }
+        created_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time, description: Accurate to about a minute. Absent if never used. }
+        revoked_at: { type: string, format: date-time }
+    ApiKeyCreated:
+      type: object
+      required: [api_key, token]
+      properties:
+        api_key: { $ref: "#/components/schemas/ApiKey" }
+        token: { type: string, description: "The key itself. Copy it now: we only keep a hash, so it can't be shown again." }

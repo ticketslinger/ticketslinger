@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ticketslinger/ticketslinger/api/internal/apikeys"
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
 	"github.com/ticketslinger/ticketslinger/api/internal/config"
 	"github.com/ticketslinger/ticketslinger/api/internal/db"
@@ -25,6 +26,7 @@ type Deps struct {
 	Pool       *pgxpool.Pool
 	Auth       *auth.Service
 	Organizers *organizers.Service
+	Keys       *apikeys.Service
 	Config     config.Config
 }
 
@@ -36,6 +38,9 @@ type server struct {
 func New(d Deps) http.Handler {
 	if d.Organizers == nil {
 		d.Organizers = organizers.New(d.Pool)
+	}
+	if d.Keys == nil {
+		d.Keys = apikeys.New(d.Pool)
 	}
 	s := &server{Deps: d, public: publicRoutes()}
 	strict := NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
@@ -84,15 +89,21 @@ const (
 
 type client struct{ ip, ua string }
 
+// authed is the caller: a session (user, sess, token) or an API key (key).
+// Never both.
 type authed struct {
 	user  auth.User
 	sess  auth.Session
 	token string
+	key   db.Principal
 }
 
+func (a authed) isKey() bool { return a.key.KeyID != uuid.Nil }
+
 // authenticate records the caller's address and, for every route that
-// isn't public, requires a valid bearer session. r.Pattern is the mux pattern
-// the generated wrapper registered; a route not found in the public set needs a session.
+// isn't public, requires a valid bearer session or API key. r.Pattern is the
+// mux pattern the generated wrapper registered; a route not found in the
+// public set needs a caller.
 func (s *server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := context.WithValue(r.Context(), clientKey, client{clientIP(r, s.Config.TrustedProxies), r.UserAgent()})
@@ -102,15 +113,22 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 				writeError(w, unauthorized())
 				return
 			}
-			u, sess, err := s.Auth.Authenticate(ctx, token)
+			var a authed
+			var err error
+			if strings.HasPrefix(token, apikeys.Prefix) {
+				a.key, err = s.Keys.Authenticate(ctx, token)
+			} else {
+				a.token = token
+				a.user, a.sess, err = s.Auth.Authenticate(ctx, token)
+			}
 			if err != nil {
-				if errors.Is(err, auth.ErrBadToken) {
+				if errors.Is(err, auth.ErrBadToken) || errors.Is(err, apikeys.ErrBadKey) {
 					err = unauthorized()
 				}
 				writeError(w, err)
 				return
 			}
-			ctx = context.WithValue(ctx, authKey, authed{u, sess, token})
+			ctx = context.WithValue(ctx, authKey, a)
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -135,9 +153,20 @@ func clientIP(r *http.Request, trusted []netip.Prefix) string {
 	return peer.String()
 }
 
-func userFrom(ctx context.Context) (auth.User, auth.Session, bool) {
+// errSessionRequired refuses an API key on anything that needs a person.
+var errSessionRequired = &apiError{403, "session_required", "An API key can't do this. Sign in to the dashboard instead."}
+
+// userFrom is the signed-in caller of a user-scoped operation. An API key
+// gets errSessionRequired: it has no account to act on.
+func userFrom(ctx context.Context) (auth.User, auth.Session, error) {
 	a, ok := ctx.Value(authKey).(authed)
-	return a.user, a.sess, ok
+	if !ok {
+		return auth.User{}, auth.Session{}, unauthorized()
+	}
+	if a.isKey() {
+		return auth.User{}, auth.Session{}, errSessionRequired
+	}
+	return a.user, a.sess, nil
 }
 
 func clientFrom(ctx context.Context) client {
@@ -223,6 +252,9 @@ func (s *server) Login(ctx context.Context, req LoginRequestObject) (LoginRespon
 }
 
 func (s *server) Logout(ctx context.Context, _ LogoutRequestObject) (LogoutResponseObject, error) {
+	if _, _, err := userFrom(ctx); err != nil {
+		return nil, err
+	}
 	a, _ := ctx.Value(authKey).(authed)
 	if err := s.Auth.Logout(ctx, a.token); err != nil {
 		return nil, err
@@ -242,9 +274,9 @@ func (s *server) VerifyEmail(ctx context.Context, req VerifyEmailRequestObject) 
 }
 
 func (s *server) GetMe(ctx context.Context, _ GetMeRequestObject) (GetMeResponseObject, error) {
-	u, sess, ok := userFrom(ctx)
-	if !ok {
-		return nil, unauthorized()
+	u, sess, err := userFrom(ctx)
+	if err != nil {
+		return nil, err
 	}
 	return GetMe200JSONResponse(me(u, sess)), nil
 }
@@ -285,9 +317,9 @@ func toMap(v any) (map[string]any, error) {
 }
 
 func (s *server) BeginPasskeyRegistration(ctx context.Context, req BeginPasskeyRegistrationRequestObject) (BeginPasskeyRegistrationResponseObject, error) {
-	u, sess, ok := userFrom(ctx)
-	if !ok {
-		return nil, unauthorized()
+	u, sess, err := userFrom(ctx)
+	if err != nil {
+		return nil, err
 	}
 	password := ""
 	if req.Body != nil && req.Body.Password != nil {
@@ -305,9 +337,9 @@ func (s *server) BeginPasskeyRegistration(ctx context.Context, req BeginPasskeyR
 }
 
 func (s *server) FinishPasskeyRegistration(ctx context.Context, req FinishPasskeyRegistrationRequestObject) (FinishPasskeyRegistrationResponseObject, error) {
-	u, sess, ok := userFrom(ctx)
-	if !ok {
-		return nil, unauthorized()
+	u, sess, err := userFrom(ctx)
+	if err != nil {
+		return nil, err
 	}
 	body, err := json.Marshal(req.Body)
 	if err != nil {
@@ -376,9 +408,9 @@ func totpError(err error) error {
 }
 
 func (s *server) CreateRecoveryCodes(ctx context.Context, _ CreateRecoveryCodesRequestObject) (CreateRecoveryCodesResponseObject, error) {
-	u, sess, ok := userFrom(ctx)
-	if !ok {
-		return nil, unauthorized()
+	u, sess, err := userFrom(ctx)
+	if err != nil {
+		return nil, err
 	}
 	codes, err := s.Auth.GenerateRecoveryCodes(ctx, u.ID, sess.MFA)
 	switch {
@@ -395,9 +427,9 @@ func (s *server) CreateRecoveryCodes(ctx context.Context, _ CreateRecoveryCodesR
 }
 
 func (s *server) StartTotp(ctx context.Context, req StartTotpRequestObject) (StartTotpResponseObject, error) {
-	u, sess, ok := userFrom(ctx)
-	if !ok {
-		return nil, unauthorized()
+	u, sess, err := userFrom(ctx)
+	if err != nil {
+		return nil, err
 	}
 	password := ""
 	if req.Body != nil && req.Body.Password != nil {
@@ -411,9 +443,9 @@ func (s *server) StartTotp(ctx context.Context, req StartTotpRequestObject) (Sta
 }
 
 func (s *server) ConfirmTotp(ctx context.Context, req ConfirmTotpRequestObject) (ConfirmTotpResponseObject, error) {
-	u, sess, ok := userFrom(ctx)
-	if !ok {
-		return nil, unauthorized()
+	u, sess, err := userFrom(ctx)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.Auth.ConfirmTOTP(ctx, u.ID, sess.MFA, req.Body.Code); err != nil {
 		return nil, totpError(err)
@@ -421,31 +453,73 @@ func (s *server) ConfirmTotp(ctx context.Context, req ConfirmTotpRequestObject) 
 	return ConfirmTotp204Response{}, nil
 }
 
+// Access says who may call a tenant operation. Roles limits members (empty
+// means any member); Write marks a write, which a read API key may not do;
+// SessionOnly shuts API keys out entirely.
+type Access struct {
+	Roles       []string
+	Write       bool
+	SessionOnly bool
+}
+
+var errScopeReadOnly = &apiError{403, "scope_read_only", "This API key can only read. Create a key with write access to change things."}
+
 // inOrganizer runs fn inside a transaction scoped to the organizer named by
 // slug. Order matters: a non-member gets 404 before any role or MFA check, so
 // the existence of an organizer never leaks. Owners and admins need an MFA
-// session; roles limits who may call (empty means any member). Every
-// /organizers/{organizer}/... handler must go through here.
-func (s *server) inOrganizer(ctx context.Context, slug string, roles []string, fn func(org organizers.Organizer, tx pgx.Tx) error) error {
-	u, sess, ok := userFrom(ctx)
+// session. An API key reaches only its own organizer, needs no MFA, and is
+// refused SessionOnly operations before anything else, whatever the slug.
+// Every /organizers/{organizer}/... handler must go through here.
+func (s *server) inOrganizer(ctx context.Context, slug string, access Access, fn func(org organizers.Organizer, tx pgx.Tx) error) error {
+	a, ok := ctx.Value(authKey).(authed)
 	if !ok {
 		return unauthorized()
 	}
-	org, err := s.Organizers.Resolve(ctx, u.ID, slug)
+	if a.isKey() {
+		return s.inOrganizerAsKey(ctx, a.key, slug, access, fn)
+	}
+	org, err := s.Organizers.Resolve(ctx, a.user.ID, slug)
 	if errors.Is(err, organizers.ErrNotFound) {
 		return notFound()
 	}
 	if err != nil {
 		return err
 	}
-	err = db.WithOrganizer(ctx, s.Pool, u.ID, org.ID, func(tx pgx.Tx, role string) error {
-		if len(roles) > 0 && !slices.Contains(roles, role) {
+	err = db.WithOrganizer(ctx, s.Pool, a.user.ID, org.ID, func(tx pgx.Tx, role string) error {
+		if len(access.Roles) > 0 && !slices.Contains(access.Roles, role) {
 			return &apiError{403, "forbidden_role", "Your role here doesn't allow that."}
 		}
-		if (role == "owner" || role == "admin") && !sess.MFA {
+		if (role == "owner" || role == "admin") && !a.sess.MFA {
 			return &apiError{403, "mfa_required", "Sign in with a passkey or your authenticator app to manage this organizer."}
 		}
 		org.Role = role
+		return fn(org, tx)
+	})
+	if errors.Is(err, db.ErrNotMember) {
+		return notFound()
+	}
+	return err
+}
+
+// inOrganizerAsKey resolves slug inside the key's own scope, where RLS shows
+// only the key's organizer, so another tenant's slug is a 404 exactly as for
+// a stranger.
+func (s *server) inOrganizerAsKey(ctx context.Context, key db.Principal, slug string, access Access, fn func(org organizers.Organizer, tx pgx.Tx) error) error {
+	if access.SessionOnly {
+		return errSessionRequired
+	}
+	err := db.WithPrincipal(ctx, s.Pool, key, key.KeyOrg, func(tx pgx.Tx, role string) error {
+		org := organizers.Organizer{Role: role}
+		err := tx.QueryRow(ctx, `select id, name, slug::text from organizers where slug = $1`, slug).Scan(&org.ID, &org.Name, &org.Slug)
+		if errors.Is(err, pgx.ErrNoRows) || (err == nil && org.ID != key.KeyOrg) {
+			return notFound()
+		}
+		if err != nil {
+			return err
+		}
+		if access.Write && key.KeyScope != "write" {
+			return errScopeReadOnly
+		}
 		return fn(org, tx)
 	})
 	if errors.Is(err, db.ErrNotMember) {
@@ -465,9 +539,9 @@ func toOrganizer(o organizers.Organizer) Organizer {
 }
 
 func (s *server) ListOrganizers(ctx context.Context, _ ListOrganizersRequestObject) (ListOrganizersResponseObject, error) {
-	u, _, ok := userFrom(ctx)
-	if !ok {
-		return nil, unauthorized()
+	u, _, err := userFrom(ctx)
+	if err != nil {
+		return nil, err
 	}
 	list, err := s.Organizers.ListForUser(ctx, u.ID)
 	if err != nil {
@@ -481,9 +555,9 @@ func (s *server) ListOrganizers(ctx context.Context, _ ListOrganizersRequestObje
 }
 
 func (s *server) CreateOrganizer(ctx context.Context, req CreateOrganizerRequestObject) (CreateOrganizerResponseObject, error) {
-	u, _, ok := userFrom(ctx)
-	if !ok {
-		return nil, unauthorized()
+	u, _, err := userFrom(ctx)
+	if err != nil {
+		return nil, err
 	}
 	if !u.EmailVerified {
 		return nil, &apiError{403, "email_unverified", "Check your inbox and verify your email before creating an organizer."}
@@ -510,7 +584,7 @@ func (s *server) CreateOrganizer(ctx context.Context, req CreateOrganizerRequest
 
 func (s *server) GetOrganizer(ctx context.Context, req GetOrganizerRequestObject) (GetOrganizerResponseObject, error) {
 	var out Organizer
-	err := s.inOrganizer(ctx, req.Organizer, nil, func(org organizers.Organizer, _ pgx.Tx) error {
+	err := s.inOrganizer(ctx, req.Organizer, Access{}, func(org organizers.Organizer, _ pgx.Tx) error {
 		out = toOrganizer(org)
 		return nil
 	})
@@ -522,8 +596,8 @@ func (s *server) GetOrganizer(ctx context.Context, req GetOrganizerRequestObject
 
 func (s *server) ListAudit(ctx context.Context, req ListAuditRequestObject) (ListAuditResponseObject, error) {
 	out := ListAudit200JSONResponse{}
-	err := s.inOrganizer(ctx, req.Organizer, []string{"owner", "admin"}, func(_ organizers.Organizer, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `select id, action, entity_type, entity_id, actor_user_id, at
+	err := s.inOrganizer(ctx, req.Organizer, Access{Roles: ownerAdmin, SessionOnly: true}, func(_ organizers.Organizer, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `select id, action, entity_type, entity_id, actor_user_id, actor_api_key_id, at
 			from audit_log order by at desc, id desc limit 100`)
 		if err != nil {
 			return err
@@ -531,7 +605,7 @@ func (s *server) ListAudit(ctx context.Context, req ListAuditRequestObject) (Lis
 		defer rows.Close()
 		for rows.Next() {
 			var e AuditEntry
-			if err := rows.Scan(&e.Id, &e.Action, &e.EntityType, &e.EntityId, &e.ActorUserId, &e.At); err != nil {
+			if err := rows.Scan(&e.Id, &e.Action, &e.EntityType, &e.EntityId, &e.ActorUserId, &e.ActorApiKeyId, &e.At); err != nil {
 				return err
 			}
 			out = append(out, e)
@@ -542,4 +616,69 @@ func (s *server) ListAudit(ctx context.Context, req ListAuditRequestObject) (Lis
 		return nil, err
 	}
 	return out, nil
+}
+
+var ownerAdmin = []string{"owner", "admin"}
+
+func toAPIKey(k apikeys.Key) ApiKey {
+	return ApiKey{Id: k.ID, Name: k.Name, Prefix: k.Prefix, Scope: ApiKeyScope(k.Scope), CreatedAt: k.CreatedAt, LastUsedAt: k.LastUsedAt, RevokedAt: k.RevokedAt}
+}
+
+// Key management is SessionOnly: keys never mint, list or revoke keys.
+func (s *server) ListApiKeys(ctx context.Context, req ListApiKeysRequestObject) (ListApiKeysResponseObject, error) {
+	out := ListApiKeys200JSONResponse{}
+	err := s.inOrganizer(ctx, req.Organizer, Access{Roles: ownerAdmin, SessionOnly: true}, func(_ organizers.Organizer, tx pgx.Tx) error {
+		keys, err := s.Keys.List(ctx, tx)
+		for _, k := range keys {
+			out = append(out, toAPIKey(k))
+		}
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *server) CreateApiKey(ctx context.Context, req CreateApiKeyRequestObject) (CreateApiKeyResponseObject, error) {
+	var out CreateApiKey201JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, Access{Roles: ownerAdmin, Write: true, SessionOnly: true}, func(org organizers.Organizer, tx pgx.Tx) error {
+		u, _, err := userFrom(ctx)
+		if err != nil {
+			return err
+		}
+		k, plain, err := s.Keys.Create(ctx, tx, org.ID, u.ID, req.Body.Name, string(req.Body.Scope))
+		switch {
+		case errors.Is(err, apikeys.ErrInvalidName):
+			return &apiError{422, "invalid_name", "Give your key a name of up to 80 characters, so you know later what uses it."}
+		case errors.Is(err, apikeys.ErrInvalidScope):
+			return &apiError{422, "invalid_scope", "Pick read or write for the key's access."}
+		case err != nil:
+			return err
+		}
+		out = CreateApiKey201JSONResponse{ApiKey: toAPIKey(k), Token: plain}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *server) RevokeApiKey(ctx context.Context, req RevokeApiKeyRequestObject) (RevokeApiKeyResponseObject, error) {
+	err := s.inOrganizer(ctx, req.Organizer, Access{Roles: ownerAdmin, Write: true, SessionOnly: true}, func(org organizers.Organizer, tx pgx.Tx) error {
+		u, _, err := userFrom(ctx)
+		if err != nil {
+			return err
+		}
+		err = s.Keys.Revoke(ctx, tx, org.ID, u.ID, req.ApiKey)
+		if errors.Is(err, apikeys.ErrNotFound) {
+			return notFound()
+		}
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return RevokeApiKey204Response{}, nil
 }

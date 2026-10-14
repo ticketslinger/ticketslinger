@@ -43,7 +43,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, name, slug strin
 			return err
 		}
 		return audit.Write(ctx, tx, audit.Entry{
-			Organizer: o.ID, Actor: userID, Action: "organizer.created",
+			Organizer: o.ID, Actor: audit.Actor{User: userID}, Action: "organizer.created",
 			EntityType: "organizer", EntityID: o.ID,
 			After: map[string]string{"name": name, "slug": slug},
 		})
