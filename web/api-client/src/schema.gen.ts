@@ -566,17 +566,17 @@ export interface components {
              * @description In cents: 2500 is $25. Up to $100,000.
              */
             price_cents?: number;
-            /** @description Overrides the event's tax rate. Leave it out to use the event's. */
-            tax_rate_bp?: number;
-            /** @description Overrides the event's setting. Leave it out to use the event's. */
-            prices_include_tax?: boolean;
+            /** @description Overrides the event's tax rate. Send null to go back to the event's. Leave it out to keep it as it is. */
+            tax_rate_bp?: number | null;
+            /** @description Overrides the event's setting. Send null to go back to the event's. Leave it out to keep it as it is. */
+            prices_include_tax?: boolean | null;
             /** Format: date-time */
-            sales_start?: string;
+            sales_start?: string | null;
             /**
              * Format: date-time
              * @description Must be after sales_start.
              */
-            sales_end?: string;
+            sales_end?: string | null;
             /** @description Defaults to 1. */
             min_per_order?: number;
             /** @description Defaults to 10. Never below min_per_order. */
@@ -594,13 +594,13 @@ export interface components {
             /** Format: int64 */
             price_cents: number;
             /** @description null means the event's rate. */
-            tax_rate_bp?: number;
+            tax_rate_bp: number | null;
             /** @description null means the event's setting. */
-            prices_include_tax?: boolean;
+            prices_include_tax: boolean | null;
             /** Format: date-time */
-            sales_start?: string;
+            sales_start: string | null;
             /** Format: date-time */
-            sales_end?: string;
+            sales_end: string | null;
             min_per_order: number;
             max_per_order: number;
             hidden: boolean;

@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/oapi-codegen/nullable"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
@@ -147,10 +148,28 @@ func (s *server) DeleteEvent(ctx context.Context, req DeleteEventRequestObject) 
 	return DeleteEvent204Response{}, nil
 }
 
+// orNil is the value of a nullable request field, or nil when it is null
+// or absent. Creating has no difference between the two.
+func orNil[T any](n nullable.Nullable[T]) *T {
+	if v, err := n.Get(); err == nil {
+		return &v
+	}
+	return nil
+}
+
+// nullOf is a stored nullable column as the response field: always present,
+// null when empty.
+func nullOf[T any](p *T) nullable.Nullable[T] {
+	if p == nil {
+		return nullable.NewNullNullable[T]()
+	}
+	return nullable.NewNullableWithValue(*p)
+}
+
 func toTicketType(t catalogue.TicketType) TicketType {
 	return TicketType{
-		Id: t.ID, EventId: t.EventID, Name: t.Name, Description: t.Description, PriceCents: t.PriceCents, TaxRateBp: t.TaxRateBP,
-		PricesIncludeTax: t.PricesIncludeTax, SalesStart: t.SalesStart, SalesEnd: t.SalesEnd, MinPerOrder: t.MinPerOrder,
+		Id: t.ID, EventId: t.EventID, Name: t.Name, Description: t.Description, PriceCents: t.PriceCents, TaxRateBp: nullOf(t.TaxRateBP),
+		PricesIncludeTax: nullOf(t.PricesIncludeTax), SalesStart: nullOf(t.SalesStart), SalesEnd: nullOf(t.SalesEnd), MinPerOrder: t.MinPerOrder,
 		MaxPerOrder: t.MaxPerOrder, Hidden: t.Hidden, Position: t.Position, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
 	}
 }
@@ -172,16 +191,10 @@ func (s *server) ListTicketTypes(ctx context.Context, req ListTicketTypesRequest
 
 func (s *server) CreateTicketType(ctx context.Context, req CreateTicketTypeRequestObject) (CreateTicketTypeResponseObject, error) {
 	b := req.Body
-	in := catalogue.TicketTypeInput{Name: b.Name, PriceCents: b.PriceCents, TaxRateBP: b.TaxRateBp, PricesIncludeTax: b.PricesIncludeTax,
-		SalesStart: b.SalesStart, SalesEnd: b.SalesEnd}
+	in := catalogue.TicketTypeInput{Name: b.Name, PriceCents: b.PriceCents, TaxRateBP: orNil(b.TaxRateBp), PricesIncludeTax: orNil(b.PricesIncludeTax),
+		SalesStart: orNil(b.SalesStart), SalesEnd: orNil(b.SalesEnd), MinPerOrder: b.MinPerOrder, MaxPerOrder: b.MaxPerOrder}
 	if b.Description != nil {
 		in.Description = *b.Description
-	}
-	if b.MinPerOrder != nil {
-		in.MinPerOrder = *b.MinPerOrder
-	}
-	if b.MaxPerOrder != nil {
-		in.MaxPerOrder = *b.MaxPerOrder
 	}
 	if b.Hidden != nil {
 		in.Hidden = *b.Hidden

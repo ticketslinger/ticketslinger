@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/oapi-codegen/nullable"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 )
@@ -31,8 +32,8 @@ type TicketType struct {
 	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
-// TicketTypeInput is a new ticket type. MinPerOrder and MaxPerOrder of 0
-// mean 1 and 10.
+// TicketTypeInput is a new ticket type. A nil MinPerOrder or MaxPerOrder
+// means 1 and 10; any value that is sent has to be in range.
 type TicketTypeInput struct {
 	Name, Description string
 	PriceCents        int64
@@ -40,20 +41,20 @@ type TicketTypeInput struct {
 	PricesIncludeTax  *bool
 	SalesStart        *time.Time
 	SalesEnd          *time.Time
-	MinPerOrder       int
-	MaxPerOrder       int
+	MinPerOrder       *int
+	MaxPerOrder       *int
 	Hidden            bool
 }
 
-// TicketTypePatch changes only the fields that are set. A field that is
-// already set can't be cleared back to nil here yet.
+// TicketTypePatch changes only the fields that are set. For the four
+// nullable fields, absent leaves the value alone and an explicit null clears it.
 type TicketTypePatch struct {
 	Name, Description *string
 	PriceCents        *int64
-	TaxRateBP         *int
-	PricesIncludeTax  *bool
-	SalesStart        *time.Time
-	SalesEnd          *time.Time
+	TaxRateBP         nullable.Nullable[int]
+	PricesIncludeTax  nullable.Nullable[bool]
+	SalesStart        nullable.Nullable[time.Time]
+	SalesEnd          nullable.Nullable[time.Time]
 	MinPerOrder       *int
 	MaxPerOrder       *int
 	Hidden            *bool
@@ -116,12 +117,12 @@ func lockEvent(ctx context.Context, tx pgx.Tx, id uuid.UUID) (Event, error) {
 // records ticket_type.created by actor. tx must be scoped to org.
 func CreateTicketType(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor audit.Actor, in TicketTypeInput) (TicketType, error) {
 	t := TicketType{Name: in.Name, Description: in.Description, PriceCents: in.PriceCents, TaxRateBP: in.TaxRateBP, PricesIncludeTax: in.PricesIncludeTax,
-		SalesStart: in.SalesStart, SalesEnd: in.SalesEnd, MinPerOrder: in.MinPerOrder, MaxPerOrder: in.MaxPerOrder, Hidden: in.Hidden}
-	if t.MinPerOrder == 0 {
-		t.MinPerOrder = 1
+		SalesStart: in.SalesStart, SalesEnd: in.SalesEnd, MinPerOrder: 1, MaxPerOrder: 10, Hidden: in.Hidden}
+	if in.MinPerOrder != nil {
+		t.MinPerOrder = *in.MinPerOrder
 	}
-	if t.MaxPerOrder == 0 {
-		t.MaxPerOrder = 10
+	if in.MaxPerOrder != nil {
+		t.MaxPerOrder = *in.MaxPerOrder
 	}
 	if err := validateTT(&t); err != nil {
 		return TicketType{}, err
@@ -174,18 +175,10 @@ func UpdateTicketType(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, 
 	if p.PriceCents != nil {
 		t.PriceCents = *p.PriceCents
 	}
-	if p.TaxRateBP != nil {
-		t.TaxRateBP = p.TaxRateBP
-	}
-	if p.PricesIncludeTax != nil {
-		t.PricesIncludeTax = p.PricesIncludeTax
-	}
-	if p.SalesStart != nil {
-		t.SalesStart = p.SalesStart
-	}
-	if p.SalesEnd != nil {
-		t.SalesEnd = p.SalesEnd
-	}
+	setNull(&t.TaxRateBP, p.TaxRateBP)
+	setNull(&t.PricesIncludeTax, p.PricesIncludeTax)
+	setNull(&t.SalesStart, p.SalesStart)
+	setNull(&t.SalesEnd, p.SalesEnd)
 	if p.MinPerOrder != nil {
 		t.MinPerOrder = *p.MinPerOrder
 	}
@@ -210,6 +203,16 @@ func UpdateTicketType(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, 
 		return TicketType{}, ttDBError(err)
 	}
 	return t, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "ticket_type.updated", EntityType: "ticket_type", EntityID: id, Before: before, After: t})
+}
+
+// setNull applies one nullable patch field: null clears, a value sets,
+// absent does nothing.
+func setNull[T any](dst **T, n nullable.Nullable[T]) {
+	if n.IsNull() {
+		*dst = nil
+	} else if v, err := n.Get(); err == nil {
+		*dst = &v
+	}
 }
 
 // sameTT: a patch that changed nothing. Instants compare by Equal.

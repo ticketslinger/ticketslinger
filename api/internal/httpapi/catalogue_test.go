@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
 )
@@ -143,6 +144,25 @@ func TestTicketTypeRoundTrip(t *testing.T) {
 		t.Fatalf("bad limits: %d %q", res.StatusCode, h.errorCode(res))
 	}
 	h.must(h.do(owner, "GET", base+"/"+id, ""), 200)
+	for _, body := range []string{`{"name":"Z","price_cents":1,"min_per_order":0}`, `{"name":"Z","price_cents":1,"max_per_order":0}`, `{"name":"Z","price_cents":1,"max_per_order":101}`} {
+		if res := h.do(owner, "POST", base, body); res.StatusCode != 422 || h.errorCode(res) != "bad_limits" {
+			t.Fatalf("%s: %d %q", body, res.StatusCode, h.errorCode(res))
+		}
+	}
+	// null clears, absent keeps, and the response always carries the field.
+	w := h.must(h.do(owner, "PATCH", base+"/"+id, `{"sales_start":"2027-01-01T00:00:00Z","sales_end":"2027-02-01T00:00:00Z","prices_include_tax":true}`), 200)
+	if w["sales_start"] == nil || w["prices_include_tax"] != true {
+		t.Fatalf("set: %v", w)
+	}
+	c := h.must(h.do(owner, "PATCH", base+"/"+id, `{"tax_rate_bp":null,"sales_start":null,"prices_include_tax":null}`), 200)
+	for _, f := range []string{"tax_rate_bp", "sales_start", "prices_include_tax"} {
+		if v, ok := c[f]; !ok || v != nil {
+			t.Fatalf("%s should be present and null: %v", f, c)
+		}
+	}
+	if end, _ := time.Parse(time.RFC3339, c["sales_end"].(string)); !end.Equal(time.Date(2027, 2, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("absent sales_end changed: %v", c)
+	}
 	var list []map[string]any
 	res := h.do(owner, "GET", base, "")
 	_ = json.NewDecoder(res.Body).Decode(&list)

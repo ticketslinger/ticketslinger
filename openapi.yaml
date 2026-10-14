@@ -456,10 +456,10 @@ components:
         name: { type: string, minLength: 1, maxLength: 120 }
         description: { type: string, maxLength: 2000 }
         price_cents: { type: integer, format: int64, minimum: 0, maximum: 10000000, description: "In cents: 2500 is $25. Up to $100,000." }
-        tax_rate_bp: { type: integer, minimum: 0, maximum: 10000, description: "Overrides the event's tax rate. Leave it out to use the event's." }
-        prices_include_tax: { type: boolean, description: "Overrides the event's setting. Leave it out to use the event's." }
-        sales_start: { type: string, format: date-time }
-        sales_end: { type: string, format: date-time, description: Must be after sales_start. }
+        tax_rate_bp: { type: [integer, "null"], minimum: 0, maximum: 10000, description: "Overrides the event's tax rate. Send null to go back to the event's. Leave it out to keep it as it is." }
+        prices_include_tax: { type: [boolean, "null"], description: "Overrides the event's setting. Send null to go back to the event's. Leave it out to keep it as it is." }
+        sales_start: { type: [string, "null"], format: date-time }
+        sales_end: { type: [string, "null"], format: date-time, description: Must be after sales_start. }
         min_per_order: { type: integer, minimum: 1, maximum: 100, description: "Defaults to 1." }
         max_per_order: { type: integer, minimum: 1, maximum: 100, description: "Defaults to 10. Never below min_per_order." }
         hidden: { type: boolean }
@@ -469,17 +469,17 @@ components:
         - { type: object, required: [name, price_cents] }
     TicketType:
       type: object
-      required: [id, event_id, name, description, price_cents, min_per_order, max_per_order, hidden, position, created_at, updated_at]
+      required: [id, event_id, name, description, price_cents, tax_rate_bp, prices_include_tax, sales_start, sales_end, min_per_order, max_per_order, hidden, position, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         event_id: { type: string, format: uuid }
         name: { type: string }
         description: { type: string }
         price_cents: { type: integer, format: int64 }
-        tax_rate_bp: { type: integer, description: "null means the event's rate." }
-        prices_include_tax: { type: boolean, description: "null means the event's setting." }
-        sales_start: { type: string, format: date-time }
-        sales_end: { type: string, format: date-time }
+        tax_rate_bp: { type: [integer, "null"], description: "null means the event's rate." }
+        prices_include_tax: { type: [boolean, "null"], description: "null means the event's setting." }
+        sales_start: { type: [string, "null"], format: date-time }
+        sales_end: { type: [string, "null"], format: date-time }
         min_per_order: { type: integer }
         max_per_order: { type: integer }
         hidden: { type: boolean }
