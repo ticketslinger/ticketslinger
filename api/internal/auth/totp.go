@@ -112,29 +112,9 @@ func recordTOTPStep(ctx context.Context, tx pgx.Tx, id uuid.UUID, step int64, en
 // is required, so a stolen session token can't lock the owner out; a wrong
 // one counts toward the login lockout.
 func (s *Service) StartTOTP(ctx context.Context, userID uuid.UUID, password string) (string, string, error) {
-	var email string
-	var enabled bool
-	var hash *string
-	if err := s.pool.QueryRow(ctx,
-		`SELECT email, totp_enabled_at IS NOT NULL, password_hash FROM users WHERE id = $1`, userID).
-		Scan(&email, &enabled, &hash); err != nil {
-		return "", "", err
-	}
-	if !s.emLimit.allow(email, time.Now()) {
-		return "", "", ErrRateLimited
-	}
-	if hash == nil {
-		return "", "", ErrBadCredentials
-	}
-	ok, err := checkPassword(ctx, *hash, password)
+	email, err := s.reauthenticate(ctx, userID, password)
 	if err != nil {
 		return "", "", err
-	}
-	if !ok {
-		return "", "", s.recordFailure(ctx, userID)
-	}
-	if enabled {
-		return "", "", ErrTOTPAlreadyEnabled
 	}
 	key, err := totp.Generate(totp.GenerateOpts{Issuer: "TicketSlinger", AccountName: email})
 	if err != nil {

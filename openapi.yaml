@@ -64,22 +64,31 @@ paths:
   /auth/passkeys/register:
     post:
       operationId: beginPasskeyRegistration
+      description: Starts adding a passkey. Unless this session passed a second factor, send the current password.
+      requestBody: { required: false, content: { application/json: { schema: { type: object, properties: { password: { type: string } } } } } }
       responses:
         "200": { description: Options, content: { application/json: { schema: { $ref: "#/components/schemas/WebAuthnChallenge" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "423": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
   /auth/passkeys/register/{challengeId}:
     post:
       operationId: finishPasskeyRegistration
-      parameters: [{ name: challengeId, in: path, required: true, schema: { type: string, format: uuid } }]
+      parameters:
+        - { name: challengeId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: name, in: query, required: false, schema: { type: string, maxLength: 120 } }
       requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Passkey" } } } }
         "400": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /auth/passkeys/login:
     post:
       operationId: beginPasskeyLogin
       security: []
       responses:
         "200": { description: Options, content: { application/json: { schema: { $ref: "#/components/schemas/WebAuthnChallenge" } } } }
+        "429": { $ref: "#/components/responses/Error" }
   /auth/passkeys/login/{challengeId}:
     post:
       operationId: finishPasskeyLogin
@@ -88,7 +97,9 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SessionCreated" } } } }
+        "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
   /me:
     get:
       operationId: getMe

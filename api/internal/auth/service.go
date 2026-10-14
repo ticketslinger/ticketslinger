@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -32,6 +33,7 @@ var (
 	ErrPasswordTooShort = errors.New("auth: password too short")
 	ErrPasswordTooLong  = errors.New("auth: password too long")
 	ErrInvalidName      = errors.New("auth: invalid name")
+	ErrPasswordRequired = errors.New("auth: password required")
 )
 
 const (
@@ -71,11 +73,15 @@ type Service struct {
 	opts    Options
 	ipLimit *limiter
 	emLimit *limiter
+	wa      *webauthn.WebAuthn // nil when RPID or Origin is unusable; passkey calls then return waErr
+	waErr   error
 }
 
 func NewService(pool *pgxpool.Pool, m mailer.Mailer, o Options) *Service {
-	return &Service{pool: pool, mail: m, opts: o,
+	s := &Service{pool: pool, mail: m, opts: o,
 		ipLimit: newLimiter(20, time.Minute), emLimit: newLimiter(10, time.Minute)}
+	s.wa, s.waErr = newWebAuthn(o)
+	return s
 }
 
 // dummyHash is checked when no user matches, so a login takes as long
@@ -311,4 +317,35 @@ func (s *Service) VerifyEmail(ctx context.Context, token string) error {
 		return ErrBadToken
 	}
 	return nil
+}
+
+// reauthenticate checks the signed-in user's current password before a
+// sensitive change, so a stolen session token alone can't make it. A wrong
+// password counts toward the login lockout. It returns the user's email.
+func (s *Service) reauthenticate(ctx context.Context, userID uuid.UUID, password string) (string, error) {
+	var email string
+	var hash *string
+	var locked bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT email, password_hash, coalesce(locked_until > now(), false) FROM users WHERE id = $1`, userID).
+		Scan(&email, &hash, &locked); err != nil {
+		return "", err
+	}
+	if !s.emLimit.allow(email, time.Now()) {
+		return "", ErrRateLimited
+	}
+	if locked {
+		return "", ErrLocked
+	}
+	if hash == nil {
+		return "", ErrBadCredentials
+	}
+	ok, err := checkPassword(ctx, *hash, password)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", s.recordFailure(ctx, userID)
+	}
+	return email, nil
 }

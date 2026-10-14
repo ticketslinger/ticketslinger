@@ -20,6 +20,9 @@ func unauthorized() error {
 func tooManyAttempts() error {
 	return &apiError{429, "rate_limited", "Too many attempts. Try again in a few minutes."}
 }
+func locked() error {
+	return &apiError{423, "locked", "Too many wrong passwords. Your account is paused for 15 minutes."}
+}
 func notFound() error {
 	return &apiError{404, "not_found", "That doesn't exist, or you don't have access to it."}
 }
