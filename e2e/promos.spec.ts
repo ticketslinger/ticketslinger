@@ -79,6 +79,13 @@ test("promo codes and questions: normalised codes, inline errors, reordering", a
       await page.getByRole("textbox", { name: "Option 2", exact: true }).fill("veg");
       await page.getByRole("button", { name: "Add question" }).click();
       await expect(page.getByRole("textbox", { name: "Option 2", exact: true })).toBeFocused();
+      await expect(page.getByRole("textbox", { name: "Option 2", exact: true })).toHaveAttribute(
+        "aria-invalid",
+        "true",
+      );
+      await expect(
+        page.getByRole("textbox", { name: "Option 2", exact: true }),
+      ).toHaveAccessibleDescription(/listed twice/);
       await page.getByRole("textbox", { name: "Option 2", exact: true }).fill("Vegan");
     }
     await page.getByRole("button", { name: "Add question" }).click();

@@ -1,28 +1,15 @@
 import type { components } from "@ticketslinger/api-client";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { api, must } from "../api";
+import { FormDialog, LOCAL, MAX_CENTS, type Problem, Remove, toggle, useProblem } from "../forms";
 import { dollarsInput, formatCents, parseDollars } from "../money";
 import { formatWhen, fromLocalInput, toLocalInput } from "../time";
-import {
-  askToLeave,
-  ErrorText,
-  Field,
-  focusOnMount,
-  useAction,
-  useLoad,
-  useUnsavedChanges,
-} from "../ui";
+import { ErrorText, Field, useAction, useLoad } from "../ui";
 import { bpToPercent, type Event, percentToBp } from "./EventForm";
 import { canEdit, type Org } from "./Organizer";
 
 type TicketType = components["schemas"]["TicketType"];
 type Quota = components["schemas"]["Quota"];
-
-export const LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
-const MAX_CENTS = 10_000_000;
-
-/** A field that failed, and what to tell the organizer about it. */
-export type Problem = { field: string; message: string };
 
 /** Which form field an API error code is about; "" when it's about the form as a whole. */
 export function fieldFor(code: string, message: string): string {
@@ -169,92 +156,6 @@ export function quotaBody(d: QuotaDraft): { body: components["schemas"]["QuotaFi
 export const needsCapacity = (status: Event["status"]) => status === "live";
 
 const price = (c: number) => (c === 0 ? "Free" : formatCents(c));
-export const toggle = (list: string[], id: string) =>
-  list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
-
-/** A native modal: closes on Escape or Cancel, and asks before throwing away typing. */
-export function FormDialog({
-  title,
-  dirty,
-  onClose,
-  onSubmit,
-  busy,
-  submitLabel,
-  children,
-}: {
-  title: string;
-  dirty: boolean;
-  onClose: () => void;
-  onSubmit: () => void;
-  busy: boolean;
-  submitLabel: string;
-  children: ReactNode;
-}) {
-  const ref = useRef<HTMLDialogElement>(null);
-  const leave = useUnsavedChanges(dirty);
-  useEffect(() => {
-    if (ref.current && !ref.current.open) ref.current.showModal();
-  }, []);
-  return (
-    <dialog
-      ref={ref}
-      className="form"
-      aria-labelledby="form-dialog-title"
-      onClose={onClose}
-      onCancel={(e) => {
-        if (!dirty) return;
-        e.preventDefault();
-        askToLeave(() => ref.current?.close());
-      }}
-    >
-      <h2 id="form-dialog-title">{title}</h2>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          onSubmit();
-        }}
-      >
-        {children}
-        <div className="row">
-          <button type="submit" className="inline" disabled={busy}>
-            {submitLabel}
-          </button>
-          <button
-            type="button"
-            className="inline secondary"
-            onClick={() => askToLeave(() => ref.current?.close())}
-          >
-            Cancel
-          </button>
-        </div>
-      </form>
-      {leave}
-    </dialog>
-  );
-}
-
-/** Marks the field a problem is about and moves focus to it. */
-export function useProblem(
-  prefix: string,
-  local: Problem | null,
-  error: string,
-  code: string,
-  fieldOf = fieldFor,
-) {
-  const field = local?.field ?? (code ? fieldOf(code, error) : "");
-  const message = local?.message ?? error;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: message re-runs it, so a repeat mistake pulls focus back
-  useEffect(() => {
-    if (field) document.getElementById(`${prefix}-${field}`)?.focus();
-  }, [prefix, field, message]);
-  return {
-    message,
-    prefix,
-    bad: (f: string) => (field === f ? true : undefined),
-    // For a group of controls, which can't be aria-invalid: point at the message instead.
-    describe: (f: string) => (field === f && message ? `${prefix}-error` : undefined),
-  };
-}
 
 function TicketDialog({
   org,
@@ -275,7 +176,7 @@ function TicketDialog({
   const [d, setD] = useState(start);
   const [local, setLocal] = useState<Problem | null>(null);
   const { busy, error, code, clear, run } = useAction();
-  const p = useProblem("tt", local, error, code);
+  const p = useProblem("tt", local, error, code, fieldFor);
   const set = (patch: Partial<TicketDraft>) => {
     setLocal(null);
     clear();
@@ -488,7 +389,7 @@ function QuotaDialog({
   const [d, setD] = useState(start);
   const [local, setLocal] = useState<Problem | null>(null);
   const { busy, error, code, clear, run } = useAction();
-  const p = useProblem("q", local, error, code);
+  const p = useProblem("q", local, error, code, fieldFor);
   const set = (patch: Partial<QuotaDraft>) => {
     setLocal(null);
     clear();
@@ -572,51 +473,6 @@ function QuotaDialog({
       </fieldset>
       <ErrorText id={`${p.prefix}-error`}>{p.message}</ErrorText>
     </FormDialog>
-  );
-}
-
-/** Asks "sure?" in place of the Delete button, then deletes. */
-export function Remove({
-  label,
-  noun,
-  run,
-}: {
-  label: string;
-  noun: string;
-  run: () => Promise<void>;
-}) {
-  const { busy, error, run: go } = useAction();
-  const [asking, setAsking] = useState<boolean | null>(null);
-  return (
-    <>
-      {asking ? (
-        <span className="row">
-          <button
-            type="button"
-            className="inline"
-            ref={focusOnMount}
-            disabled={busy}
-            onClick={() => go(run)}
-          >
-            Delete {noun}
-          </button>
-          <button type="button" className="inline secondary" onClick={() => setAsking(false)}>
-            Keep it
-          </button>
-        </span>
-      ) : (
-        <button
-          type="button"
-          className="inline secondary"
-          ref={asking === false ? focusOnMount : undefined}
-          aria-label={`Delete ${label}`}
-          onClick={() => setAsking(true)}
-        >
-          Delete
-        </button>
-      )}
-      <ErrorText>{error}</ErrorText>
-    </>
   );
 }
 

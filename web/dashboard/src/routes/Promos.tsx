@@ -1,17 +1,25 @@
 import type { components } from "@ticketslinger/api-client";
 import { useState } from "react";
 import { api, must } from "../api";
+import {
+  FormDialog,
+  LOCAL,
+  MAX_CENTS,
+  type Problem,
+  Remove,
+  TicketPicker,
+  toggle,
+  useProblem,
+} from "../forms";
 import { dollarsInput, formatCents, parseDollars } from "../money";
 import { formatWhen, fromLocalInput, toLocalInput } from "../time";
 import { ErrorText, Field, useAction, useLoad } from "../ui";
 import { bpToPercent, type Event, percentToBp } from "./EventForm";
 import { canEdit, type Org } from "./Organizer";
-import { FormDialog, LOCAL, type Problem, Remove, toggle, useProblem } from "./Tickets";
 
 type Promo = components["schemas"]["PromoCode"];
 type TicketType = components["schemas"]["TicketType"];
 
-const MAX_CENTS = 10_000_000;
 const MAX_USES = 1_000_000_000;
 
 /** What the API stores: trimmed and upper-case, so spring and SPRING are one code. */
@@ -83,10 +91,18 @@ export const promoDraftOf = (p: Promo, tz: string): PromoDraft => ({
 export function promoBody(
   d: PromoDraft,
   tz: string,
+  // The scope the code was loaded with. While it's untouched it isn't sent, so a
+  // code whose tickets were all deleted can still have its other fields edited.
+  loaded?: { all: boolean; types: string[] },
 ): { body: components["schemas"]["PromoCodeFields"] } | Problem {
   const code = normalizeCode(d.code);
   const value = d.kind === "percent" ? percentToBp(d.value) : parseDollars(d.value);
   const max = d.maxUses.trim();
+  const scopeKept =
+    !!loaded &&
+    loaded.all === d.all &&
+    loaded.types.length === d.types.length &&
+    loaded.types.every((t) => d.types.includes(t));
   if (!/^[A-Z0-9-]{3,32}$/.test(code))
     return { field: "code", message: "Use 3 to 32 letters, numbers and hyphens, like SPRING25." };
   if (
@@ -113,7 +129,7 @@ export function promoBody(
     return { field: "until", message: "Enter that as a date and a time." };
   if (d.from && d.until && fromLocalInput(d.until, tz) <= fromLocalInput(d.from, tz))
     return { field: "until", message: "The code has to stop working after it starts." };
-  if (!d.all && d.types.length === 0)
+  if (!scopeKept && !d.all && d.types.length === 0)
     return {
       field: "types",
       message: "Pick at least one ticket, or choose all tickets.",
@@ -126,8 +142,7 @@ export function promoBody(
       max_uses: max === "" ? null : Number(max),
       valid_from: d.from ? fromLocalInput(d.from, tz) : null,
       valid_until: d.until ? fromLocalInput(d.until, tz) : null,
-      applies_to_all: d.all,
-      applies_to: d.all ? [] : d.types,
+      ...(scopeKept ? {} : { applies_to_all: d.all, applies_to: d.all ? [] : d.types }),
       unlocks: d.unlocks,
     },
   };
@@ -167,7 +182,11 @@ function PromoDialog({
   const hidden = tickets.filter((t) => t.hidden);
 
   function save() {
-    const r = promoBody(d, event.timezone);
+    const r = promoBody(
+      d,
+      event.timezone,
+      promo ? { all: promo.applies_to_all, types: promo.applies_to } : undefined,
+    );
     if ("field" in r) return setLocal(r);
     run(async () => {
       const path = { organizer: org.slug, event: event.id };
@@ -273,46 +292,24 @@ function PromoDialog({
             onChange={(e) => set({ until: e.target.value })}
           />
         </div>
-        <fieldset
-          className="choices"
+        <TicketPicker
           id="pc-types"
-          tabIndex={-1}
-          aria-describedby={p.describe("types")}
-        >
-          <legend>Discounts</legend>
-          <label className="check">
-            <input
-              type="radio"
-              name="pc-all"
-              checked={d.all}
-              onChange={() => set({ all: true, types: [] })}
-            />
-            <span>Every ticket</span>
-          </label>
-          <label className="check">
-            <input
-              type="radio"
-              name="pc-all"
-              checked={!d.all}
-              onChange={() => set({ all: false })}
-            />
-            <span>Only the tickets I pick</span>
-          </label>
-          {!d.all && tickets.length === 0 && (
-            <p className="hint">Add a ticket first, then come back to pick it.</p>
-          )}
-          {!d.all &&
-            tickets.map((t) => (
-              <label className="check" key={t.id}>
-                <input
-                  type="checkbox"
-                  checked={d.types.includes(t.id)}
-                  onChange={() => set({ types: toggle(d.types, t.id) })}
-                />
-                <span>{t.name}</span>
-              </label>
-            ))}
-        </fieldset>
+          legend="Applies to"
+          tickets={tickets}
+          all={d.all}
+          types={d.types}
+          onChange={(v) => set({ all: v.all, types: v.types })}
+          describedBy={p.describe("types")}
+          hint={
+            promo &&
+            !promo.applies_to_all &&
+            promo.applies_to.length === 0 &&
+            !d.all &&
+            d.types.length === 0
+              ? "The tickets this code applied to are gone, so it applies to nothing right now. Pick some, or choose every ticket."
+              : undefined
+          }
+        />
         <fieldset
           className="choices"
           id="pc-unlocks"

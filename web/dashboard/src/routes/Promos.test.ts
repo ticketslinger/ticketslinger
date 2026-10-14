@@ -116,3 +116,27 @@ test("list text", () => {
   expect(usesText({ used_count: 3, max_uses: 50 })).toBe("3 / 50");
   expect(usesText({ used_count: 3, max_uses: null })).toBe("3 / no limit");
 });
+
+test("editing a code whose tickets are gone leaves the scope out of the patch", () => {
+  const loaded = { all: false, types: [] as string[] };
+  const gone = { ...ok, all: false, types: [] as string[] };
+  // untouched scope: not sent, and not a reason to refuse the save
+  const r = promoBody(gone, "UTC", loaded) as { body: Record<string, unknown> };
+  expect(r.body).not.toHaveProperty("applies_to_all");
+  expect(r.body).not.toHaveProperty("applies_to");
+  // same tickets, different order: still untouched
+  const two = promoBody({ ...ok, all: false, types: ["b", "a"] }, "UTC", {
+    all: false,
+    types: ["a", "b"],
+  });
+  expect((two as { body: Record<string, unknown> }).body).not.toHaveProperty("applies_to");
+  // touched: sent, and the empty-list rule applies again
+  expect(promoBody({ ...ok, all: true }, "UTC", loaded)).toMatchObject({
+    body: { applies_to_all: true, applies_to: [] },
+  });
+  expect(promoBody({ ...ok, all: false, types: ["a"] }, "UTC", loaded)).toMatchObject({
+    body: { applies_to_all: false, applies_to: ["a"] },
+  });
+  // a new code still insists
+  expect(field({ all: false, types: [] })).toBe("types");
+});

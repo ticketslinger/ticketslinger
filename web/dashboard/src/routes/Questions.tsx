@@ -1,6 +1,7 @@
 import type { components } from "@ticketslinger/api-client";
 import { useEffect, useRef, useState } from "react";
 import { api, must } from "../api";
+import { FormDialog, type Problem, Remove, TicketPicker, useProblem } from "../forms";
 import { ErrorText, Field, useAction, useLoad } from "../ui";
 import type { Event } from "./EventForm";
 import { canEdit, type Org } from "./Organizer";
@@ -12,7 +13,6 @@ import {
   renameOption,
   swapPositions,
 } from "./optionList";
-import { FormDialog, type Problem, Remove, toggle, useProblem } from "./Tickets";
 
 type Question = components["schemas"]["Question"];
 type TicketType = components["schemas"]["TicketType"];
@@ -114,11 +114,11 @@ const arrow = { "-1": "up", "1": "down" } as const;
 function OptionsEditor({
   options,
   onChange,
-  describedBy,
+  problem,
 }: {
   options: string[];
   onChange: (o: string[]) => void;
-  describedBy?: string;
+  problem: ReturnType<typeof useProblem>;
 }) {
   // The control to focus once the list has re-rendered; moving a row remounts nothing, but focus must follow it.
   const [focus, setFocus] = useState<string>();
@@ -139,7 +139,12 @@ function OptionsEditor({
   };
 
   return (
-    <fieldset className="choices" id="qn-options" tabIndex={-1} aria-describedby={describedBy}>
+    <fieldset
+      className="choices"
+      id="qn-options"
+      tabIndex={-1}
+      aria-describedby={problem.describe("options")}
+    >
       <legend>Options</legend>
       <p className="hint">Buyers pick one. Add 2 to 30, each different, ignoring capitals.</p>
       {options.map((o, i) => (
@@ -149,6 +154,8 @@ function OptionsEditor({
             id={`qn-option-${i}`}
             aria-label={`Option ${i + 1}`}
             maxLength={120}
+            aria-invalid={problem.bad(`option-${i}`)}
+            aria-describedby={problem.describe(`option-${i}`)}
             value={o}
             onChange={(e) => onChange(renameOption(options, i, e.target.value))}
           />
@@ -293,11 +300,7 @@ function QuestionDialog({
           </select>
         </div>
         {d.kind === "select" && (
-          <OptionsEditor
-            options={d.options}
-            onChange={(options) => set({ options })}
-            describedBy={p.describe("options") ?? p.describe(`option-${duplicateAt(d.options)}`)}
-          />
+          <OptionsEditor options={d.options} onChange={(options) => set({ options })} problem={p} />
         )}
         <label className="check">
           <input
@@ -331,46 +334,15 @@ function QuestionDialog({
             <span>For every ticket</span>
           </label>
         </fieldset>
-        <fieldset
-          className="choices"
+        <TicketPicker
           id="qn-types"
-          tabIndex={-1}
-          aria-describedby={p.describe("types")}
-        >
-          <legend>Which tickets</legend>
-          <label className="check">
-            <input
-              type="radio"
-              name="qn-all"
-              checked={d.all}
-              onChange={() => set({ all: true, types: [] })}
-            />
-            <span>Every ticket</span>
-          </label>
-          <label className="check">
-            <input
-              type="radio"
-              name="qn-all"
-              checked={!d.all}
-              onChange={() => set({ all: false })}
-            />
-            <span>Only the tickets I pick</span>
-          </label>
-          {!d.all && tickets.length === 0 && (
-            <p className="hint">Add a ticket first, then come back to pick it.</p>
-          )}
-          {!d.all &&
-            tickets.map((t) => (
-              <label className="check" key={t.id}>
-                <input
-                  type="checkbox"
-                  checked={d.types.includes(t.id)}
-                  onChange={() => set({ types: toggle(d.types, t.id) })}
-                />
-                <span>{t.name}</span>
-              </label>
-            ))}
-        </fieldset>
+          legend="Which tickets"
+          tickets={tickets}
+          all={d.all}
+          types={d.types}
+          onChange={(v) => set({ all: v.all, types: v.types })}
+          describedBy={p.describe("types")}
+        />
       </fieldset>
       <ErrorText id={`${p.prefix}-error`}>{p.message}</ErrorText>
     </FormDialog>
