@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { answersFor, type CheckoutData, fieldErrors, payload } from "./checkout";
+import { answersFor, type CheckoutData, eventPath, fieldErrors, payload } from "./checkout";
 
 type Question = CheckoutData["questions"][number];
 
@@ -74,4 +74,11 @@ test("422 errors land on the input they name, in our words", () => {
     "answers.q-vip.2": "That answer doesn't fit this question. Check it and try again.",
   });
   expect(fieldErrors({ code: "price_changed" })).toEqual({});
+});
+
+test("the way back is always a path on this site", () => {
+  expect(eventPath({ organizer: "acme", event_slug: "gala" })).toBe("/acme/gala");
+  expect(eventPath({ organizer: "javascript:alert(1)//", event_slug: "/evil.example" })).toBe(
+    "/javascript%3Aalert(1)%2F%2F/%2Fevil.example",
+  );
 });

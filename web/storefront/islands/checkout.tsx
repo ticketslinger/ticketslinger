@@ -24,8 +24,9 @@ export type CheckoutData = {
   questions: Question[];
   event_name: string;
   timezone: string;
-  /** The event page, for starting again. */
-  event_url: string;
+  /** Slugs of the event page, for starting again. */
+  organizer: string;
+  event_slug: string;
 };
 
 /** One answer the form asks for. name is the API's own field path, so its 422s map straight back. */
@@ -106,6 +107,10 @@ const MESSAGES: Record<string, string> = {
 };
 // Answers that end this checkout: the buyer has to start again from the event.
 const OVER: Record<string, string> = { checkout_expired: EXPIRED, price_changed: PRICE_CHANGED };
+
+/** Always a path on this site: each slug is encoded, so neither can add a scheme or a host. */
+export const eventPath = (d: Pick<CheckoutData, "organizer" | "event_slug">) =>
+  `/${encodeURIComponent(d.organizer)}/${encodeURIComponent(d.event_slug)}`;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -282,7 +287,7 @@ function Checkout({ data }: { data: CheckoutData }) {
         <p class="notice" role="alert">
           {phase.message}
         </p>
-        <a class="button" href={data.event_url}>
+        <a class="button" href={eventPath(data)}>
           Back to {data.event_name}
         </a>
       </div>

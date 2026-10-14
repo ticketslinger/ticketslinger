@@ -1,6 +1,6 @@
 /** @jsxImportSource preact */
 import type { components } from "@ticketslinger/api-client";
-import type { CheckoutData } from "../../islands/checkout";
+import { type CheckoutData, eventPath } from "../../islands/checkout";
 import { formatCents } from "../money";
 import { Layout } from "./Layout";
 
@@ -21,13 +21,13 @@ export function checkoutData(token: string, c: Checkout, e: CheckoutEvent): stri
     questions: e.questions,
     event_name: e.name,
     timezone: e.timezone,
-    event_url: eventUrl(e),
+    organizer: e.organizer,
+    event_slug: e.slug,
   };
   return JSON.stringify(data).replace(/</g, "\\u003c");
 }
 
-export const eventUrl = (e: CheckoutEvent) =>
-  `/${encodeURIComponent(e.organizer)}/${encodeURIComponent(e.slug)}`;
+const eventUrl = (e: CheckoutEvent) => eventPath({ organizer: e.organizer, event_slug: e.slug });
 
 /** What the buyer is paying for: a line per ticket type, then discount, tax, fee and total. */
 function Quote({ c, e }: { c: Checkout; e: CheckoutEvent }) {

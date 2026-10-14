@@ -626,7 +626,8 @@ test("the checkout page carries its data, the island and Stripe's policy", async
     ticket_names: { t1: "General" },
     event_name: checkoutEvent.name,
     timezone: "America/Denver",
-    event_url: "/acme/gala",
+    organizer: "acme",
+    event_slug: "gala",
   });
   expect(data.questions).toHaveLength(1);
   expect(data.quote.total_cents).toBe(4690);
