@@ -12,25 +12,18 @@ export type AppOptions = {
   peerIp?: (c: Context) => string | undefined;
 };
 
-const SESSION = "ts_session";
-const CSRF = "ts_csrf";
 const MAX_BODY = 1024 * 1024;
 const THIRTY_DAYS = 30 * 24 * 60 * 60;
 
-// Never forwarded to the API: credentials we manage ourselves, client-claimed IPs, hop-by-hop.
-const DROP_REQ = new Set([
-  "cookie",
-  "authorization",
-  "x-real-ip",
-  "x-forwarded-for",
-  "x-forwarded-host",
-  "x-forwarded-proto",
-  "forwarded",
-  "host",
-  "connection",
+// Only these client headers reach the API (plus authorization and x-real-ip, set by us).
+const ALLOW_REQ = new Set([
+  "content-type",
   "content-length",
-  "transfer-encoding",
-  "x-csrf-token",
+  "accept",
+  "accept-language",
+  "if-none-match",
+  "if-modified-since",
+  "user-agent",
 ]);
 const DROP_RES = new Set([
   "set-cookie",
@@ -45,8 +38,11 @@ const err = (c: Context, status: 400 | 403 | 404 | 413 | 502, code: string, mess
 
 const isLoopback = (ip: string) => /^127\./.test(ip) || ip === "::1" || /^::ffff:127\./i.test(ip);
 
-const safeEqual = (a: string, b: string) =>
-  a.length > 0 && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const safeEqual = (a: string, b: string) => {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length > 0 && x.length === y.length && timingSafeEqual(x, y);
+};
 
 function hasDotSegment(path: string, only: (s: string) => boolean): boolean {
   let decoded: string;
@@ -67,6 +63,9 @@ export function createApp(opts: AppOptions): Hono {
       (c.env as { server?: Bun.Server<unknown> } | undefined)?.server?.requestIP(c.req.raw)
         ?.address);
 
+  // __Host- prefix blocks cookie tossing from sibling subdomains; browsers reject it without Secure.
+  const SESSION = opts.secureCookies ? "__Host-ts_session" : "ts_session";
+  const CSRF = opts.secureCookies ? "__Host-ts_csrf" : "ts_csrf";
   const cookieBase = { path: "/", secure: opts.secureCookies } as const;
 
   // Client IP is X-Real-IP only when the peer is our own reverse proxy (loopback).
@@ -78,7 +77,7 @@ export function createApp(opts: AppOptions): Hono {
 
   function upstream(c: Context, url: string, withBody: boolean): Promise<Response> {
     const headers = new Headers();
-    for (const [k, v] of c.req.raw.headers) if (!DROP_REQ.has(k)) headers.set(k, v);
+    for (const [k, v] of c.req.raw.headers) if (ALLOW_REQ.has(k)) headers.set(k, v);
     const ip = clientIp(c);
     if (ip) headers.set("x-real-ip", ip);
     const token = getCookie(c, SESSION);
@@ -125,7 +124,7 @@ export function createApp(opts: AppOptions): Hono {
   app.use(async (c, next) => {
     const m = c.req.method;
     const cookie = getCookie(c, CSRF) ?? "";
-    if (m !== "GET" && m !== "HEAD" && m !== "OPTIONS") {
+    if (m !== "GET" && m !== "HEAD") {
       if (!safeEqual(c.req.header("x-csrf-token") ?? "", cookie)) {
         return err(c, 403, "csrf", "Missing or invalid CSRF token.");
       }

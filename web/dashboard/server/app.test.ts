@@ -17,7 +17,7 @@ afterEach(() => {
   for (const s of stops.splice(0)) s();
 });
 
-function fakeApi() {
+function fakeApi(opts: { loginFails?: boolean } = {}) {
   const calls: Call[] = [];
   const server = Bun.serve({
     port: 0,
@@ -31,12 +31,15 @@ function fakeApi() {
         ua: req.headers.get("user-agent"),
         cookie: req.headers.get("cookie"),
       });
+      if (u.pathname === "/v1/auth/login" && opts.loginFails)
+        return Response.json(
+          { error: { code: "invalid_credentials", message: "no" } },
+          { status: 401 },
+        );
       if (u.pathname === "/v1/auth/login")
         return Response.json({ session_token: "SECRET", user: { id: "u1" } });
       if (u.pathname === "/v1/auth/signup")
         return Response.json({ session_token: "SECRET", user: { id: "u1" } }, { status: 201 });
-      if (u.pathname === "/v1/auth/bad")
-        return Response.json({ error: { code: "nope", message: "no" } }, { status: 401 });
       return Response.json({ ok: true });
     },
   });
@@ -66,13 +69,14 @@ const post = (token: string, headers: Record<string, string> = {}, body = "{}") 
 test("strips session token and sets HttpOnly cookie", async () => {
   const api = fakeApi();
   const app = mk(api, { secureCookies: true });
-  const res = await app.request("/session/login", post(await csrf(app)));
+  const t = await csrf(app);
+  const res = await app.request("/session/login", post(t, { cookie: `__Host-ts_csrf=${t}` }));
   const body = await res.text();
   expect(res.status).toBe(200);
   expect(body).not.toContain("SECRET");
   expect(body).toContain("u1");
   const set = res.headers.get("set-cookie") ?? "";
-  expect(set).toContain("ts_session=SECRET");
+  expect(set).toContain("__Host-ts_session=SECRET");
   expect(set).toContain("HttpOnly");
   expect(set).toContain("Secure");
   expect(set).toContain("SameSite=Lax");
@@ -86,7 +90,6 @@ test("signup keeps 201; API errors pass through unchanged without a cookie", asy
   const s = await app.request("/session/signup", post(t));
   expect(s.status).toBe(201);
   expect(s.headers.get("set-cookie")).toContain("ts_session=SECRET");
-  // /session/login only maps to /auth/login, so exercise the error path with a failing upstream.
   const down = mk({ url: "http://127.0.0.1:1/v1" });
   const r = await down.request("/session/login", post(await csrf(down)));
   expect(r.status).toBe(502);
@@ -197,4 +200,88 @@ test("static: files, SPA fallback, no dotfiles, security headers", async () => {
   expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
   const proxied = await mk(fakeApi()).request("/api/me");
   expect(proxied.headers.get("x-frame-options")).toBe("DENY");
+});
+
+test("login API error passes through unchanged with no cookie", async () => {
+  const app = mk(fakeApi({ loginFails: true }));
+  const res = await app.request("/session/login", post(await csrf(app)));
+  expect(res.status).toBe(401);
+  expect(await res.json()).toEqual({ error: { code: "invalid_credentials", message: "no" } });
+  expect(res.headers.get("set-cookie")).toBeNull();
+});
+
+test("logout with the API down still clears the cookie", async () => {
+  const app = mk({ url: "http://127.0.0.1:1/v1" });
+  const t = await csrf(app);
+  const res = await app.request(
+    "/session/logout",
+    post(t, { cookie: `ts_csrf=${t}; ts_session=abc` }),
+  );
+  expect(res.status).toBe(204);
+  expect(res.headers.get("set-cookie")).toContain("ts_session=;");
+});
+
+test("OPTIONS needs a CSRF token too", async () => {
+  const api = fakeApi();
+  const res = await mk(api).request("/api/me", { method: "OPTIONS" });
+  expect(res.status).toBe(403);
+  expect(api.calls.length).toBe(0);
+});
+
+test("secure mode reads only the __Host- cookies", async () => {
+  const api = fakeApi();
+  const app = mk(api, { secureCookies: true });
+  const set = (await app.request("/")).headers.get("set-cookie") ?? "";
+  expect(set).toContain("__Host-ts_csrf=");
+  // An attacker-planted ts_csrf / ts_session from a sibling subdomain is ignored.
+  const bad = await app.request("/api/x", post("evil", { cookie: "ts_csrf=evil" }));
+  expect(bad.status).toBe(403);
+  await app.request("/api/me", {
+    headers: { cookie: "ts_session=attacker; __Host-ts_session=real" },
+  });
+  expect(api.calls[0]?.auth).toBe("Bearer real");
+});
+
+test("non-ASCII CSRF mismatch is a 403, not a 500", async () => {
+  const app = mk(fakeApi());
+  const res = await app.request("/api/x", post("é", { cookie: "ts_csrf=a" }));
+  expect(res.status).toBe(403);
+});
+
+test("only allowlisted request headers reach the API", async () => {
+  const seen: Record<string, string>[] = [];
+  const server = Bun.serve({
+    port: 0,
+    fetch(req) {
+      seen.push(Object.fromEntries(req.headers));
+      return Response.json({});
+    },
+  });
+  stops.push(() => server.stop());
+  const app = mk({ url: `http://localhost:${server.port}/v1` });
+  await app.request("/api/me", {
+    headers: {
+      cookie: "ts_session=abc",
+      "x-http-method-override": "DELETE",
+      "x-forwarded-host": "evil",
+      "x-original-url": "/admin",
+      forwarded: "for=1.1.1.1",
+      "proxy-authorization": "x",
+      "x-custom": "1",
+      accept: "application/json",
+    },
+  });
+  const h = seen[0] ?? {};
+  for (const k of [
+    "x-http-method-override",
+    "x-forwarded-host",
+    "x-original-url",
+    "forwarded",
+    "proxy-authorization",
+    "x-custom",
+    "cookie",
+  ])
+    expect(h[k]).toBeUndefined();
+  expect(h.accept).toBe("application/json");
+  expect(h.authorization).toBe("Bearer abc");
 });
