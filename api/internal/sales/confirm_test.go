@@ -8,9 +8,12 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stripe/stripe-go/v87"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
@@ -310,6 +313,10 @@ func TestPaidOrderThatCantBeSoldIsCancelledAndRefunded(t *testing.T) {
 		"event no longer live": {after: func(t *testing.T, _ *sales.Service, f fixture, _ *payments.Fake, _ sales.Checkout) {
 			f.exec(t, `update events set status = 'cancelled' where id = $1`, f.event) // the hold is still live
 		}},
+		"event over": {after: func(t *testing.T, _ *sales.Service, f fixture, _ *payments.Fake, c sales.Checkout) {
+			expire(t, f, c.ID)
+			f.exec(t, `update events set starts_at = now() - interval '2 hours', ends_at = now() - interval '1 hour' where id = $1`, f.event)
+		}},
 		"ticket type deleted": {after: func(t *testing.T, _ *sales.Service, f fixture, _ *payments.Fake, c sales.Checkout) {
 			expire(t, f, c.ID)
 			f.exec(t, `delete from ticket_types where id = $1`, f.general)
@@ -461,3 +468,103 @@ func (r *refundRecorder) calls() []plugin.RefundInput {
 	defer r.mu.Unlock()
 	return append([]plugin.RefundInput(nil), r.inputs...)
 }
+
+// A replayed event changes nothing, even when replaying it would: here an
+// older account.updated arriving again after a newer one.
+func TestReplayedAccountUpdateChangesNothing(t *testing.T) {
+	s, _ := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	updated := func(id, object string, charges bool) stripe.Event {
+		raw, _ := json.Marshal(map[string]any{"id": object, "object": "account", "charges_enabled": charges, "details_submitted": true})
+		return stripe.Event{ID: id, Type: stripe.EventTypeAccountUpdated, Account: "acct_fake1", Data: &stripe.EventData{Raw: raw}}
+	}
+	charges := func() bool {
+		var on bool
+		f.must(t, f.owner.QueryRow(ctx, `select stripe_charges_enabled from organizers where id = $1`, f.org).Scan(&on))
+		return on
+	}
+	f.must(t, s.HandleStripeEvent(ctx, updated("evt_on", "acct_fake1", true)))
+	f.must(t, s.HandleStripeEvent(ctx, updated("evt_off", "acct_fake1", false)))
+	f.must(t, s.HandleStripeEvent(ctx, updated("evt_on", "acct_fake1", true)))
+	if charges() {
+		t.Fatal("a replayed account.updated switched charges back on")
+	}
+	// An event about some other account's object is ignored.
+	f.must(t, s.HandleStripeEvent(ctx, updated("evt_other", "acct_fakeother", true)))
+	if charges() {
+		t.Fatal("account.updated for another object changed acme")
+	}
+}
+
+// Past Stripe's 24-hour idempotency window a retried refund finds the money
+// already returned. That completes the job.
+func TestRefundJobFinishesWhenStripeSaysAlreadyRefunded(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 1, price: 2500})
+	ctx := context.Background()
+	c, pi := paying(t, s, f, fake, sales.Details{Email: "late@example.com"}, sales.Item{TicketTypeID: f.general, Quantity: 1})
+	expire(t, f, c.ID)
+	f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
+	f.must(t, s.HandleStripeEvent(ctx, succeeded(pi.ID, "acct_fake1", c.Quote.TotalCents, 1)))
+	var payload []byte
+	f.must(t, f.owner.QueryRow(ctx, `select payload from jobs where kind = 'refund_payment'`).Scan(&payload))
+	fake.FailNext(plugin.ErrAlreadyRefunded)
+	f.must(t, sales.RefundPayment(s)(ctx, payload))
+	if _, _, st := f.orderOf(t, c.ID); st != "refunded" {
+		t.Fatalf("order %s, want refunded", st)
+	}
+	if n := f.count(t, `select count(*) from refunds where stripe_refund_id is null and status = 'requested'`) +
+		f.count(t, `select count(*) from jobs where kind = 'send_email'`); n != 2 {
+		t.Fatalf("%d of the refund row and the email, want both", n)
+	}
+	// Any other refusal is retried.
+	f.exec(t, `update orders set status = 'cancelled'`)
+	fake.FailNext(errors.New("stripe: refund: boom"))
+	if err := sales.RefundPayment(s)(ctx, payload); err == nil {
+		t.Fatal("a failed refund reported success")
+	}
+}
+
+// The order page is one statement whether the link is right or not, so its
+// timing doesn't say whether a code exists.
+func TestOrderPageIsOneStatementHitOrMiss(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	c, pi := paying(t, s, f, fake, sales.Details{}, sales.Item{TicketTypeID: f.general, Quantity: 1})
+	f.must(t, s.HandleStripeEvent(ctx, succeeded(pi.ID, "acct_fake1", c.Quote.TotalCents, 1)))
+	order, code, _ := f.orderOf(t, c.ID)
+	cfg := s.Pool.Config()
+	counter := &statements{}
+	cfg.ConnConfig.Tracer = counter
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	f.must(t, err)
+	t.Cleanup(pool.Close)
+	counted := *s
+	counted.Pool = pool
+	for name, try := range map[string][2]string{
+		"hit":          {code, sales.OrderToken(s.SecretKey, order)},
+		"wrong token":  {code, "wrong"},
+		"unknown code": {"TS-00000", "wrong"},
+	} {
+		counter.n.Store(0)
+		_, err := counted.Order(ctx, try[0], try[1])
+		if name == "hit" && err != nil || name != "hit" && !errors.Is(err, errNotFound) {
+			t.Errorf("%s: %v", name, err)
+		}
+		if n := counter.n.Load(); n != 1 {
+			t.Errorf("%s: %d statements, want 1", name, n)
+		}
+	}
+}
+
+// statements counts the queries a pool sends.
+type statements struct{ n atomic.Int64 }
+
+func (c *statements) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	c.n.Add(1)
+	return ctx
+}
+
+func (c *statements) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}

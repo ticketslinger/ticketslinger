@@ -3,8 +3,8 @@ package sales
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,52 +44,45 @@ var orderCode = regexp.MustCompile(`^TS-[0-9A-HJKMNP-TV-Z]{5}$`)
 
 // Order is the order with this code, for whoever holds its link's token.
 // An unknown code, an order without a link yet (pending) and a wrong token
-// are all ErrNotFound, and the token is checked in constant time.
+// are all ErrNotFound, and each is one statement (order_by_link), the same as
+// a hit: the time an answer takes doesn't say whether the code exists.
 func (s *Service) Order(ctx context.Context, code, token string) (OrderView, error) {
-	code = strings.ToUpper(code)
-	if !orderCode.MatchString(code) || token == "" {
+	if !orderCode.MatchString(strings.ToUpper(code)) || token == "" {
+		return OrderView{}, catalogue.ErrNotFound // no query: the format is public
+	}
+	hash := sha256.Sum256([]byte(token))
+	var out OrderView
+	var tickets []byte
+	e := &out.Event
+	err := s.Pool.QueryRow(ctx, `select * from order_by_link($1, $2)`, code, hash[:]).Scan(&out.Code, &out.Status, &out.Email,
+		&out.SubtotalCents, &out.DiscountCents, &out.TaxCents, &out.FeeCents, &out.TotalCents,
+		&e.Name, &e.Timezone, &e.VenueName, &e.VenueAddress, &e.StartsAt, &e.EndsAt, &e.Organizer, &tickets)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return OrderView{}, catalogue.ErrNotFound
 	}
-	var org *uuid.UUID
-	if err := s.Pool.QueryRow(ctx, `select order_scope($1)`, code).Scan(&org); err != nil {
+	if err != nil {
 		return OrderView{}, err
 	}
-	if org == nil {
-		return OrderView{}, catalogue.ErrNotFound
+	var rows []struct {
+		ID             uuid.UUID `json:"id"`
+		TicketTypeName string    `json:"ticket_type_name"`
+		AttendeeName   string    `json:"attendee_name"`
+		Status         string    `json:"status"`
+		Secret         string    `json:"secret"` // hex
 	}
-	var out OrderView
-	err := system.Run(ctx, s.Pool, *org, func(tx pgx.Tx) error {
-		var id uuid.UUID
-		var hash []byte
-		e := &out.Event
-		err := tx.QueryRow(ctx, `select o.id, o.magic_token_hash, o.code, o.status, o.email, o.subtotal_cents, o.discount_cents, o.tax_cents,
-				o.fee_cents, o.total_cents, e.name, e.timezone, e.venue_name, e.venue_address, e.starts_at, e.ends_at, g.name
-			from orders o join events e on e.id = o.event_id join organizers g on g.id = o.organizer_id where o.code = $1`, code).
-			Scan(&id, &hash, &out.Code, &out.Status, &out.Email, &out.SubtotalCents, &out.DiscountCents, &out.TaxCents,
-				&out.FeeCents, &out.TotalCents, &e.Name, &e.Timezone, &e.VenueName, &e.VenueAddress, &e.StartsAt, &e.EndsAt, &e.Organizer)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return catalogue.ErrNotFound
-		}
+	if err := json.Unmarshal(tickets, &rows); err != nil {
+		return OrderView{}, err
+	}
+	out.Tickets = make([]OrderTicket, len(rows))
+	for i, r := range rows {
+		secret, err := hex.DecodeString(r.Secret)
 		if err != nil {
-			return err
+			return OrderView{}, err
 		}
-		given := sha256.Sum256([]byte(token))
-		if len(hash) != len(given) || subtle.ConstantTimeCompare(hash, given[:]) != 1 {
-			return catalogue.ErrNotFound
-		}
-		rows, _ := tx.Query(ctx, `select t.id, tt.name, t.attendee_name, t.status, t.secret
-			from tickets t join ticket_types tt on tt.id = t.ticket_type_id where t.order_id = $1 order by t.id`, id)
-		var t OrderTicket
-		var secret []byte
-		out.Tickets = []OrderTicket{}
-		_, err = pgx.ForEachRow(rows, []any{&t.ID, &t.TicketTypeName, &t.AttendeeName, &t.Status, &secret}, func() error {
-			t.QR = base64.RawURLEncoding.EncodeToString(secret)
-			out.Tickets = append(out.Tickets, t)
-			return nil
-		})
-		return err
-	})
-	return out, err
+		out.Tickets[i] = OrderTicket{ID: r.ID, TicketTypeName: r.TicketTypeName, AttendeeName: r.AttendeeName, Status: r.Status,
+			QR: base64.RawURLEncoding.EncodeToString(secret)}
+	}
+	return out, nil
 }
 
 // RefundPayment handles RefundPaymentJob: a full refund, the platform's fee
@@ -121,8 +114,13 @@ func RefundPayment(s *Service) jobs.Handler {
 		}
 		refund, err := s.Payments.Refund(ctx, plugin.RefundInput{Account: account, PaymentIntentID: intent, RefundApplicationFee: true,
 			IdempotencyKey: "refund-" + j.Order.String()})
-		if err != nil {
+		var refundID *string // unknown when Stripe says it's already refunded
+		switch {
+		case errors.Is(err, plugin.ErrAlreadyRefunded):
+		case err != nil:
 			return err
+		default:
+			refundID = &refund
 		}
 		return system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) error {
 			var email, event string
@@ -134,7 +132,7 @@ func RefundPayment(s *Service) jobs.Handler {
 				return nil // another run got here first
 			}
 			if _, err := tx.Exec(ctx, `insert into refunds (organizer_id, payment_id, amount_cents, fee_refunded, stripe_refund_id, status, reason)
-				values ($1, $2, $3, true, $4, 'requested', 'late_payment')`, j.Organizer, payment, amount, refund); err != nil {
+				values ($1, $2, $3, true, $4, 'requested', 'late_payment')`, j.Organizer, payment, amount, refundID); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(ctx, `update orders set status = 'refunded' where id = $1`, j.Order); err != nil {

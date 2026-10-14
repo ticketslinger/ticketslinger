@@ -2,7 +2,14 @@
 // build registers only open implementations.
 package plugin
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrAlreadyRefunded: the payment has no money left to refund. A refund
+// retried after the provider's idempotency window ends here, and that is done.
+var ErrAlreadyRefunded = errors.New("payments: already refunded")
 
 type AccountStatus struct{ ChargesEnabled, DetailsSubmitted bool }
 

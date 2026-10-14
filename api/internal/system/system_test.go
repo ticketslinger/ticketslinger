@@ -334,3 +334,33 @@ func systemRun(ctx context.Context, pool *pgxpool.Pool, org uuid.UUID, sql strin
 		return err
 	})
 }
+
+// A confirmation locks the questions its answers name; ts_system can take
+// that lock but never write a question.
+func TestSystemCanLockButNotEditQuestions(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	a, _, _ := seedOrganizer(t, pool, "org-a")
+	b, _, _ := seedOrganizer(t, pool, "org-b")
+	err := system.Run(ctx, pool, a, func(tx pgx.Tx) error {
+		var n int
+		err := tx.QueryRow(ctx, `select count(*) from (select id from questions for key share) q`).Scan(&n)
+		if err == nil && n != 2 {
+			t.Errorf("system locked %d questions, want A's 2", n)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatalf("lock questions: %v", err)
+	}
+	for _, org := range []uuid.UUID{a, b} {
+		err = systemRun(ctx, pool, a, `update questions set position = position + 10 where organizer_id = $1`, org)
+		var pg *pgconn.PgError
+		if org == a && (!errors.As(err, &pg) || pg.Code != "42501") {
+			t.Errorf("system moving its own question: %v, want 42501", err)
+		}
+		if org == b && err != nil {
+			t.Errorf("system touching B's questions: %v, want 0 rows silently", err)
+		}
+	}
+}

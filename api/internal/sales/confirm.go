@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
@@ -84,22 +83,18 @@ func (s *Service) confirmOrder(ctx context.Context, tx pgx.Tx, org, orderID uuid
 	if err != nil {
 		return false, err
 	}
-	no, err := stillSellable(ctx, tx, o.event, o.promo, q, links, sizes, except)
+	no, err := stillSellable(ctx, tx, o.event, o.promo, q, d, links, sizes, except)
 	if err != nil {
 		return false, err
-	}
-	if no == nil {
-		// A savepoint: a question deleted since the buyer answered it fails
-		// the answer's foreign key (23503), and that is a refusal, not an error.
-		if no, err = cut(ctx, tx, org, o.event, orderID, q, d); err != nil {
-			return false, err
-		}
 	}
 	if no != nil {
 		if o.total == 0 {
 			return false, no.err
 		}
 		return false, s.cancelLate(ctx, tx, org, orderID, checkout, no.reason)
+	}
+	if err := cut(ctx, tx, org, o.event, orderID, q, d); err != nil {
+		return false, err
 	}
 	if o.promo != nil {
 		if _, err := tx.Exec(ctx, `update promo_codes set used_count = used_count + 1 where id = $1`, *o.promo); err != nil {
@@ -123,18 +118,23 @@ type unsellable struct {
 }
 
 // stillSellable checks, under the quota locks, that the order's tickets can
-// still be sold: the event is live, every ticket type is still there and counted
-// by a quota, the quotas have room (leaving out this order's own checkout),
-// and the promo code has a use left. The promo row is locked after the
-// quotas, as CreateCheckout locks it. nil means it can.
-func stillSellable(ctx context.Context, tx pgx.Tx, event uuid.UUID, promo *uuid.UUID, q pricing.Quote, links map[uuid.UUID][]uuid.UUID,
-	sizes map[uuid.UUID]int, except uuid.UUID) (*unsellable, error) {
-	var live bool
-	if err := tx.QueryRow(ctx, `select status = 'live' from events where id = $1`, event).Scan(&live); err != nil {
+// still be sold: the event is live and not over, every ticket type is still
+// there and counted by a quota, the quotas have room (leaving out this
+// order's own checkout), every question answered is still there, and the
+// promo code has a use left. The questions (FOR KEY SHARE: DeleteQuestion
+// locks the event, then the question, never a quota) and the promo row are
+// locked after the quotas, as CreateCheckout locks the promo. nil means it can.
+func stillSellable(ctx context.Context, tx pgx.Tx, event uuid.UUID, promo *uuid.UUID, q pricing.Quote, d Details,
+	links map[uuid.UUID][]uuid.UUID, sizes map[uuid.UUID]int, except uuid.UUID) (*unsellable, error) {
+	var live, running bool
+	if err := tx.QueryRow(ctx, `select status = 'live', statement_timestamp() < ends_at from events where id = $1`, event).Scan(&live, &running); err != nil {
 		return nil, err
 	}
 	if !live {
 		return &unsellable{"event_not_live", catalogue.ErrNotFound}, nil
+	}
+	if !running {
+		return &unsellable{"event_over", errEventOver}, nil
 	}
 	need := map[uuid.UUID]int{}
 	for _, t := range q.Tickets {
@@ -152,6 +152,22 @@ func stillSellable(ctx context.Context, tx pgx.Tx, event uuid.UUID, promo *uuid.
 	} else if err != nil {
 		return nil, err
 	}
+	var asked []uuid.UUID
+	for _, a := range d.Answers {
+		if !slices.Contains(asked, a.QuestionID) {
+			asked = append(asked, a.QuestionID)
+		}
+	}
+	if len(asked) > 0 {
+		var left int
+		if err := tx.QueryRow(ctx, `select count(*) from (select id from questions where event_id = $1 and id = any($2) for key share) q`,
+			event, asked).Scan(&left); err != nil {
+			return nil, err
+		}
+		if left != len(asked) {
+			return &unsellable{"question_gone", errUnknownType}, nil
+		}
+	}
 	if promo != nil {
 		var maxUses *int
 		var used int
@@ -167,28 +183,8 @@ func stillSellable(ctx context.Context, tx pgx.Tx, event uuid.UUID, promo *uuid.
 }
 
 // cut writes the order's tickets, one per line of the quote in item order,
-// and its answers, inside a savepoint.
-func cut(ctx context.Context, tx pgx.Tx, org, event, orderID uuid.UUID, q pricing.Quote, d Details) (*unsellable, error) {
-	sp, err := tx.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	err = cutIn(ctx, sp, org, event, orderID, q, d)
-	var pg *pgconn.PgError
-	if errors.As(err, &pg) && pg.Code == "23503" {
-		if err := sp.Rollback(ctx); err != nil {
-			return nil, err
-		}
-		slog.WarnContext(ctx, "order refers to something deleted since", "order", orderID, "constraint", pg.ConstraintName)
-		return &unsellable{"catalogue_changed", errUnknownType}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return nil, sp.Commit(ctx)
-}
-
-func cutIn(ctx context.Context, tx pgx.Tx, org, event, orderID uuid.UUID, q pricing.Quote, d Details) error {
+// and its answers.
+func cut(ctx context.Context, tx pgx.Tx, org, event, orderID uuid.UUID, q pricing.Quote, d Details) error {
 	n := len(q.Tickets)
 	secrets, names, ticketTypes := make([][]byte, n), make([]string, n), make([]uuid.UUID, n)
 	price, disc, tax, fee := make([]int64, n), make([]int64, n), make([]int64, n), make([]int64, n)

@@ -7,7 +7,7 @@ test("audit actions read as plain words", () => {
   expect(say("ticket_type.reordered")).toBe("Ticket type reordered");
   expect(say("quota.deleted")).toBe("Capacity deleted");
   expect(say("api_key.revoked")).toBe("API key revoked");
-  expect(say("order.cancelled_late")).toBe("Order cancelled and refunded");
+  expect(say("order.cancelled_late")).toBe("Order cancelled (refund queued)");
   expect(say("seat.teleported")).toBe("seat.teleported");
 });
 

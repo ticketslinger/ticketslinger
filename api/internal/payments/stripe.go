@@ -4,6 +4,7 @@ package payments
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -108,6 +109,10 @@ func (s *Stripe) Refund(ctx context.Context, in plugin.RefundInput) (string, err
 	p.SetStripeAccount(in.Account)
 	p.SetIdempotencyKey(in.IdempotencyKey)
 	r, err := s.c.V1Refunds.Create(ctx, p)
+	var se *stripe.Error
+	if errors.As(err, &se) && se.Code == stripe.ErrorCodeChargeAlreadyRefunded {
+		return "", plugin.ErrAlreadyRefunded
+	}
 	if err != nil {
 		return "", fmt.Errorf("stripe: refund: %w", err)
 	}

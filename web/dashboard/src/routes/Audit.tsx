@@ -19,7 +19,7 @@ const DONE: Record<string, string> = {
   deleted: "deleted",
   revoked: "revoked",
   reordered: "reordered",
-  cancelled_late: "cancelled and refunded",
+  cancelled_late: "cancelled (refund queued)",
 };
 
 /** "ticket_type.updated" → "Ticket type changed"; anything unfamiliar shows as it is. */
