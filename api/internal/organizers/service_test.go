@@ -3,6 +3,8 @@ package organizers_test
 import (
 	"context"
 	"errors"
+	"github.com/jackc/pgx/v5/pgconn"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -56,5 +58,21 @@ func TestCreateListResolveAudit(t *testing.T) {
 	})
 	if err != nil || n != 1 {
 		t.Fatalf("audit rows = %d, %v", n, err)
+	}
+}
+
+func TestDBRefusesBadSlugAndName(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.New(t)
+	ann := newUser(t, pool, "ann@example.com")
+	for _, c := range [][2]string{{"A", "ACME"}, {"A", "ab"}, {"A", "a--b"}, {"", "acme"}, {strings.Repeat("n", 121), "acme"}} {
+		err := db.WithUser(ctx, pool, ann, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `select create_organizer($1, $2)`, c[0], c[1])
+			return err
+		})
+		var pg *pgconn.PgError
+		if !errors.As(err, &pg) || pg.Code != "23514" {
+			t.Errorf("%q/%q: want check violation, got %v", c[0], c[1], err)
+		}
 	}
 }

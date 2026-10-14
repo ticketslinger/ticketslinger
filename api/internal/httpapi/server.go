@@ -6,8 +6,10 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
+	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -413,6 +415,12 @@ func (s *server) inOrganizer(ctx context.Context, slug string, roles []string, f
 	return err
 }
 
+var (
+	slugRE         = regexp.MustCompile(`^[a-z0-9](-?[a-z0-9])*$`)
+	errInvalidName = &apiError{422, "invalid_name", "Give your organizer a name of up to 120 characters."}
+	errInvalidSlug = &apiError{422, "invalid_slug", "Use 3 to 40 lowercase letters, numbers and single hyphens."}
+)
+
 func toOrganizer(o organizers.Organizer) Organizer {
 	return Organizer{Id: o.ID, Name: o.Name, Slug: o.Slug, Role: OrganizerRole(o.Role)}
 }
@@ -442,10 +450,16 @@ func (s *server) CreateOrganizer(ctx context.Context, req CreateOrganizerRequest
 		return nil, &apiError{403, "email_unverified", "Check your inbox and verify your email before creating an organizer."}
 	}
 	name := strings.TrimSpace(req.Body.Name)
-	if name == "" {
-		return nil, &apiError{422, "invalid_name", "Give your organizer a name."}
+	if n := utf8.RuneCountInString(name); n < 1 || n > 120 {
+		return nil, errInvalidName
+	}
+	if !slugRE.MatchString(req.Body.Slug) || len(req.Body.Slug) < 3 || len(req.Body.Slug) > 40 {
+		return nil, errInvalidSlug
 	}
 	o, err := s.Organizers.Create(ctx, u.ID, name, req.Body.Slug)
+	if errors.Is(err, organizers.ErrInvalid) {
+		return nil, errInvalidSlug
+	}
 	if errors.Is(err, organizers.ErrSlugTaken) {
 		return nil, &apiError{409, "slug_taken", "Someone already uses that web address. Try another."}
 	}

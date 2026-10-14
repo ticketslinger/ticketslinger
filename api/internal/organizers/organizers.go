@@ -17,6 +17,7 @@ import (
 var (
 	ErrSlugTaken = errors.New("organizers: slug taken")
 	ErrNotFound  = errors.New("organizers: not found")
+	ErrInvalid   = errors.New("organizers: invalid name or slug")
 )
 
 type Organizer struct {
@@ -50,6 +51,9 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, name, slug strin
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) && pg.Code == "23505" {
 		return Organizer{}, ErrSlugTaken
+	}
+	if errors.As(err, &pg) && pg.Code == "23514" { // CHECK backstop
+		return Organizer{}, ErrInvalid
 	}
 	if err != nil {
 		return Organizer{}, err

@@ -125,6 +125,7 @@ paths:
       parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Organizer" } } } }
+        "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/audit:
     get:

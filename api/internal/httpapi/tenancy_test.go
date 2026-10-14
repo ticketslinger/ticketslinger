@@ -76,3 +76,25 @@ func TestOrganizerEndpoints(t *testing.T) {
 		t.Fatalf("audit rows: %v", rows)
 	}
 }
+
+func TestCreateOrganizerValidation(t *testing.T) {
+	h := newHarness(t)
+	tok := h.signupVerified("owner@example.com")
+	cases := []struct{ name, name_, slug, code string }{
+		{"uppercase", "A", "ACME", "invalid_slug"},
+		{"mixed case", "A", "Acme-Co", "invalid_slug"},
+		{"too short", "A", "ab", "invalid_slug"},
+		{"too long", "A", strings.Repeat("a", 41), "invalid_slug"},
+		{"leading hyphen", "A", "-abc", "invalid_slug"},
+		{"trailing hyphen", "A", "abc-", "invalid_slug"},
+		{"double hyphen", "A", "a--bc", "invalid_slug"},
+		{"empty name", "  ", "acme", "invalid_name"},
+		{"long name", strings.Repeat("n", 121), "acme", "invalid_name"},
+	}
+	for _, c := range cases {
+		res := h.do(tok, "POST", "/v1/organizers", `{"name":"`+c.name_+`","slug":"`+c.slug+`"}`)
+		if res.StatusCode != 422 || h.errorCode(res) != c.code {
+			t.Errorf("%s: got %d %q, want 422 %s", c.name, res.StatusCode, h.errorCode(res), c.code)
+		}
+	}
+}
