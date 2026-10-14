@@ -142,3 +142,36 @@ func TestPaidOrderOverHTTP(t *testing.T) {
 	}
 	s.must(read("198.51.100.4", code, secret), 200)
 }
+
+// Stripe sends account.application.deauthorized in the account's own API
+// version, whatever the endpoint asks for. That one type is taken in any
+// version, signature still checked, and disconnects; every other type in
+// another version is still refused.
+func TestDeauthorizedInAnyAPIVersion(t *testing.T) {
+	s := newShop(t, nil)
+	owner := testdb.Owner(t, s.pool)
+	ctx := context.Background()
+	older := func(b []byte) []byte {
+		return bytes.Replace(b, []byte(stripe.APIVersion), []byte("2026-07-29.dahlia"), 1)
+	}
+	deauth := older(event("evt_deauth", "account.application.deauthorized", map[string]any{"id": "ca_test", "object": "application"}))
+	disconnected := func() bool {
+		t.Helper()
+		var d bool
+		if err := owner.QueryRow(ctx, `select stripe_disconnected_at is not null from organizers where slug = 'acme'`).Scan(&d); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	if res := s.webhook(deauth, "whsec_other", time.Now()); res.StatusCode != 400 || s.errorCode(res) != "bad_signature" || disconnected() {
+		t.Fatalf("forged deauthorize: %d %q, disconnected %v", res.StatusCode, s.errorCode(res), disconnected())
+	}
+	pi := older(event("evt_pi", "payment_intent.succeeded", map[string]any{"id": "pi_1", "object": "payment_intent"}))
+	if res := s.webhook(pi, webhookSecret, time.Now()); res.StatusCode != 400 || s.errorCode(res) != "bad_signature" {
+		t.Fatalf("payment_intent.succeeded in an older version: %d %q, want 400", res.StatusCode, s.errorCode(res))
+	}
+	s.must(s.webhook(deauth, webhookSecret, time.Now()), 200)
+	if !disconnected() {
+		t.Fatal("deauthorize in an older version didn't disconnect")
+	}
+}

@@ -124,6 +124,37 @@ func TestLoadStripe(t *testing.T) {
 	}
 }
 
+func TestLoadStripeClientID(t *testing.T) {
+	t.Setenv("TS_DATABASE_URL", "postgres://x")
+	t.Setenv("TS_STRIPE_SECRET_KEY", "sk_test_abc")
+	t.Setenv("TS_STRIPE_PUBLISHABLE_KEY", "pk_test_abc")
+	t.Setenv("TS_STRIPE_WEBHOOK_SECRET", "whsec_abc")
+	t.Setenv("TS_STRIPE_CLIENT_ID", "")
+	if c, err := Load(); err != nil || c.StripeClientID != "" {
+		t.Fatalf("unset: %q %v", c.StripeClientID, err)
+	}
+	t.Setenv("TS_STRIPE_CLIENT_ID", "ca_ABC123def")
+	if c, err := Load(); err != nil || c.StripeClientID != "ca_ABC123def" {
+		t.Fatalf("set: %q %v", c.StripeClientID, err)
+	}
+	for _, bad := range []string{"ABC123def", "pk_test_SecretLooking", "ca_", "ca_has space", "ca_abc\n"} {
+		t.Setenv("TS_STRIPE_CLIENT_ID", bad)
+		_, err := Load()
+		if err == nil {
+			t.Fatalf("%q: expected an error", bad)
+		}
+		if len(bad) > 3 && strings.Contains(err.Error(), bad) {
+			t.Fatalf("%q: error %q repeats the value", bad, err)
+		}
+	}
+	t.Setenv("TS_STRIPE_CLIENT_ID", "ca_ABC123def")
+	t.Setenv("TS_STRIPE_SECRET_KEY", "")
+	t.Setenv("TS_STRIPE_PUBLISHABLE_KEY", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("a client id without a secret key: expected an error")
+	}
+}
+
 func TestLoadTurnstile(t *testing.T) {
 	t.Setenv("TS_DATABASE_URL", "postgres://x")
 	t.Setenv("TS_TURNSTILE_SECRET", "")

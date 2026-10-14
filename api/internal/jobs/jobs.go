@@ -141,9 +141,9 @@ func (w *Worker) handle(ctx context.Context, kind string, payload []byte) (err e
 
 const sweepBatch = 1000
 
-// Sweep deletes expired sessions, webauthn challenges, email tokens and
-// idempotency keys, failed sign-in counts untouched for a day, and old
-// abandoned checkouts, a batch at a time. Every step runs; the errors
+// Sweep deletes expired sessions, webauthn challenges, email tokens,
+// idempotency keys and Stripe link states, failed sign-in counts untouched
+// for a day, and old abandoned checkouts, a batch at a time. Every step runs; the errors
 // come back joined.
 func Sweep(ctx context.Context, pool *pgxpool.Pool) error {
 	var errs []error
@@ -165,14 +165,17 @@ func Sweep(ctx context.Context, pool *pgxpool.Pool) error {
 			}
 		}
 	}
-	for {
-		var n int
-		if err := pool.QueryRow(ctx, `select purge_expired_checkouts($1)`, sweepBatch).Scan(&n); err != nil {
-			errs = append(errs, err)
-			break
-		}
-		if n < sweepBatch {
-			break
+	// Tenant tables the sweep can't see through RLS purge through a function.
+	for _, fn := range []string{`select purge_expired_checkouts($1)`, `select purge_expired_link_states($1)`} {
+		for {
+			var n int
+			if err := pool.QueryRow(ctx, fn, sweepBatch).Scan(&n); err != nil {
+				errs = append(errs, err)
+				break
+			}
+			if n < sweepBatch {
+				break
+			}
 		}
 	}
 	return errors.Join(errs...)

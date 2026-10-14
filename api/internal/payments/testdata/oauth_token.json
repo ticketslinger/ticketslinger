@@ -1,0 +1,9 @@
+{
+  "access_token": "sk_test_AccessTokenNeverKept",
+  "livemode": false,
+  "refresh_token": "rt_RefreshTokenNeverKept",
+  "scope": "read_write",
+  "stripe_publishable_key": "pk_test_LinkedAccount",
+  "stripe_user_id": "acct_linked1",
+  "token_type": "bearer"
+}

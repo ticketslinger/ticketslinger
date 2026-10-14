@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -30,7 +31,10 @@ type Config struct {
 	StripeSecretKey      string // TS_STRIPE_SECRET_KEY: sk_test_, sk_live_ or a restricted rk_ key
 	StripePublishableKey string // TS_STRIPE_PUBLISHABLE_KEY: pk_, same mode; required with a secret key
 	StripeWebhookSecret  string // TS_STRIPE_WEBHOOK_SECRET: whsec_; required with a secret key
-	StorefrontURL        string // TS_STOREFRONT_URL
+	// StripeClientID turns on linking existing Stripe accounts (Connect
+	// OAuth). Optional; needs a secret key.
+	StripeClientID string // TS_STRIPE_CLIENT_ID: ca_
+	StorefrontURL  string // TS_STOREFRONT_URL
 	// Cloudflare Turnstile on sign-up, repeated failed sign-ins and checkouts. Off when the secret is unset.
 	TurnstileSecret    string // TS_TURNSTILE_SECRET
 	TurnstileVerifyURL string // TS_TURNSTILE_VERIFY_URL, Cloudflare's siteverify by default
@@ -49,6 +53,7 @@ func Load() (Config, error) {
 		StripeSecretKey:      os.Getenv("TS_STRIPE_SECRET_KEY"),
 		StripePublishableKey: os.Getenv("TS_STRIPE_PUBLISHABLE_KEY"),
 		StripeWebhookSecret:  os.Getenv("TS_STRIPE_WEBHOOK_SECRET"),
+		StripeClientID:       os.Getenv("TS_STRIPE_CLIENT_ID"),
 
 		TurnstileSecret:    os.Getenv("TS_TURNSTILE_SECRET"),
 		TurnstileVerifyURL: env("TS_TURNSTILE_VERIFY_URL", "https://challenges.cloudflare.com/turnstile/v0/siteverify"),
@@ -108,15 +113,23 @@ func intEnv(k string, def, hi int) (int, error) {
 	return n, nil
 }
 
+var clientIDRE = regexp.MustCompile(`^ca_[A-Za-z0-9]{1,250}$`)
+
 // checkStripe checks the Stripe keys' shapes. Errors never repeat a key.
 func checkStripe(c Config) error {
 	sk, pk, wh := c.StripeSecretKey, c.StripePublishableKey, c.StripeWebhookSecret
 	if wh != "" && !strings.HasPrefix(wh, "whsec_") {
 		return errors.New("TS_STRIPE_WEBHOOK_SECRET must start with whsec_")
 	}
+	if id := c.StripeClientID; id != "" && !clientIDRE.MatchString(id) {
+		return errors.New("TS_STRIPE_CLIENT_ID must be a Connect client id: ca_ followed by letters and digits")
+	}
 	if sk == "" {
 		if pk != "" {
 			return errors.New("TS_STRIPE_PUBLISHABLE_KEY is set without TS_STRIPE_SECRET_KEY")
+		}
+		if c.StripeClientID != "" {
+			return errors.New("TS_STRIPE_CLIENT_ID is set without TS_STRIPE_SECRET_KEY")
 		}
 		return nil
 	}

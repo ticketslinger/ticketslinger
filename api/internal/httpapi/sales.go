@@ -2,33 +2,60 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/oapi-codegen/nullable"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
+	"github.com/ticketslinger/ticketslinger/api/internal/db"
 	"github.com/ticketslinger/ticketslinger/api/internal/organizers"
+	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 	"github.com/ticketslinger/ticketslinger/api/internal/ratelimit"
 	"github.com/ticketslinger/ticketslinger/api/internal/sales"
 )
 
-// providerError logs what the payment provider said and answers 503. The
-// provider's errors never carry our keys.
+// providerError logs what the payment provider said and answers 503:
+// payments_refused when it answered no, payments_unavailable otherwise. The
+// provider's errors carry only its status, type, code and request id, never
+// keys, client secrets or tokens.
 func providerError(ctx context.Context, op string, err error) error {
 	slog.ErrorContext(ctx, "payment provider", "op", op, "err", err)
+	if errors.Is(err, plugin.ErrRefused) {
+		return errPaymentsRefused
+	}
 	return errPaymentsUnavailable
 }
 
+// accountInUse: a write would make one Stripe account live for two organizers.
+func accountInUse(err error) bool {
+	var pe *pgconn.PgError
+	return errors.As(err, &pe) && pe.Code == "23505" && pe.ConstraintName == "organizers_stripe_account_live"
+}
+
 func (s *server) paymentsStatus(ctx context.Context, tx pgx.Tx, org organizers.Organizer) (PaymentsStatus, error) {
-	st := PaymentsStatus{Provider: PaymentsStatusProviderNone}
+	st := PaymentsStatus{Provider: PaymentsStatusProviderNone, LinkMethod: nullable.NewNullNullable[LinkMethod]()}
 	if s.Payments != nil {
 		st.Provider = PaymentsStatusProvider(s.Payments.Name())
+		// The test provider always links; Stripe needs the platform's OAuth client id.
+		st.CanLinkExisting = st.Provider == PaymentsStatusProviderTest || s.Config.StripeClientID != ""
 	}
-	err := tx.QueryRow(ctx, `select stripe_account_id is not null, stripe_charges_enabled, stripe_details_submitted from organizers where id = $1`, org.ID).
-		Scan(&st.Connected, &st.ChargesEnabled, &st.DetailsSubmitted)
+	var method *string
+	err := tx.QueryRow(ctx, `select stripe_account_id is not null and stripe_disconnected_at is null, stripe_disconnected_at is not null,
+		stripe_charges_enabled, stripe_details_submitted, stripe_link_method from organizers where id = $1`, org.ID).
+		Scan(&st.Connected, &st.Disconnected, &st.ChargesEnabled, &st.DetailsSubmitted, &method)
+	if method != nil {
+		st.LinkMethod.Set(LinkMethod(*method))
+	}
 	return st, err
 }
 
@@ -44,6 +71,10 @@ func (s *server) GetPayments(ctx context.Context, req GetPaymentsRequestObject) 
 	return GetPayments200JSONResponse(out), nil
 }
 
+// paymentsWrite is who may change how an organizer takes payments: an owner
+// or admin, in person.
+var paymentsWrite = Access{Roles: ownerAdmin, Write: true, SessionOnly: true}
+
 // ConnectPayments creates the organizer's Stripe account once and hands back
 // an onboarding link. The network calls sit inside the transaction on
 // purpose: the organizer row lock is what makes two clicks produce one
@@ -51,20 +82,40 @@ func (s *server) GetPayments(ctx context.Context, req GetPaymentsRequestObject) 
 // so foreign-key checks (FOR KEY SHARE) from other writes to this organizer
 // don't wait on Stripe. stripe_account_id is a unique column, so writing it
 // takes the stronger lock; that happens last, after both Stripe calls.
+//
+// An account created here and later disconnected is switched back on, not
+// replaced. The create's idempotency key carries stripe_create_attempt:
+// Stripe replays a refusal under the same key for 24 hours, so after a
+// definite refusal the next try uses a new key. Anything short of a refusal
+// (no answer, a 5xx) may have made the account, so the key stays and a
+// retry gets that same account back.
 func (s *server) ConnectPayments(ctx context.Context, req ConnectPaymentsRequestObject) (ConnectPaymentsResponseObject, error) {
 	var link string
-	var linkErr error
-	err := s.inOrganizer(ctx, req.Organizer, Access{Roles: ownerAdmin, Write: true, SessionOnly: true}, func(org organizers.Organizer, tx pgx.Tx) error {
+	var linkErr, createErr error
+	err := s.inOrganizer(ctx, req.Organizer, paymentsWrite, func(org organizers.Organizer, tx pgx.Tx) error {
 		if s.Payments == nil {
 			return errPaymentsNotConfigured
 		}
-		var account *string
-		if err := tx.QueryRow(ctx, `select stripe_account_id from organizers where id = $1 for no key update`, org.ID).Scan(&account); err != nil {
+		var account, method *string
+		var disconnected bool
+		var attempt int
+		if err := tx.QueryRow(ctx, `select stripe_account_id, stripe_link_method, stripe_disconnected_at is not null, stripe_create_attempt
+			from organizers where id = $1 for no key update`, org.ID).Scan(&account, &method, &disconnected, &attempt); err != nil {
 			return err
 		}
-		created := account == nil
+		linked := method != nil && *method == "linked"
+		if linked && !disconnected {
+			return errAlreadyConnected
+		}
+		created := account == nil || linked
 		if created {
-			id, err := s.Payments.CreateAccount(ctx, "acct-"+org.ID.String())
+			id, err := s.Payments.CreateAccount(ctx, fmt.Sprintf("acct-%s-%d", org.ID, attempt))
+			if errors.Is(err, plugin.ErrRefused) {
+				// Commit only this, so the next try gets past the refusal.
+				createErr = err
+				_, err = tx.Exec(ctx, `update organizers set stripe_create_attempt = stripe_create_attempt + 1 where id = $1`, org.ID)
+				return err
+			}
 			if err != nil {
 				return providerError(ctx, "create account", err)
 			}
@@ -73,10 +124,16 @@ func (s *server) ConnectPayments(ctx context.Context, req ConnectPaymentsRequest
 		base := s.Config.DashboardOrigin + "/o/" + org.Slug + "/payments"
 		// A failed link still commits a new account, so a retry reuses it.
 		link, linkErr = s.Payments.OnboardingLink(ctx, *account, base+"?refresh=1", base+"?return=1")
-		if !created {
+		if !created && !disconnected {
 			return nil
 		}
-		if _, err := tx.Exec(ctx, `update organizers set stripe_account_id = $2 where id = $1`, org.ID, *account); err != nil {
+		_, err := tx.Exec(ctx, `update organizers set stripe_account_id = $2, stripe_link_method = 'created', stripe_disconnected_at = null,
+			stripe_connected_at = statement_timestamp(), stripe_charges_enabled = stripe_charges_enabled and $3, stripe_details_submitted = stripe_details_submitted and $3 where id = $1`,
+			org.ID, *account, !created)
+		if accountInUse(err) {
+			return errAccountInUse
+		}
+		if err != nil {
 			return err
 		}
 		return audit.Write(ctx, tx, audit.Entry{Organizer: org.ID, Actor: actorFrom(ctx), Action: "organizer.stripe_connected",
@@ -84,6 +141,9 @@ func (s *server) ConnectPayments(ctx context.Context, req ConnectPaymentsRequest
 	})
 	if err != nil {
 		return nil, err
+	}
+	if createErr != nil {
+		return nil, providerError(ctx, "create account", createErr)
 	}
 	if linkErr != nil {
 		return nil, providerError(ctx, "onboarding link", linkErr)
@@ -99,8 +159,9 @@ func (s *server) RefreshPayments(ctx context.Context, req RefreshPaymentsRequest
 			return errPaymentsNotConfigured
 		}
 		// No row lock: only the non-key flags change, and the last write wins.
+		// A disconnect landing in between still wins: the update re-checks it.
 		var account *string
-		if err := tx.QueryRow(ctx, `select stripe_account_id from organizers where id = $1`, org.ID).Scan(&account); err != nil {
+		if err := tx.QueryRow(ctx, `select stripe_account_id from organizers where id = $1 and stripe_disconnected_at is null`, org.ID).Scan(&account); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
 		if account == nil {
@@ -110,7 +171,7 @@ func (s *server) RefreshPayments(ctx context.Context, req RefreshPaymentsRequest
 		if err != nil {
 			return providerError(ctx, "account", err)
 		}
-		if _, err := tx.Exec(ctx, `update organizers set stripe_charges_enabled = $2, stripe_details_submitted = $3 where id = $1`,
+		if _, err := tx.Exec(ctx, `update organizers set stripe_charges_enabled = $2 and stripe_disconnected_at is null, stripe_details_submitted = $3 where id = $1`,
 			org.ID, st.ChargesEnabled, st.DetailsSubmitted); err != nil {
 			return err
 		}
@@ -121,6 +182,244 @@ func (s *server) RefreshPayments(ctx context.Context, req RefreshPaymentsRequest
 		return nil, err
 	}
 	return RefreshPayments200JSONResponse(out), nil
+}
+
+// linkRedirect is the one callback URI registered with Stripe. The organizer
+// comes from the state, never from the URL.
+func (s *server) linkRedirect() string { return s.Config.DashboardOrigin + "/stripe/oauth/callback" }
+
+// StartStripeLink hands back Stripe's OAuth page for linking an account the
+// organizer already has. Only a hash of the state is kept, tied to this
+// session and organizer, for ten minutes.
+func (s *server) StartStripeLink(ctx context.Context, req StartStripeLinkRequestObject) (StartStripeLinkResponseObject, error) {
+	user, sess, err := userFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var url string
+	err = s.inOrganizer(ctx, req.Organizer, paymentsWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		if s.Payments == nil {
+			return errPaymentsNotConfigured
+		}
+		var live bool
+		if err := tx.QueryRow(ctx, `select stripe_account_id is not null and stripe_disconnected_at is null from organizers where id = $1 for no key update`,
+			org.ID).Scan(&live); err != nil {
+			return err
+		}
+		if live {
+			return errAlreadyConnected
+		}
+		b := make([]byte, 32)
+		_, _ = rand.Read(b) // never fails (crypto/rand)
+		state := base64.RawURLEncoding.EncodeToString(b)
+		u, err := s.Payments.LinkURL(state, s.linkRedirect(), user.Email)
+		if errors.Is(err, plugin.ErrLinkUnavailable) {
+			return errOAuthNotConfigured
+		}
+		if err != nil {
+			return err
+		}
+		url = u
+		h := sha256.Sum256([]byte(state))
+		_, err = tx.Exec(ctx, `insert into stripe_link_states (state_hash, organizer_id, user_id, session_id) values ($1, $2, $3, $4)`,
+			h[:], org.ID, user.ID, sess.ID)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return StartStripeLink200JSONResponse{Url: url}, nil
+}
+
+// CompleteStripeLink trades Stripe's code for the account and links it to
+// the organizer the state names. The state is used up whatever happens after
+// it's found: a failed exchange commits only that. Every way of not owning
+// the state (unknown, used, expired, another session's, not a member) is the
+// same 400 invalid_state.
+func (s *server) CompleteStripeLink(ctx context.Context, req CompleteStripeLinkRequestObject) (CompleteStripeLinkResponseObject, error) {
+	user, sess, err := userFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(req.Body.State) > 128 {
+		return nil, invalidField("too_long", "state", "That state is longer than Stripe ever sends.")
+	}
+	if len(req.Body.Code) > 255 {
+		return nil, invalidField("too_long", "code", "That code is longer than Stripe ever sends.")
+	}
+	h := sha256.Sum256([]byte(req.Body.State))
+	var orgID *uuid.UUID
+	if err := s.Pool.QueryRow(ctx, `select stripe_link_scope($1)`, h[:]).Scan(&orgID); err != nil {
+		return nil, err
+	}
+	if orgID == nil {
+		return nil, errInvalidState
+	}
+	var out StripeLinked
+	var linkErr error
+	err = db.WithOrganizer(ctx, s.Pool, user.ID, *orgID, func(tx pgx.Tx, role string) error {
+		if !slices.Contains(ownerAdmin, role) {
+			return &apiError{403, "forbidden_role", "Your role here doesn't allow that."}
+		}
+		if !sess.MFA {
+			return &apiError{403, "mfa_required", "Sign in with a passkey or your authenticator app to manage this organizer."}
+		}
+		tag, err := tx.Exec(ctx, `delete from stripe_link_states where state_hash = $1 and user_id = $2 and session_id = $3 and expires_at > now()`,
+			h[:], user.ID, sess.ID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return errInvalidState
+		}
+		org := organizers.Organizer{ID: *orgID, Role: role}
+		var live bool
+		if err := tx.QueryRow(ctx, `select slug::text, name, stripe_account_id is not null and stripe_disconnected_at is null
+			from organizers where id = $1 for no key update`, org.ID).Scan(&org.Slug, &org.Name, &live); err != nil {
+			return err
+		}
+		if live { // connected another way since the link started
+			linkErr = errAlreadyConnected
+			return nil
+		}
+		if s.Payments == nil {
+			linkErr = errPaymentsNotConfigured
+			return nil
+		}
+		account, err := s.Payments.CompleteLink(ctx, req.Body.Code)
+		if errors.Is(err, plugin.ErrLinkUnavailable) {
+			linkErr = errOAuthNotConfigured
+			return nil
+		}
+		if err != nil {
+			linkErr = providerError(ctx, "oauth token", err)
+			return nil
+		}
+		// A savepoint, so a refusal still commits the used-up state.
+		sp, err := tx.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		_, err = sp.Exec(ctx, `update organizers set stripe_account_id = $2, stripe_link_method = 'linked', stripe_disconnected_at = null,
+			stripe_connected_at = statement_timestamp(), stripe_charges_enabled = false, stripe_details_submitted = false where id = $1`, org.ID, account)
+		if accountInUse(err) {
+			// Not deauthorized: the token exchange hands back the same platform
+			// link the other organizer sells through.
+			linkErr = errAccountInUse
+			return sp.Rollback(ctx)
+		}
+		if err != nil {
+			return err
+		}
+		if err := sp.Commit(ctx); err != nil {
+			return err
+		}
+		// Stripe's flags now; a failure leaves them off for refresh or account.updated to fix.
+		if st, err := s.Payments.Account(ctx, account); err != nil {
+			slog.ErrorContext(ctx, "payment provider", "op", "account", "err", err)
+		} else if _, err := tx.Exec(ctx, `update organizers set stripe_charges_enabled = $2, stripe_details_submitted = $3 where id = $1`,
+			org.ID, st.ChargesEnabled, st.DetailsSubmitted); err != nil {
+			return err
+		}
+		if err := audit.Write(ctx, tx, audit.Entry{Organizer: org.ID, Actor: actorFrom(ctx), Action: "organizer.stripe_linked",
+			EntityType: "organizer", EntityID: org.ID, After: map[string]string{"stripe_account_id": account, "via": "oauth"}}); err != nil {
+			return err
+		}
+		out.Organizer = org.Slug
+		out.Status, err = s.paymentsStatus(ctx, tx, org)
+		return err
+	})
+	if errors.Is(err, db.ErrNotMember) {
+		return nil, errInvalidState
+	}
+	if err != nil {
+		return nil, err
+	}
+	if linkErr != nil {
+		return nil, linkErr
+	}
+	return CompleteStripeLink200JSONResponse(out), nil
+}
+
+// unlink deauthorizes a linked account. Stripe answers invalid_client both
+// when the account is no longer connected to us and when our client id or
+// key mode is wrong, so that answer alone proves nothing: a read of the
+// account settles it. No access means Stripe already unlinked it (gone);
+// a read that works means we still have access, and the refusal stands.
+func (s *server) unlink(ctx context.Context, account string) (gone bool, err error) {
+	if s.Payments == nil {
+		return false, errPaymentsNotConfigured
+	}
+	err = s.Payments.Unlink(ctx, account)
+	var pe *plugin.ProviderError
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, plugin.ErrLinkUnavailable):
+		return false, errOAuthNotConfigured
+	case !errors.As(err, &pe) || !pe.Refused || pe.Code != "invalid_client":
+		return false, providerError(ctx, "deauthorize", err)
+	}
+	_, probe := s.Payments.Account(ctx, account)
+	switch {
+	case errors.Is(probe, plugin.ErrNoAccess):
+		slog.InfoContext(ctx, "deauthorize: Stripe had already unlinked the account", "account", account, "probe", probe)
+		return true, nil
+	case probe == nil || errors.Is(probe, plugin.ErrRefused):
+		return false, providerError(ctx, "deauthorize", err) // we still have access: the refusal stands
+	}
+	return false, providerError(ctx, "account", probe)
+}
+
+// DisconnectPayments stops selling through the organizer's Stripe account.
+// A linked account has our access removed at Stripe first, and a failure
+// there changes nothing; an account created here is only marked, since it
+// stays the organizer's either way. The id stays, so payments already made
+// still find their orders.
+func (s *server) DisconnectPayments(ctx context.Context, req DisconnectPaymentsRequestObject) (DisconnectPaymentsResponseObject, error) {
+	var out PaymentsStatus
+	err := s.inOrganizer(ctx, req.Organizer, paymentsWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		var account, method *string
+		var disconnected bool
+		if err := tx.QueryRow(ctx, `select stripe_account_id, stripe_link_method, stripe_disconnected_at is not null
+			from organizers where id = $1 for no key update`, org.ID).Scan(&account, &method, &disconnected); err != nil {
+			return err
+		}
+		if account == nil || disconnected {
+			return errNothingToDisconnect
+		}
+		var paying bool
+		if err := tx.QueryRow(ctx, `select exists (select 1 from checkouts where status = 'paying' and expires_at > now())`).Scan(&paying); err != nil {
+			return err
+		}
+		if paying {
+			return errPaymentsInProgress
+		}
+		after := map[string]string{"stripe_account_id": *account, "via": "dashboard"}
+		if *method == "linked" {
+			gone, err := s.unlink(ctx, *account)
+			if err != nil {
+				return err
+			}
+			if gone {
+				after["note"] = "Stripe had already unlinked it"
+			}
+		}
+		if _, err := tx.Exec(ctx, `update organizers set stripe_disconnected_at = statement_timestamp(), stripe_charges_enabled = false where id = $1`, org.ID); err != nil {
+			return err
+		}
+		if err := audit.Write(ctx, tx, audit.Entry{Organizer: org.ID, Actor: actorFrom(ctx), Action: "organizer.stripe_disconnected",
+			EntityType: "organizer", EntityID: org.ID, After: after}); err != nil {
+			return err
+		}
+		var err error
+		out, err = s.paymentsStatus(ctx, tx, org)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return DisconnectPayments200JSONResponse(out), nil
 }
 
 // salesError maps the sales package's errors to the API's. sales.ErrBusy
@@ -145,6 +444,8 @@ func salesError(err error) error {
 		return errPaymentsNotConfigured
 	case errors.Is(err, sales.ErrPaymentsUnavailable):
 		return errPaymentsUnavailable
+	case errors.Is(err, sales.ErrPaymentsRefused):
+		return errPaymentsRefused
 	}
 	return catalogueError(err)
 }

@@ -328,7 +328,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Owners and admins only, from a signed-in session. Creates the organizer's Stripe account the first time (a Standard account: the organizer gets the full Stripe dashboard and deals with Stripe directly), then returns a one-time Stripe onboarding link. Send the person there; Stripe brings them back to /o/{organizer}/payments?return=1 when they finish, or ?refresh=1 when the link has expired. Calling it again reuses the same account. Its response carries a one-time onboarding link, so we never keep it: a retry with the same key runs again, and a duplicate sent while the first is running gets 409 idempotency_in_progress. 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached. */
+        /** @description Owners and admins only, from a signed-in session. Creates the organizer's Stripe account the first time (a Standard account: the organizer gets the full Stripe dashboard and deals with Stripe directly), then returns a one-time Stripe onboarding link. Send the person there; Stripe brings them back to /o/{organizer}/payments?return=1 when they finish, or ?refresh=1 when the link has expired. Calling it again reuses the same account, and so does calling it after disconnecting an account created here: that only switches it back on. After disconnecting a linked account, it creates a new one. Its response carries a one-time onboarding link, so we never keep it: a retry with the same key runs again, and a duplicate sent while the first is running gets 409 idempotency_in_progress. 409 already_connected while a linked account is connected (disconnect it first); 409 account_in_use when the account it would switch back on is now taking payments for another organizer. 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached or had a problem of its own (try again); 503 payments_refused when Stripe answered and turned the request down (trying again won't help; the details are in the server log). */
         post: operations["connectPayments"];
         delete?: never;
         options?: never;
@@ -345,8 +345,59 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Owners and admins, or a write API key. Asks Stripe for the account's current state and saves it; call it when someone comes back from onboarding. 409 not_connected before the first connect; 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached. */
+        /** @description Owners and admins, or a write API key. Asks Stripe for the account's current state and saves it; call it when someone comes back from onboarding. 409 not_connected before the first connect and while disconnected; 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached or had a problem of its own; 503 payments_refused when Stripe turned the request down. */
         post: operations["refreshPayments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/payments/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Owners and admins only, from a signed-in session. Starts linking a Stripe account the organizer already has, through Stripe Connect OAuth: send the person to url, and Stripe sends them back to the dashboard's /stripe/oauth/callback with code and state, which go to /stripe/link/complete. The state works once, for ten minutes, from this session only. Its response carries that state, so we never keep it: a retry with the same key runs again, and a duplicate sent while the first is running gets 409 idempotency_in_progress. 409 already_connected while the organizer has a connected account (disconnect it first); 503 oauth_not_configured when this server can't link existing accounts (can_link_existing is false); 503 payments_not_configured when the server has no payment provider. */
+        post: operations["startStripeLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/payments/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Owners and admins only, from a signed-in session. Stops taking card payments through the organizer's Stripe account. A linked account has our access removed at Stripe first (503 payments_unavailable or payments_refused if Stripe can't do that, and nothing changes); an account created here stays the organizer's, and we just stop selling through it. Orders already taken stay as they are, and paid tickets go off sale until the organizer connects again. 409 not_connected when there's no connected account; 409 payments_in_progress while a buyer is in the middle of paying (try again in a few minutes). */
+        post: operations["disconnectPayments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/stripe/link/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The signed-in person who started the link, from the same session. Finishes linking with the code and state Stripe sent back; the state names the organizer. Owners and admins only, as for any payments change (403 forbidden_role, 403 mfa_required). 400 invalid_state when the state is unknown, already used, more than ten minutes old, or was started by another session; a failed attempt uses it up too, so start again. 409 account_in_use when that Stripe account is already taking payments for another organizer here. 503 payments_unavailable when Stripe can't be reached; 503 payments_refused when Stripe turned the code down. 422 too_long (field state or code) for values longer than Stripe ever sends. */
+        post: operations["completeStripeLink"];
         delete?: never;
         options?: never;
         head?: never;
@@ -649,7 +700,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Whoever has the token. Saves the buyer's email, names and answers, and starts paying: the first call gives the hold 5 more minutes. Calling it again (say, with a corrected email) updates the order and returns the same payment, never a second one. kind stripe or test: confirm the payment with client_secret (Stripe.js, with stripeAccount set to account). kind free: the order is already paid, and order_url is the buyer's link to it. 410 checkout_expired once the hold has run out; 409 checkout_completed when it's already paid (error.order_code says which order). 422 bad_email (field email); 422 bad_attendee when there are more names than tickets or one is over 120 characters (field attendees); 422 missing_answer for a required question left blank, and 422 bad_answer for an answer that isn't one of a select's options, a checkbox that isn't true or false, an answer over 1,000 characters, a question that isn't asked of that ticket, or a ticket_index out of range. Both name the answer as field answers.<question_id>.<ticket_index>, with -1 for questions asked once per order. A required checkbox has to be true. 422 below_minimum_charge when a paid order comes to less than $0.50. 409 payments_not_ready when the organizer's Stripe account can't take cards right now; 409 price_changed if the order's saved total no longer matches its tickets (start a new checkout); 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached (the hold stays, so try again); 503 try_again with Retry-After: 1 when capacity is being reshuffled at that moment. 20 calls a minute per client address, then 429 rate_limited. Its response carries the payment's client secret, so we never keep it: a retry with the same key runs again and gets the same payment back, and a duplicate sent while the first is running gets 409 idempotency_in_progress. */
+        /** @description Whoever has the token. Saves the buyer's email, names and answers, and starts paying: the first call gives the hold 5 more minutes. Calling it again (say, with a corrected email) updates the order and returns the same payment, never a second one. kind stripe or test: confirm the payment with client_secret (Stripe.js, with stripeAccount set to account). kind free: the order is already paid, and order_url is the buyer's link to it. 410 checkout_expired once the hold has run out; 409 checkout_completed when it's already paid (error.order_code says which order). 422 bad_email (field email); 422 bad_attendee when there are more names than tickets or one is over 120 characters (field attendees); 422 missing_answer for a required question left blank, and 422 bad_answer for an answer that isn't one of a select's options, a checkbox that isn't true or false, an answer over 1,000 characters, a question that isn't asked of that ticket, or a ticket_index out of range. Both name the answer as field answers.<question_id>.<ticket_index>, with -1 for questions asked once per order. A required checkbox has to be true. 422 below_minimum_charge when a paid order comes to less than $0.50. 409 payments_not_ready when the organizer's Stripe account can't take cards right now; 409 price_changed if the order's saved total no longer matches its tickets (start a new checkout); 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached or had a problem of its own (the hold stays, so try again); 503 payments_refused when Stripe turned the payment down (the hold stays, but trying again won't help); 503 try_again with Retry-After: 1 when capacity is being reshuffled at that moment. 20 calls a minute per client address, then 429 rate_limited. Its response carries the payment's client secret, so we never keep it: a retry with the same key runs again and gets the same payment back, and a duplicate sent while the first is running gets 409 idempotency_in_progress. */
         post: operations["payCheckout"];
         delete?: never;
         options?: never;
@@ -939,8 +990,14 @@ export interface components {
              * @enum {string}
              */
             provider: "stripe" | "test" | "none";
-            /** @description Whether the organizer has a Stripe account. */
+            /** @description Whether the organizer has a Stripe account it hasn't disconnected. */
             connected: boolean;
+            /** @description Whether the organizer disconnected its Stripe account (or Stripe told us it was unlinked). Paid tickets are off sale until it connects again. */
+            disconnected: boolean;
+            /** @description How the account arrived: created here, or an existing one linked. null without an account. */
+            link_method: components["schemas"]["LinkMethod"] | null;
+            /** @description Whether this server can link a Stripe account the organizer already has. */
+            can_link_existing: boolean;
             /** @description Whether Stripe lets the account take payments. Paid tickets go on sale only when it does. */
             charges_enabled: boolean;
             /** @description Whether the organizer has finished Stripe's onboarding form. */
@@ -964,6 +1021,23 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             paid_at: string | null;
+        };
+        /** @enum {string} */
+        LinkMethod: "created" | "linked";
+        StripeLinkStart: {
+            /** @description Stripe's page for picking the account to link. Its state works once, for ten minutes, so redirect to it straight away. */
+            url: string;
+        };
+        StripeLinkComplete: {
+            /** @description The state Stripe sent back, unchanged. */
+            state: string;
+            /** @description The code Stripe sent back. */
+            code: string;
+        };
+        StripeLinked: {
+            /** @description The slug of the organizer the account was linked to. */
+            organizer: string;
+            status: components["schemas"]["PaymentsStatus"];
         };
         OnboardingLink: {
             /** @description Stripe's onboarding page. It works once and expires within minutes, so redirect to it straight away. */
@@ -2048,6 +2122,103 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    startStripeLink: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StripeLinkStart"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    disconnectPayments: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentsStatus"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    completeStripeLink: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StripeLinkComplete"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StripeLinked"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
             503: components["responses"]["Error"];

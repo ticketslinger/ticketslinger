@@ -286,7 +286,7 @@ func TestFreeOrderEmailsItsLink(t *testing.T) {
 func TestFreeCartNeedsNoStripe(t *testing.T) {
 	s, f, _ := payService(t, seedOpts{quota: 10, price: 0})
 	s.Payments = nil
-	f.exec(t, `update organizers set stripe_account_id = null, stripe_charges_enabled = false`)
+	f.exec(t, `update organizers set stripe_account_id = null, stripe_link_method = null, stripe_charges_enabled = false`)
 	c := f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
 	if ps, err := s.Pay(context.Background(), c.Token, sales.Details{Email: "buyer@example.com"}); err != nil || ps.Kind != "free" {
 		t.Fatalf("free order without Stripe: %+v %v", ps, err)
@@ -302,11 +302,11 @@ func TestCheckoutRefusesPaidTicketsStripeCantTake(t *testing.T) {
 	if _, err := s.CreateCheckout(ctx, in); conflictCode(err) != "payments_not_ready" {
 		t.Fatalf("charges off: %v, want payments_not_ready", err)
 	}
-	f.exec(t, `update organizers set stripe_account_id = null where id = $1`, f.org)
+	f.exec(t, `update organizers set stripe_account_id = null, stripe_link_method = null where id = $1`, f.org)
 	if _, err := s.CreateCheckout(ctx, in); conflictCode(err) != "payments_not_ready" {
 		t.Fatalf("no account: %v, want payments_not_ready", err)
 	}
-	f.exec(t, `update organizers set stripe_account_id = 'acct_fake1', stripe_charges_enabled = true where id = $1`, f.org)
+	f.exec(t, `update organizers set stripe_account_id = 'acct_fake1', stripe_link_method = 'created', stripe_charges_enabled = true where id = $1`, f.org)
 	s.Payments = nil
 	if _, err := s.CreateCheckout(ctx, in); !errors.Is(err, sales.ErrPaymentsNotConfigured) {
 		t.Fatalf("no provider: %v, want ErrPaymentsNotConfigured", err)
@@ -392,7 +392,12 @@ func TestPaymentsNotReady(t *testing.T) {
 	if n := f.count(t, `select count(*) from orders`); n != 0 || len(rec.calls()) != 0 {
 		t.Fatalf("%d orders, %d intents; want none", n, len(rec.calls()))
 	}
-	f.exec(t, `update organizers set stripe_charges_enabled = true where id = $1`, f.org)
+	// Disconnected wins even over charges Stripe still has on.
+	f.exec(t, `update organizers set stripe_charges_enabled = true, stripe_disconnected_at = now() where id = $1`, f.org)
+	if _, err := s.Pay(context.Background(), c.Token, sales.Details{Email: "buyer@example.com"}); conflictCode(err) != "payments_not_ready" {
+		t.Fatalf("disconnected: %v, want payments_not_ready", err)
+	}
+	f.exec(t, `update organizers set stripe_disconnected_at = null where id = $1`, f.org)
 	s.Payments = nil
 	if _, err := s.Pay(context.Background(), c.Token, sales.Details{Email: "buyer@example.com"}); !errors.Is(err, sales.ErrPaymentsNotConfigured) {
 		t.Fatalf("no provider: %v, want ErrPaymentsNotConfigured", err)
@@ -416,13 +421,18 @@ func TestStripeDownLeavesTheHold(t *testing.T) {
 	if n := f.count(t, `select count(*) from payments`); n != 0 {
 		t.Fatalf("%d payments, want none", n)
 	}
+	// Stripe answering no is told apart from not answering; the hold stays too.
+	rec.FailNext(&plugin.ProviderError{Op: "stripe: payment intent", Refused: true, Status: 400, Type: "invalid_request_error"})
+	if _, err := s.Pay(ctx, c.Token, sales.Details{Email: "buyer@example.com"}); !errors.Is(err, sales.ErrPaymentsRefused) {
+		t.Fatalf("Stripe refused: %v, want ErrPaymentsRefused", err)
+	}
 	ps, err := s.Pay(ctx, c.Token, sales.Details{Email: "buyer@example.com"})
 	if err != nil || ps.ClientSecret == "" {
 		t.Fatalf("retry: %+v %v", ps, err)
 	}
 	calls := rec.calls()
-	if len(calls) != 2 || calls[0].IdempotencyKey != calls[1].IdempotencyKey {
-		t.Fatalf("intent requests %+v, want two with one idempotency key", calls)
+	if len(calls) != 3 || calls[0].IdempotencyKey != calls[2].IdempotencyKey {
+		t.Fatalf("intent requests %+v, want three with one idempotency key", calls)
 	}
 }
 
@@ -494,5 +504,28 @@ func TestGetCheckoutCarriesWhatThePageAsks(t *testing.T) {
 	if len(e.Questions) != 2 || e.Questions[0].ID != name || e.Questions[1].ID != size ||
 		strings.Join(e.Questions[1].Options, ",") != "S,M" || !e.Questions[0].Required {
 		t.Fatalf("questions = %+v, want Name on badge then Shirt size", e.Questions)
+	}
+}
+
+// Connect and disconnect hold the organizer row across Stripe calls; a sale
+// must never wait on that. Pay reads the row without a lock.
+func TestPayDoesNotWaitOnTheOrganizerRow(t *testing.T) {
+	s, f, _ := payService(t, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	c := f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
+	hold, err := f.owner.Begin(ctx)
+	f.must(t, err)
+	defer func() { _ = hold.Rollback(ctx) }()
+	_, err = hold.Exec(ctx, `select 1 from organizers where id = $1 for no key update`, f.org)
+	f.must(t, err)
+	short, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	ps, err := s.Pay(short, c.Token, sales.Details{Email: "buyer@example.com"})
+	if err != nil || ps.ClientSecret == "" {
+		t.Fatalf("pay while the organizer row is held: %+v %v", ps, err)
+	}
+	c2, err := s.CreateCheckout(short, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
+	if err != nil || c2.Token == "" {
+		t.Fatalf("checkout while the organizer row is held: %v", err)
 	}
 }

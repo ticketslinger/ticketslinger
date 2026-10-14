@@ -20,6 +20,9 @@ const DONE: Record<string, string> = {
   revoked: "revoked",
   reordered: "reordered",
   cancelled_late: "cancelled (refund queued)",
+  stripe_connected: "connected to Stripe",
+  stripe_linked: "linked a Stripe account",
+  stripe_disconnected: "disconnected from Stripe",
 };
 
 /** "ticket_type.updated" → "Ticket type changed"; anything unfamiliar shows as it is. */

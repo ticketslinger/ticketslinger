@@ -38,7 +38,7 @@ func seed(t *testing.T, pool *pgxpool.Pool) (user uuid.UUID, orgs [2]uuid.UUID) 
 		}
 	}
 	// Both have finished Stripe onboarding, so paid tickets can go live.
-	if _, err := testdb.Owner(t, pool).Exec(ctx, `update organizers set stripe_account_id = 'acct_' || replace(slug::text, '-', ''), stripe_charges_enabled = true`); err != nil {
+	if _, err := testdb.Owner(t, pool).Exec(ctx, `update organizers set stripe_account_id = 'acct_' || replace(slug::text, '-', ''), stripe_link_method = 'created', stripe_charges_enabled = true`); err != nil {
 		t.Fatal(err)
 	}
 	return user, orgs

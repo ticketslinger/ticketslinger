@@ -19,6 +19,7 @@ import { Payments } from "./routes/Payments";
 import { Security } from "./routes/Security";
 import { SignIn } from "./routes/SignIn";
 import { SignUp } from "./routes/SignUp";
+import { StripeCallback } from "./routes/StripeCallback";
 import { VerifyEmail } from "./routes/VerifyEmail";
 import { type Me, match, NotFound, navigate, safeNext, usePath } from "./ui";
 import "./styles.css";
@@ -127,6 +128,8 @@ function App() {
       return <Security me={me} onChanged={loadMe} onSignedIn={signedIn} onSignedOut={signedOut} />;
     case "/organizers/new":
       return <NewOrganizer me={me} />;
+    case "/stripe/oauth/callback":
+      return <StripeCallback />;
     case "/":
       return <Home me={me} onSignedOut={signedOut} />;
   }

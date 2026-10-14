@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -250,7 +251,7 @@ func TestMismatchedPaymentConfirmsNothing(t *testing.T) {
 		"another account": {
 			event: func(pi string, total int64) stripe.Event { return succeeded(pi, "acct_fakenew", total, 1) },
 			setup: func(t *testing.T, f fixture) {
-				f.exec(t, `update organizers set stripe_account_id = 'acct_fakenew' where id = $1`, f.org)
+				f.exec(t, `update organizers set stripe_account_id = 'acct_fakenew', stripe_link_method = 'created' where id = $1`, f.org)
 			},
 		},
 		"not succeeded": {event: func(pi string, total int64) stripe.Event {
@@ -610,5 +611,102 @@ func TestQuestionDeletedMidConfirmIsRetriedIntoARefund(t *testing.T) {
 	}
 	if n := f.count(t, `select count(*) from audit_log where action = 'order.cancelled_late' and after->>'reason' = 'question_gone'`); n != 1 {
 		t.Fatal("the cancellation doesn't say the question was gone")
+	}
+}
+
+// Stripe says our platform was taken off the account: the organizer is
+// disconnected as from the dashboard, once, by the system. The account id
+// stays, so a payment made before still confirms its order.
+func TestDeauthorizedWebhookDisconnects(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	c, pi := paying(t, s, f, fake, sales.Details{}, sales.Item{TicketTypeID: f.general, Quantity: 1})
+	deauth := stripe.Event{ID: "evt_deauth", Type: stripe.EventTypeAccountApplicationDeauthorized, Account: "acct_fake1",
+		Data: &stripe.EventData{Raw: json.RawMessage(`{"id":"ca_test","object":"application","name":"TicketSlinger"}`)}}
+	state := func() (disconnected, charges bool, audits int) {
+		t.Helper()
+		f.must(t, f.owner.QueryRow(ctx, `select o.stripe_disconnected_at is not null, o.stripe_charges_enabled,
+			(select count(*) from audit_log a where a.organizer_id = o.id and a.action = 'organizer.stripe_disconnected'
+			   and a.actor_system and a.actor_user_id is null and a.after->>'stripe_account_id' = 'acct_fake1')
+			from organizers o where o.id = $1`, f.org).Scan(&disconnected, &charges, &audits))
+		return
+	}
+	f.must(t, s.HandleStripeEvent(ctx, deauth))
+	if d, ch, n := state(); !d || ch || n != 1 {
+		t.Fatalf("after deauthorize: disconnected %v charges %v audit rows %d", d, ch, n)
+	}
+	var at time.Time
+	f.must(t, f.owner.QueryRow(ctx, `select stripe_disconnected_at from organizers where id = $1`, f.org).Scan(&at))
+	f.must(t, s.HandleStripeEvent(ctx, deauth))
+	deauth.ID = "evt_deauth_again" // a second, distinct notice changes nothing either
+	f.must(t, s.HandleStripeEvent(ctx, deauth))
+	var again time.Time
+	f.must(t, f.owner.QueryRow(ctx, `select stripe_disconnected_at from organizers where id = $1`, f.org).Scan(&again))
+	if d, _, n := state(); !d || n != 1 || !again.Equal(at) {
+		t.Fatalf("replay: disconnected %v audit rows %d at %v then %v", d, n, at, again)
+	}
+	// Stripe still thinks charges are on, but a disconnected account stays off.
+	raw, _ := json.Marshal(map[string]any{"id": "acct_fake1", "object": "account", "charges_enabled": true, "details_submitted": true})
+	f.must(t, s.HandleStripeEvent(ctx, stripe.Event{ID: "evt_upd", Type: stripe.EventTypeAccountUpdated, Account: "acct_fake1", Data: &stripe.EventData{Raw: raw}}))
+	if _, ch, _ := state(); ch {
+		t.Fatal("account.updated switched a disconnected account back on")
+	}
+	f.must(t, s.HandleStripeEvent(ctx, succeeded(pi.ID, "acct_fake1", c.Quote.TotalCents, 1)))
+	if _, _, status := f.orderOf(t, c.ID); status != "paid" {
+		t.Fatalf("payment from before the disconnect: order %s, want paid", status)
+	}
+}
+
+// A deauthorize made before the account last went live is about an older
+// link: after disconnect and re-link, it leaves the account live. One made
+// after (the same second counts) still disconnects.
+func TestStaleDeauthorizeLeavesANewerLinkLive(t *testing.T) {
+	s, _ := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	f.exec(t, `update organizers set stripe_disconnected_at = now() - interval '1 hour', stripe_charges_enabled = false where id = $1`, f.org)
+	f.exec(t, `update organizers set stripe_disconnected_at = null, stripe_charges_enabled = true, stripe_link_method = 'linked',
+		stripe_connected_at = now() where id = $1`, f.org) // re-linked
+	var since int64
+	f.must(t, f.owner.QueryRow(ctx, `select floor(extract(epoch from stripe_connected_at))::bigint from organizers where id = $1`, f.org).Scan(&since))
+	deauth := func(id string, created int64) stripe.Event {
+		return stripe.Event{ID: id, Type: stripe.EventTypeAccountApplicationDeauthorized, Account: "acct_fake1", Created: created,
+			Data: &stripe.EventData{Raw: json.RawMessage(`{"id":"ca_test","object":"application"}`)}}
+	}
+	live := func() bool {
+		t.Helper()
+		var on bool
+		f.must(t, f.owner.QueryRow(ctx, `select stripe_disconnected_at is null and stripe_charges_enabled from organizers where id = $1`, f.org).Scan(&on))
+		return on
+	}
+	f.must(t, s.HandleStripeEvent(ctx, deauth("evt_old", since-1)))
+	if !live() {
+		t.Fatal("a deauthorize from before the re-link disconnected the new link")
+	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'organizer.stripe_disconnected'`); n != 0 {
+		t.Fatalf("%d audit rows for an ignored event", n)
+	}
+	f.must(t, s.HandleStripeEvent(ctx, deauth("evt_new", since)))
+	if live() {
+		t.Fatal("a deauthorize from after the re-link didn't disconnect")
+	}
+}
+
+// One account can sit on a live organizer and on others that disconnected
+// it; its webhooks go to the live one.
+func TestWebhooksFindTheLiveOrganizer(t *testing.T) {
+	s, _ := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	beta := f.organizer(t, "beta")
+	f.exec(t, `update organizers set stripe_account_id = 'acct_fake1', stripe_disconnected_at = now() where id = $1`, beta)
+	raw, _ := json.Marshal(map[string]any{"id": "acct_fake1", "object": "account", "charges_enabled": false, "details_submitted": true})
+	f.must(t, s.HandleStripeEvent(ctx, stripe.Event{ID: "evt_off", Type: stripe.EventTypeAccountUpdated, Account: "acct_fake1", Data: &stripe.EventData{Raw: raw}}))
+	var acme, betaOn bool
+	f.must(t, f.owner.QueryRow(ctx, `select (select stripe_charges_enabled from organizers where id = $1), (select stripe_charges_enabled from organizers where id = $2)`,
+		f.org, beta).Scan(&acme, &betaOn))
+	if acme || !betaOn {
+		t.Fatalf("account.updated went to the wrong organizer: acme charges %v, beta charges %v", acme, betaOn)
 	}
 }

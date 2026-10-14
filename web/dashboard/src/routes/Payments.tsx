@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { api, must } from "../api";
-import { ErrorText, useAction, useLoad } from "../ui";
+import { ErrorText, focusOnMount, useAction, useLoad } from "../ui";
 import { canEdit, type Org } from "./Organizer";
 
 /** Back from Stripe's onboarding page, which adds ?return=1 (finished) or ?refresh=1 (link expired). */
@@ -10,7 +11,7 @@ export const comingBack = (search: string) => {
 
 export function Payments({ org }: { org: Org }) {
   const path = { organizer: org.slug };
-  const { data, error } = useLoad(async () => {
+  const { data, setData, error } = useLoad(async () => {
     const status = must(await api.GET("/organizers/{organizer}/payments", { params: { path } }));
     // Stripe is the one who knows if onboarding finished, so ask it.
     if (comingBack(location.search) && canEdit(org) && status.connected) {
@@ -18,20 +19,33 @@ export function Payments({ org }: { org: Org }) {
     }
     return status;
   });
-  const connect = useAction();
-  const go = () =>
-    connect.run(async () => {
+  const action = useAction();
+  // null until asked; false after "Keep it connected", so focus can go back.
+  const [confirming, setConfirming] = useState<boolean | null>(null);
+  const goTo = (op: "/connect" | "/link") =>
+    action.run(async () => {
       const { url } = must(
-        await api.POST("/organizers/{organizer}/payments/connect", { params: { path } }),
+        op === "/connect"
+          ? await api.POST("/organizers/{organizer}/payments/connect", { params: { path } })
+          : await api.POST("/organizers/{organizer}/payments/link", { params: { path } }),
       );
       window.location.assign(url);
     });
-  const button = (label: string) =>
-    canEdit(org) && (
-      <button type="button" disabled={connect.busy} onClick={go}>
-        {label}
-      </button>
-    );
+  const refresh = () =>
+    action.run(async () => {
+      setData(
+        must(await api.POST("/organizers/{organizer}/payments/refresh", { params: { path } })),
+      );
+    });
+  const disconnect = () =>
+    action.run(async () => {
+      setData(
+        must(await api.POST("/organizers/{organizer}/payments/disconnect", { params: { path } })),
+      );
+      setConfirming(null);
+    });
+  const editor = canEdit(org);
+  const reconnect = data?.disconnected && data.link_method === "created";
 
   return (
     <>
@@ -41,12 +55,44 @@ export function Payments({ org }: { org: Org }) {
       {data?.provider === "none" && <p>Payments aren't set up on this server yet.</p>}
       {data && data.provider !== "none" && !data.connected && (
         <>
-          <p className="lede">
-            Connect Stripe to sell paid tickets. Buyers pay you directly through your own Stripe
-            account, and the money lands in your bank on Stripe's usual schedule. Free tickets work
-            without it.
-          </p>
-          <div className="row">{button("Connect Stripe")}</div>
+          {data.disconnected ? (
+            <p className="lede">
+              Payments are off for now. Paid tickets stay off sale until you connect Stripe again.
+              Orders you've already taken stay as they are.
+            </p>
+          ) : (
+            <p className="lede">
+              Connect Stripe to sell paid tickets. Buyers pay you directly through your own Stripe
+              account, and the money lands in your bank on Stripe's usual schedule. Free tickets
+              work without it.
+            </p>
+          )}
+          {editor && (
+            <>
+              <div className="row">
+                <button type="button" disabled={action.busy} onClick={() => goTo("/connect")}>
+                  {reconnect ? "Reconnect your Stripe account" : "Create a Stripe account"}
+                </button>
+                {data.can_link_existing && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={action.busy}
+                    onClick={() => goTo("/link")}
+                  >
+                    Link an existing Stripe account
+                  </button>
+                )}
+              </div>
+              {data.can_link_existing && (
+                <p className="muted">
+                  Already sell with Stripe? Link that account and the money goes where it always
+                  does.
+                </p>
+              )}
+            </>
+          )}
+          {!editor && <p className="muted">Ask an owner or admin to connect it.</p>}
         </>
       )}
       {data?.connected && data.charges_enabled && (
@@ -54,14 +100,68 @@ export function Payments({ org }: { org: Org }) {
       )}
       {data?.connected && !data.charges_enabled && (
         <>
-          <p className="lede">Stripe still needs a few details from you.</p>
-          <div className="row">{button("Finish setting up Stripe")}</div>
+          <p className="lede">
+            Stripe still needs a few details from you.
+            {data.link_method === "linked" &&
+              " Finish them in your Stripe dashboard, then check again."}
+          </p>
+          {editor && (
+            <div className="row">
+              {data.link_method === "linked" ? (
+                <button type="button" disabled={action.busy} onClick={refresh}>
+                  Check again
+                </button>
+              ) : (
+                <button type="button" disabled={action.busy} onClick={() => goTo("/connect")}>
+                  Finish setting up Stripe
+                </button>
+              )}
+            </div>
+          )}
         </>
       )}
-      {data && data.provider !== "none" && !canEdit(org) && !data.connected && (
-        <p className="muted">Ask an owner or admin to connect it.</p>
+      {data?.connected && editor && (
+        <section className="danger">
+          {confirming ? (
+            <>
+              <p>
+                Buyers won't be able to pay for tickets until you connect again. Orders you've
+                already taken stay as they are.
+                {data.link_method === "created" &&
+                  " Your Stripe account stays yours; we just stop selling through it."}
+              </p>
+              <div className="row">
+                <button
+                  type="button"
+                  className="inline"
+                  ref={focusOnMount}
+                  disabled={action.busy}
+                  onClick={disconnect}
+                >
+                  Disconnect Stripe
+                </button>
+                <button
+                  type="button"
+                  className="inline secondary"
+                  onClick={() => setConfirming(false)}
+                >
+                  Keep it connected
+                </button>
+              </div>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="inline secondary"
+              ref={confirming === false ? focusOnMount : undefined}
+              onClick={() => setConfirming(true)}
+            >
+              Disconnect Stripe
+            </button>
+          )}
+        </section>
       )}
-      <ErrorText>{connect.error}</ErrorText>
+      <ErrorText>{action.error}</ErrorText>
     </>
   );
 }

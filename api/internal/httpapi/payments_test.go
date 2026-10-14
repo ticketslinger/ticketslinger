@@ -33,7 +33,7 @@ func newPaymentsHarness(t *testing.T, p plugin.PaymentProvider) *harness {
 func (h *harness) chargesEnabled(slug string) {
 	h.t.Helper()
 	if _, err := testdb.Owner(h.t, h.pool).Exec(context.Background(),
-		`update organizers set stripe_account_id = 'acct_' || replace(slug::text, '-', ''), stripe_charges_enabled = true where slug = $1`, slug); err != nil {
+		`update organizers set stripe_account_id = 'acct_' || replace(slug::text, '-', ''), stripe_link_method = 'created', stripe_charges_enabled = true where slug = $1`, slug); err != nil {
 		h.t.Fatal(err)
 	}
 }

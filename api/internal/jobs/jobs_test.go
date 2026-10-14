@@ -229,18 +229,25 @@ func TestSweepRemovesOnlyExpired(t *testing.T) {
 	b[0] = 2
 	must(owner.QueryRow(ctx, `insert into checkouts(organizer_id, event_id, token_hash, expires_at) values ($1, $2, $3, now() - interval '1 day') returning id`, org, event, b).Scan(&recent))
 
+	states := `insert into stripe_link_states(state_hash, organizer_id, user_id, session_id, expires_at)
+		values (sha256($1::text::bytea), $2, $3, (select id from sessions where token_hash = 'live'), now() + $4::interval)`
+	exec(states, "old", org, user, "-1 minute")
+	exec(states, "fresh", org, user, "5 minutes")
+
 	if err := jobs.Sweep(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
 	for sql, want := range map[string]int{
-		`select count(*) from sessions`:                                1,
-		`select count(*) from email_tokens`:                            1,
-		`select count(*) from webauthn_challenges`:                     1,
-		`select count(*) from checkouts`:                               2,
-		`select count(*) from idempotency_keys`:                        1,
-		`select count(*) from login_failures where ip = '203.0.113.2'`: 1,
-		`select count(*) from login_failures`:                          1,
-		`select count(*) from checkouts where id = '` + gone + `'`:     0,
+		`select count(*) from stripe_link_states`:                                           1,
+		`select count(*) from stripe_link_states where state_hash = sha256('fresh'::bytea)`: 1,
+		`select count(*) from sessions`:                                                     1,
+		`select count(*) from email_tokens`:                                                 1,
+		`select count(*) from webauthn_challenges`:                                          1,
+		`select count(*) from checkouts`:                                                    2,
+		`select count(*) from idempotency_keys`:                                             1,
+		`select count(*) from login_failures where ip = '203.0.113.2'`:                      1,
+		`select count(*) from login_failures`:                                               1,
+		`select count(*) from checkouts where id = '` + gone + `'`:                          0,
 	} {
 		if got := count(t, owner, sql); got != want {
 			t.Errorf("%s = %d, want %d", sql, got, want)

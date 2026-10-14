@@ -28,6 +28,7 @@ var userScoped = map[string]string{
 	"createRecoveryCodes":       "replaces the caller's own recovery codes",
 	"beginPasskeyRegistration":  "starts a passkey on the caller's own account",
 	"finishPasskeyRegistration": "finishes a passkey on the caller's own account",
+	"completeStripeLink":        "the state names the organizer, and only the session that started it may use it; anyone else gets 400 invalid_state",
 }
 
 // opID is the operationId as openapi.yaml spells it; the embedded spec
@@ -39,11 +40,13 @@ func opID(op *openapi3.Operation) string {
 // sessionOnly lists tenant operations an API key may never call, even for
 // its own organizer: they need a person behind a signed-in session.
 var sessionOnly = map[string]string{
-	"listAudit":       "the audit log is for people, not integrations, in this release",
-	"listApiKeys":     "keys don't manage keys",
-	"createApiKey":    "keys don't mint keys",
-	"revokeApiKey":    "keys don't revoke keys",
-	"connectPayments": "a person signs Stripe's terms, and the link is theirs to follow",
+	"listAudit":          "the audit log is for people, not integrations, in this release",
+	"listApiKeys":        "keys don't manage keys",
+	"createApiKey":       "keys don't mint keys",
+	"revokeApiKey":       "keys don't revoke keys",
+	"connectPayments":    "a person signs Stripe's terms, and the link is theirs to follow",
+	"startStripeLink":    "a person picks the Stripe account, and the state is tied to their session",
+	"disconnectPayments": "switching payments off is a person's call",
 }
 
 // Every secured operation not in userScoped, called by a signed-in mfa user
