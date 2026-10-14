@@ -1,6 +1,6 @@
 import { startRegistration } from "@simplewebauthn/browser";
 import qrcode from "qrcode-generator";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiFailure, api, must, session } from "../api";
 import { ErrorText, Field, Link, type Me, useAction } from "../ui";
 
@@ -39,6 +39,9 @@ export function Security({
   const [passkeyAdded, setPasskeyAdded] = useState(false);
   const totpAction = useAction();
   const passkeyAction = useAction();
+  const recoveryAction = useAction();
+  const [recovery, setRecovery] = useState<string[] | null>(null);
+  const [copied, setCopied] = useState(false);
   const signInAgain = useAction();
   // A session that already passed a second factor needs no password. Once the
   // account has one, a password session is refused and the API says why.
@@ -95,6 +98,32 @@ export function Security({
       );
       setPasskeyAdded(true);
     });
+
+  const createRecovery = () =>
+    recoveryAction.run(async () => {
+      setCopied(false);
+      setRecovery(must(await api.POST("/auth/recovery-codes")).codes);
+    });
+
+  const copyRecovery = () =>
+    recoveryAction.run(async () => {
+      await navigator.clipboard.writeText((recovery ?? []).join("\n"));
+      setCopied(true);
+    });
+
+  // The browser downloads this blob URL without a data: URL; revoke it when the codes change or go.
+  const [recoveryFile, setRecoveryFile] = useState<string | null>(null);
+  useEffect(() => {
+    if (!recovery) return;
+    const url = URL.createObjectURL(new Blob([`${recovery.join("\n")}\n`], { type: "text/plain" }));
+    setRecoveryFile(url);
+    return () => {
+      URL.revokeObjectURL(url);
+      setRecoveryFile(null);
+    };
+  }, [recovery]);
+  // From the account or from what happened on this page: a factor added a moment ago counts.
+  const hasFactor = me.has_second_factor || me.totp_enabled || totpOn || passkeyAdded;
 
   return (
     <main>
@@ -221,6 +250,61 @@ export function Security({
           </form>
         )}
       </section>
+
+      {hasFactor && (
+        <section aria-labelledby="recovery-h">
+          <h2 id="recovery-h">Recovery codes</h2>
+          {recovery ? (
+            <>
+              <p className="notice">
+                Save these now. Each code works once, and we won't show them again. Making new codes
+                switches these off.
+              </p>
+              <ul className="codes">
+                {recovery.map((c) => (
+                  <li key={c}>
+                    <code className="secret">{c}</code>
+                  </li>
+                ))}
+              </ul>
+              <ErrorText>{recoveryAction.error}</ErrorText>
+              <p className="success" role="status">
+                {copied && "Copied."}
+              </p>
+              <button type="button" onClick={copyRecovery}>
+                Copy all
+              </button>{" "}
+              <a
+                className="button secondary"
+                href={recoveryFile ?? undefined}
+                download="ticketslinger-recovery-codes.txt"
+              >
+                Download as a text file
+              </a>
+            </>
+          ) : (
+            <>
+              <p>
+                Lost your phone? A recovery code gets you in without your authenticator app or
+                passkey. You get ten, and each one works once.
+              </p>
+              {!me.mfa && (
+                <p className="notice">
+                  Sign in with your passkey or authenticator code first, then you can create them.
+                </p>
+              )}
+              <ErrorText>{recoveryAction.error}</ErrorText>
+              <button
+                type="button"
+                onClick={createRecovery}
+                disabled={recoveryAction.busy || !me.mfa}
+              >
+                Create recovery codes
+              </button>
+            </>
+          )}
+        </section>
+      )}
     </main>
   );
 }

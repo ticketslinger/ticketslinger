@@ -45,6 +45,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description 401 totp_required means the account has an authenticator app; send totp_code, or a recovery_code instead. A valid recovery code is accepted for any account with a second factor and gives a session that passed it. */
         post: operations["login"];
         delete?: never;
         options?: never;
@@ -112,6 +113,23 @@ export interface paths {
         put?: never;
         /** @description Switches the authenticator app on. Refused (403 mfa_required) if the account gained a passkey since setup started and this session hasn't passed it; a setup older than 10 minutes is 400 totp_not_started. */
         post: operations["confirmTotp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/recovery-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Replaces the account's recovery codes with ten new single-use ones and returns them. They are shown this once. Needs a session that passed a second factor (403 mfa_required) and an account that has one (409 no_second_factor). */
+        post: operations["createRecoveryCodes"];
         delete?: never;
         options?: never;
         head?: never;
@@ -271,6 +289,8 @@ export interface components {
             email: string;
             password: string;
             totp_code?: string;
+            /** @description One of the account's unused recovery codes, in place of an authenticator code or passkey. Spaces, hyphens and case don't matter. Sending it together with totp_code is 422 one_second_step. */
+            recovery_code?: string;
         };
         SessionCreated: {
             session_token: string;
@@ -422,6 +442,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             423: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
@@ -521,6 +542,32 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             403: components["responses"]["Error"];
+        };
+    };
+    createRecoveryCodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new codes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        codes: string[];
+                    };
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            429: components["responses"]["Error"];
         };
     };
     beginPasskeyRegistration: {

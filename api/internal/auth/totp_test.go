@@ -27,11 +27,11 @@ func TestTOTPEnrollThenLoginNeedsCode(t *testing.T) {
 	if err := s.ConfirmTOTP(ctx, u.ID, false, code); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", ""); !errors.Is(err, auth.ErrTOTPRequired) {
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", "", ""); !errors.Is(err, auth.ErrTOTPRequired) {
 		t.Fatalf("got %v, want ErrTOTPRequired", err)
 	}
 	next, _ := totp.GenerateCode(secret, time.Now().Add(30*time.Second))
-	sess, _, err := s.Login(ctx, "a@example.com", "a long passphrase", next, "", "")
+	sess, _, err := s.Login(ctx, "a@example.com", "a long passphrase", next, "", "", "")
 	if err != nil || !sess.MFA {
 		t.Fatalf("login with code: mfa=%v err=%v", sess.MFA, err)
 	}
@@ -45,10 +45,10 @@ func TestTOTPCodeCannotBeReused(t *testing.T) {
 	c1, _ := totp.GenerateCode(secret, time.Now())
 	_ = s.ConfirmTOTP(ctx, u.ID, false, c1)
 	c2, _ := totp.GenerateCode(secret, time.Now().Add(30*time.Second))
-	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", c2, "", ""); err != nil {
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", c2, "", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", c2, "", ""); !errors.Is(err, auth.ErrBadCredentials) {
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", c2, "", "", ""); !errors.Is(err, auth.ErrBadCredentials) {
 		t.Fatalf("replayed code: got %v, want ErrBadCredentials", err)
 	}
 }
@@ -76,7 +76,7 @@ func TestTOTPConcurrentSameCodeOnlyOneWins(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, _, err := s.Login(context.Background(), "a@example.com", "a long passphrase", code, "", ""); err == nil {
+			if _, _, err := s.Login(context.Background(), "a@example.com", "a long passphrase", code, "", "", ""); err == nil {
 				mu.Lock()
 				ok++
 				mu.Unlock()
@@ -91,7 +91,7 @@ func TestTOTPConcurrentSameCodeOnlyOneWins(t *testing.T) {
 
 func TestTOTPWrongCodeIsBadCredentials(t *testing.T) {
 	s, _, _ := enrolled(t)
-	if _, _, err := s.Login(context.Background(), "a@example.com", "a long passphrase", "000000", "", ""); !errors.Is(err, auth.ErrBadCredentials) {
+	if _, _, err := s.Login(context.Background(), "a@example.com", "a long passphrase", "000000", "", "", ""); !errors.Is(err, auth.ErrBadCredentials) {
 		t.Fatalf("got %v, want ErrBadCredentials", err)
 	}
 }

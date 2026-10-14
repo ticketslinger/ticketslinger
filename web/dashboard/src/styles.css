@@ -233,3 +233,11 @@ section {
 .notice p {
   margin: 0 0 0.6rem;
 }
+
+.codes {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.5rem;
+}

@@ -25,6 +25,7 @@ var userScoped = map[string]string{
 	"createOrganizer":           "creates a new organizer owned by the caller",
 	"startTotp":                 "enrols an authenticator on the caller's own account",
 	"confirmTotp":               "confirms the caller's own authenticator",
+	"createRecoveryCodes":       "replaces the caller's own recovery codes",
 	"beginPasskeyRegistration":  "starts a passkey on the caller's own account",
 	"finishPasskeyRegistration": "finishes a passkey on the caller's own account",
 }
