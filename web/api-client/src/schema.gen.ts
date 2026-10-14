@@ -486,10 +486,12 @@ export interface components {
             prices_include_tax?: boolean;
         };
         CreateEvent: components["schemas"]["EventFields"] & {
-            /** @description Part of the event's web address. It can't change later. */
+            /** @description Part of the event's web address. It can change while the event is a draft. */
             slug: string;
         };
         UpdateEvent: components["schemas"]["EventFields"] & {
+            /** @description Only while the event is a draft; otherwise 409 slug_locked. */
+            slug?: string;
             /** @enum {string} */
             status?: "draft" | "live" | "ended" | "cancelled";
         };

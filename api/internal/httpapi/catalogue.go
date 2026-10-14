@@ -114,7 +114,7 @@ func (s *server) GetEvent(ctx context.Context, req GetEventRequestObject) (GetEv
 func (s *server) UpdateEvent(ctx context.Context, req UpdateEventRequestObject) (UpdateEventResponseObject, error) {
 	b := req.Body
 	p := catalogue.EventPatch{
-		Name: b.Name, Description: b.Description, VenueName: b.VenueName, VenueAddress: b.VenueAddress, Timezone: b.Timezone,
+		Slug: b.Slug, Name: b.Name, Description: b.Description, VenueName: b.VenueName, VenueAddress: b.VenueAddress, Timezone: b.Timezone,
 		StartsAt: b.StartsAt, EndsAt: b.EndsAt, TaxRateBP: b.TaxRateBp, PricesIncludeTax: b.PricesIncludeTax,
 	}
 	if b.FeeMode != nil {

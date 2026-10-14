@@ -363,12 +363,13 @@ components:
         - type: object
           required: [slug, name, timezone, starts_at, ends_at]
           properties:
-            slug: { type: string, pattern: "^[a-z0-9](-?[a-z0-9])*$", minLength: 3, maxLength: 60, description: Part of the event's web address. It can't change later. }
+            slug: { type: string, pattern: "^[a-z0-9](-?[a-z0-9])*$", minLength: 3, maxLength: 60, description: Part of the event's web address. It can change while the event is a draft. }
     UpdateEvent:
       allOf:
         - { $ref: "#/components/schemas/EventFields" }
         - type: object
           properties:
+            slug: { type: string, pattern: "^[a-z0-9](-?[a-z0-9])*$", minLength: 3, maxLength: 60, description: "Only while the event is a draft; otherwise 409 slug_locked." }
             status: { type: string, enum: [draft, live, ended, cancelled] }
     Event:
       type: object

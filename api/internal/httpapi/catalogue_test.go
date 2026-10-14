@@ -32,6 +32,9 @@ func TestEventRoundTrip(t *testing.T) {
 	if up["name"] != "Autumn Gala" || up["tax_rate_bp"] != float64(825) || up["fee_mode"] != "absorb" || up["slug"] != "spring-gala" {
 		t.Fatalf("patched: %v", up)
 	}
+	if res := h.do(owner, "PATCH", "/v1/organizers/acme/events/"+id, `{"ends_at":"2027-03-01T18:00:00Z"}`); res.StatusCode != 422 || h.errorCode(res) != "bad_times" {
+		t.Errorf("bad_times: %d %q", res.StatusCode, h.errorCode(res))
+	}
 	for status, code := range map[string]string{"live": "no_ticket_types", "ended": "status_not_allowed"} {
 		if res := h.do(owner, "PATCH", "/v1/organizers/acme/events/"+id, `{"status":"`+status+`"}`); res.StatusCode != 422 || h.errorCode(res) != code {
 			t.Errorf("status %s: %d %q, want 422 %s", status, res.StatusCode, h.errorCode(res), code)

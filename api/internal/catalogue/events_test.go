@@ -214,3 +214,114 @@ func TestEventValidation(t *testing.T) {
 		}
 	}
 }
+
+func conflict(err error, code string) bool {
+	var c catalogue.ErrConflict
+	return errors.As(err, &c) && c.Code == code
+}
+
+func TestSlugEditsAndStatusRules(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	user, orgs := seed(t, pool)
+	a, actor := orgs[0], audit.Actor{User: user}
+	mk := func(slug string) (ev catalogue.Event) {
+		if err := as(t, pool, user, a, func(tx pgx.Tx) (err error) { ev, err = catalogue.CreateEvent(ctx, tx, a, actor, in(slug)); return }); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	patch := func(id uuid.UUID, p catalogue.EventPatch) (ev catalogue.Event, err error) {
+		err = as(t, pool, user, a, func(tx pgx.Tx) (e error) { ev, e = catalogue.UpdateEvent(ctx, tx, a, id, actor, p); return })
+		return
+	}
+	str := func(s string) *string { return &s }
+	one, two := mk("event-one"), mk("event-two")
+
+	if got, err := patch(one.ID, catalogue.EventPatch{Slug: str("renamed")}); err != nil || got.Slug != "renamed" {
+		t.Fatalf("draft slug change: %v %+v", err, got)
+	}
+	if _, err := patch(one.ID, catalogue.EventPatch{Slug: str("event-two")}); !conflict(err, "slug_taken") {
+		t.Fatalf("taken slug: %v", err)
+	}
+	if _, err := patch(one.ID, catalogue.EventPatch{Slug: str("Bad Slug")}); err == nil || !errors.As(err, &catalogue.ErrInvalid{}) {
+		t.Fatalf("invalid slug: %v", err)
+	}
+
+	// A no-op patch writes nothing: same updated_at, no audit row.
+	var n int
+	count := func() int {
+		_ = as(t, pool, user, a, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `select count(*) from audit_log where action = 'event.updated'`).Scan(&n)
+		})
+		return n
+	}
+	before := count()
+	same := two.Name
+	got, err := patch(two.ID, catalogue.EventPatch{Name: &same, StartsAt: &two.StartsAt})
+	if err != nil || !got.UpdatedAt.Equal(two.UpdatedAt) || count() != before {
+		t.Fatalf("no-op patch: err=%v updated %v vs %v, audit %d vs %d", err, got.UpdatedAt, two.UpdatedAt, count(), before)
+	}
+
+	// Past draft the address is locked; past live the status is.
+	owner := testdb.Owner(t, pool)
+	if _, err := owner.Exec(ctx, `update events set status = 'live' where id = $1`, two.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := patch(two.ID, catalogue.EventPatch{Slug: str("new-address")}); !conflict(err, "slug_locked") {
+		t.Fatalf("live slug change: %v", err)
+	}
+	for _, status := range []string{"ended", "cancelled"} {
+		if _, err := owner.Exec(ctx, `update events set status = $2 where id = $1`, two.ID, status); err != nil {
+			t.Fatal(err)
+		}
+		for _, to := range []string{"draft", "live"} {
+			_, err := patch(two.ID, catalogue.EventPatch{Status: &to})
+			if want := (catalogue.ErrInvalid{}); !errors.As(err, &want) || want.Code != "status_not_allowed" {
+				t.Errorf("%s -> %s: %v", status, to, err)
+			}
+		}
+	}
+}
+
+func TestCreateAndDeleteAreAudited(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	user, orgs := seed(t, pool)
+	a, actor := orgs[0], audit.Actor{User: user}
+	var ev catalogue.Event
+	if err := as(t, pool, user, a, func(tx pgx.Tx) (err error) { ev, err = catalogue.CreateEvent(ctx, tx, a, actor, in("audited")); return }); err != nil {
+		t.Fatal(err)
+	}
+	if err := as(t, pool, user, a, func(tx pgx.Tx) error { return catalogue.DeleteEvent(ctx, tx, a, ev.ID, actor) }); err != nil {
+		t.Fatal(err)
+	}
+	type row struct {
+		actor         *uuid.UUID
+		entity        uuid.UUID
+		before, after *string
+	}
+	get := func(action string) (r row) {
+		if err := as(t, pool, user, a, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `select actor_user_id, entity_id, before::text, after::text from audit_log where action = $1`, action).
+				Scan(&r.actor, &r.entity, &r.before, &r.after)
+		}); err != nil {
+			t.Fatalf("%s: %v", action, err)
+		}
+		return
+	}
+	c, d := get("event.created"), get("event.deleted")
+	if c.actor == nil || *c.actor != user || c.entity != ev.ID || c.before != nil || c.after == nil {
+		t.Errorf("created: %+v", c)
+	}
+	var m map[string]any
+	if c.after != nil {
+		_ = json.Unmarshal([]byte(*c.after), &m)
+	}
+	if m["slug"] != "audited" || m["id"] != ev.ID.String() {
+		t.Errorf("created after: %v", m)
+	}
+	if d.actor == nil || *d.actor != user || d.entity != ev.ID || d.before == nil || d.after != nil {
+		t.Errorf("deleted: %+v", d)
+	}
+}

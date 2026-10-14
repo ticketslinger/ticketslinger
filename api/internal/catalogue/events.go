@@ -42,13 +42,13 @@ type EventInput struct {
 	PricesIncludeTax                                                    bool
 }
 
-// EventPatch changes only the fields that are set. The slug is part of the
-// event's address and stays put.
+// EventPatch changes only the fields that are set. The slug can change only
+// while the event is a draft.
 type EventPatch struct {
-	Name, Description, VenueName, VenueAddress, Timezone, FeeMode, Status *string
-	StartsAt, EndsAt                                                      *time.Time
-	TaxRateBP                                                             *int
-	PricesIncludeTax                                                      *bool
+	Slug, Name, Description, VenueName, VenueAddress, Timezone, FeeMode, Status *string
+	StartsAt, EndsAt                                                            *time.Time
+	TaxRateBP                                                                   *int
+	PricesIncludeTax                                                            *bool
 }
 
 const cols = `id, slug, name, description, venue_name, venue_address, timezone, starts_at, ends_at,
@@ -150,6 +150,7 @@ func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 			*dst = *src
 		}
 	}
+	set(&e.Slug, patch.Slug)
 	set(&e.Name, patch.Name)
 	set(&e.Description, patch.Description)
 	set(&e.VenueName, patch.VenueName)
@@ -171,9 +172,16 @@ func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 	if err := validate(&e); err != nil {
 		return Event{}, err
 	}
+	if e.Slug != before.Slug && before.Status != "draft" {
+		return Event{}, ErrConflict{"slug_locked", "The web address can only change while the event is a draft."}
+	}
 	if patch.Status != nil && *patch.Status != before.Status {
+		if before.Status != "draft" && before.Status != "live" {
+			return Event{}, invalid("status_not_allowed", "This event has finished its run, so its status can't change.")
+		}
 		switch *patch.Status {
 		case "draft":
+			// ponytail: P3 must refuse this once orders exist.
 			e.Status = "draft"
 		case "live":
 			if err := goLive(); err != nil {
@@ -184,14 +192,26 @@ func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 			return Event{}, invalid("status_not_allowed", "Events can move between draft and live for now. Ending or cancelling one isn't available yet.")
 		}
 	}
-	e, err = scan(tx.QueryRow(ctx, `update events set name = $2, description = $3, venue_name = $4, venue_address = $5, timezone = $6,
+	if sameEvent(e, before) {
+		return before, nil
+	}
+	e, err = scan(tx.QueryRow(ctx, `update events set slug = $13, name = $2, description = $3, venue_name = $4, venue_address = $5, timezone = $6,
 			starts_at = $7, ends_at = $8, status = $9, fee_mode = $10, tax_rate_bp = $11, prices_include_tax = $12, updated_at = clock_timestamp()
 		where id = $1 returning `+cols,
-		id, e.Name, e.Description, e.VenueName, e.VenueAddress, e.Timezone, e.StartsAt, e.EndsAt, e.Status, e.FeeMode, e.TaxRateBP, e.PricesIncludeTax))
+		id, e.Name, e.Description, e.VenueName, e.VenueAddress, e.Timezone, e.StartsAt, e.EndsAt, e.Status, e.FeeMode, e.TaxRateBP, e.PricesIncludeTax, e.Slug))
 	if err != nil {
 		return Event{}, dbError(err)
 	}
 	return e, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "event.updated", EntityType: "event", EntityID: id, Before: before, After: e})
+}
+
+// sameEvent: a patch that changed nothing. Instants compare by Equal, since
+// the same moment can arrive in another zone.
+func sameEvent(a, b Event) bool {
+	if a.StartsAt.Equal(b.StartsAt) && a.EndsAt.Equal(b.EndsAt) {
+		a.StartsAt, a.EndsAt = b.StartsAt, b.EndsAt
+	}
+	return a == b
 }
 
 // goLive decides whether a draft may go on sale. The rule is that it has at
