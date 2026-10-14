@@ -73,7 +73,7 @@ func serve() error {
 		return errors.New("TS_SECRET_KEY is required (base64 of 32 random bytes, e.g. `openssl rand -base64 32`)")
 	}
 	if cfg.TurnstileSecret == "" {
-		slog.Warn("TS_TURNSTILE_SECRET is unset: sign-up and repeated failed sign-ins go without a Turnstile check")
+		slog.Warn("TS_TURNSTILE_SECRET is unset: sign-up, repeated failed sign-ins and checkouts go without a Turnstile check")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
@@ -140,9 +140,10 @@ func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Hand
 		}
 		mail = mem
 	}
+	ts := &turnstile.Verifier{Secret: cfg.TurnstileSecret, URL: cfg.TurnstileVerifyURL, Client: &http.Client{Timeout: 2 * time.Second}}
 	h := httpapi.New(httpapi.Deps{Pool: pool, Auth: auth.NewService(pool, mail, auth.Options{RPID: cfg.WebAuthnRPID, Origin: cfg.DashboardOrigin, SecretKey: cfg.SecretKey,
-		Turnstile: &turnstile.Verifier{Secret: cfg.TurnstileSecret, URL: cfg.TurnstileVerifyURL, Client: &http.Client{Timeout: 2 * time.Second}}}),
-		Config: cfg, Payments: paymentProvider(cfg, testMode)})
+		Turnstile: ts}),
+		Config: cfg, Payments: paymentProvider(cfg, testMode), Turnstile: ts})
 	if testMode {
 		h = testMail(h, mem)
 	}

@@ -25,6 +25,16 @@ type fieldError struct {
 
 func (e fieldError) Unwrap() error { return e.apiError }
 
+// detailError is an apiError with more to say: extra goes inside "error"
+// next to code and message (available on sold_out, order_code on
+// checkout_completed).
+type detailError struct {
+	*apiError
+	extra map[string]any
+}
+
+func (e detailError) Unwrap() error { return e.apiError }
+
 // invalidField is a 422 about the request property field.
 func invalidField(code, field, msg string) error {
 	return fieldError{&apiError{422, code, msg}, field}
@@ -74,10 +84,16 @@ func writeError(w http.ResponseWriter, err error) {
 		slog.Error("unhandled error", "err", err)
 		ae = &apiError{500, "internal", "Something went wrong on our side. Please try again."}
 	}
-	body := map[string]string{"code": ae.Code, "message": ae.Message}
+	body := map[string]any{"code": ae.Code, "message": ae.Message}
 	var fe fieldError
 	if errors.As(err, &fe) {
 		body["field"] = fe.Field
+	}
+	var de detailError
+	if errors.As(err, &de) {
+		for k, v := range de.extra {
+			body[k] = v
+		}
 	}
 	writeJSON(w, ae.Status, map[string]any{"error": body})
 }

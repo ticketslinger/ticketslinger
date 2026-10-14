@@ -1,9 +1,12 @@
 package sales
 
 import (
+	"errors"
 	"log/slog"
 	"strconv"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
 )
@@ -22,6 +25,26 @@ type busy struct{}
 
 func (busy) Error() string { return "Tickets are moving fast — please try again." }
 
+// ErrCheckoutExpired is 410: the hold ran out before the buyer paid.
+var ErrCheckoutExpired = errors.New("sales: checkout expired")
+
+// CheckoutCompleted is 409: this checkout already became an order.
+type CheckoutCompleted struct{ OrderCode string }
+
+func (CheckoutCompleted) Error() string { return "checkout_completed" }
+
+// The payment provider's side. Both are 503 over HTTP; nothing was held or
+// written when either comes back.
+var (
+	ErrPaymentsNotConfigured = errors.New("sales: no payment provider")
+	ErrPaymentsUnavailable   = errors.New("sales: payment provider unavailable")
+)
+
+// errPaymentsNotReady: the organizer's Stripe account can't take cards
+// (none yet, or Stripe has charges switched off).
+var errPaymentsNotReady error = catalogue.ErrConflict{Code: "payments_not_ready",
+	Message: "This organizer can't take card payments right now, so paid tickets aren't on sale. Free ones still are."}
+
 func invalid(code, field, msg string) error {
 	return catalogue.ErrInvalid{Code: code, Field: field, Message: msg}
 }
@@ -35,7 +58,28 @@ var (
 	errPromoInvalid = invalid("promo_invalid", "promo_code", "That code isn't working for this event. Check the spelling, or it may have expired.")
 	errPromoUsedUp  = invalid("promo_used_up", "promo_code", "That code has been used as many times as it allows.")
 	errPromoNotHere = invalid("promo_not_applicable", "promo_code", "That code doesn't take anything off these tickets. Remove it, or pick the tickets it's for.")
+	errBadEmail     = invalid("bad_email", "email", "That email address doesn't look right. Your tickets go there, so check it.")
+	errBelowMinimum = invalid("below_minimum_charge", "", "Card payments start at $0.50, and this order comes to less. Add a ticket or drop the code.")
+	errAttendees    = invalid("bad_attendee", "attendees", "Give at most one name per ticket, each up to 120 characters.")
 )
+
+// answerField names the answer an error is about: answers.<question id>.<ticket index>,
+// with -1 for a question asked once per order.
+func answerField(q uuid.UUID, ticket int) string {
+	return "answers." + q.String() + "." + strconv.Itoa(ticket)
+}
+
+func errMissingAnswer(label string, q uuid.UUID, ticket int) error {
+	where := ""
+	if ticket >= 0 {
+		where = " for ticket " + strconv.Itoa(ticket+1)
+	}
+	return invalid("missing_answer", answerField(q, ticket), "We need an answer to \u201c"+label+"\u201d"+where+".")
+}
+
+func errBadAnswer(q uuid.UUID, ticket int, why string) error {
+	return invalid("bad_answer", answerField(q, ticket), why)
+}
 
 func errQuantity(name string, min, max int) error {
 	if min == max {

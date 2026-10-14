@@ -96,7 +96,8 @@ func seedCatalogue(h *harness, owner, slug, apiKey string) map[string]string {
 	quota := h.must(h.do(owner, "POST", base+"/events/"+event+"/quotas", `{"name":"Hall","size":100,"ticket_type_ids":["`+ticketType+`"]}`), 201)["id"].(string)
 	promoCode := h.must(h.do(owner, "POST", base+"/events/"+event+"/promo-codes", `{"code":"EARLY","kind":"percent","value":1000}`), 201)["id"].(string)
 	question := h.must(h.do(owner, "POST", base+"/events/"+event+"/questions", `{"label":"Dietary needs","kind":"text","scope":"order"}`), 201)["id"].(string)
-	return map[string]string{"organizer": slug, "apiKey": apiKey, "event": event, "ticketType": ticketType, "quota": quota, "promoCode": promoCode, "question": question, "challengeId": "0190a0a0-0000-7000-8000-000000000000"}
+	return map[string]string{"organizer": slug, "apiKey": apiKey, "event": event, "ticketType": ticketType, "quota": quota, "promoCode": promoCode, "question": question, "challengeId": "0190a0a0-0000-7000-8000-000000000000",
+		"eventSlug": "gala", "token": "no-such-checkout-token-0000000000000000000"}
 }
 
 // walk calls every secured operation with token and checks the status (and

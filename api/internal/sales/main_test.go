@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
+	"github.com/ticketslinger/ticketslinger/api/internal/payments"
 	"github.com/ticketslinger/ticketslinger/api/internal/pricing"
 	"github.com/ticketslinger/ticketslinger/api/internal/sales"
 	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
@@ -17,7 +18,8 @@ import (
 
 func newService(t *testing.T) *sales.Service {
 	t.Helper()
-	return &sales.Service{Pool: testdb.New(t), Fee: pricing.Fee{BP: 200, Cents: 50}}
+	return &sales.Service{Pool: testdb.New(t), Fee: pricing.Fee{BP: 200, Cents: 50}, Payments: payments.NewFake(),
+		StorefrontURL: "https://tickets.example", SecretKey: []byte("0123456789abcdef0123456789abcdef")}
 }
 
 type seedOpts struct {
@@ -42,6 +44,7 @@ func seed(t *testing.T, pool *pgxpool.Pool, o seedOpts) fixture {
 	f.org = f.organizer(t, "acme")
 	f.exec(t, `insert into memberships(organizer_id, user_id, role) values ($1, $2, 'owner')`, f.org, f.user)
 	f.event, f.general, f.hall = f.liveEvent(t, f.org, o)
+	f.exec(t, `update organizers set stripe_account_id = 'acct_fake1' where id = $1`, f.org)
 	return f
 }
 
@@ -66,7 +69,9 @@ func (f fixture) id(t *testing.T, sql string, args ...any) (id uuid.UUID) {
 
 func (f fixture) organizer(t *testing.T, slug string) uuid.UUID {
 	t.Helper()
-	return f.id(t, `insert into organizers(name, slug) values (initcap($1), $1) returning id`, slug)
+	// Ready to take cards; acme's account is acct_fake1 (see seed).
+	return f.id(t, `insert into organizers(name, slug, stripe_account_id, stripe_charges_enabled)
+		values (initcap($1), $1, 'acct_fake' || replace($1, '-', ''), true) returning id`, slug)
 }
 
 // liveEvent adds gala to org with General in quota Hall.
@@ -101,6 +106,16 @@ func invalidCode(err error) string {
 	var i catalogue.ErrInvalid
 	if errors.As(err, &i) {
 		return i.Code
+	}
+	return ""
+}
+
+var errNotFound = catalogue.ErrNotFound
+
+func fieldOf(err error) string {
+	var i catalogue.ErrInvalid
+	if errors.As(err, &i) {
+		return i.Field
 	}
 	return ""
 }

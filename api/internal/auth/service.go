@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"log/slog"
-	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -50,7 +49,7 @@ const (
 	sessionLifetime = 30 * 24 * time.Hour
 	verifyLifetime  = 48 * time.Hour
 	maxSessionAge   = 90 * 24 * time.Hour // absolute cap, however often a session slides
-	// Sign-in attempts count per email and address (see addrKey) over a
+	// Sign-in attempts count per email and address (see ratelimit.AddrKey) over a
 	// window that restarts with each one; a success clears its address.
 	// After turnstileAfter, that address needs Turnstile; the maxFailures-th
 	// locks it out for the window. accountBrake over all addresses puts every
@@ -102,11 +101,18 @@ type Service struct {
 func NewService(pool *pgxpool.Pool, m mailer.Mailer, o Options) *Service {
 	s := &Service{pool: pool, mail: m, opts: o}
 	s.ipLimit, s.emLimit, s.recLimit = newLimits()
-	mac := hmac.New(sha256.New, o.SecretKey)
-	mac.Write([]byte("login-failures"))
-	s.failKey = mac.Sum(nil)
+	s.failKey = DeriveKey(o.SecretKey, "login-failures")
 	s.wa, s.waErr = newWebAuthn(o)
 	return s
+}
+
+// DeriveKey is a key for one purpose, named by label, derived from
+// TS_SECRET_KEY: HMAC-SHA256(secret, label). Each use gets its own label, so
+// no two uses ever share a key, and none uses the secret itself.
+func DeriveKey(secret []byte, label string) []byte {
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(label))
+	return mac.Sum(nil)
 }
 
 func newLimits() (ip, email, recovery *ratelimit.Limiter) {
@@ -143,7 +149,7 @@ func hashToken(tok string) []byte { h := sha256.Sum256([]byte(tok)); return h[:]
 // Signup creates an account. With Turnstile on, turnstileToken must pass
 // (turnstile.ErrFailed, or turnstile.ErrUnavailable when Cloudflare can't say).
 func (s *Service) Signup(ctx context.Context, email, password, name, turnstileToken, ip, ua string) (Session, User, error) {
-	if !s.ipLimit.Allow("signup:"+addrKey(ip), time.Now()) {
+	if !s.ipLimit.Allow("signup:"+ratelimit.AddrKey(ip), time.Now()) {
 		return Session{}, User{}, ErrRateLimited
 	}
 	email, name = normEmail(email), strings.TrimSpace(name)
@@ -214,7 +220,7 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, recovery
 	now := time.Now()
 	// Per email and address: a stranger hammering one address mustn't
 	// rate-limit the owner everywhere. Spread-out guessing meets accountBrake.
-	if !s.ipLimit.Allow("login:"+addrKey(ip), now) || !s.emLimit.Allow(email+"|"+addrKey(ip), now) {
+	if !s.ipLimit.Allow("login:"+ratelimit.AddrKey(ip), now) || !s.emLimit.Allow(email+"|"+ratelimit.AddrKey(ip), now) {
 		return Session{}, User{}, ErrRateLimited
 	}
 	// Counted before anything is checked, whether or not the account exists.
@@ -309,7 +315,7 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, recovery
 				return nil
 			}
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM login_failures WHERE account = $1 AND ip = $2`, account, addrKey(ip)); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM login_failures WHERE account = $1 AND ip = $2`, account, ratelimit.AddrKey(ip)); err != nil {
 			return err
 		}
 		sess, err = createSession(ctx, tx, u.ID, totpOn || codeID != uuid.Nil, ip, ua)
@@ -319,20 +325,6 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, recovery
 		return Session{}, User{}, ErrBadCredentials
 	}
 	return sess, u, err
-}
-
-// addrKey is the address failures count against: an IPv4 address, an IPv6
-// /64 (one host usually owns a whole /64, so single addresses would hand out
-// endless fresh counters), or "" when the address is unknown.
-func addrKey(ip string) string {
-	a, err := netip.ParseAddr(ip)
-	switch {
-	case err != nil:
-		return ""
-	case a.Is6():
-		return netip.PrefixFrom(a, 64).Masked().String()
-	}
-	return a.String()
 }
 
 // accountKey names email in login_failures: an HMAC, so the table can't be
@@ -362,7 +354,7 @@ func (s *Service) reserve(ctx context.Context, account []byte, ip string) (here,
 		 SELECT r.failures, (SELECT coalesce(sum(failures), 0) FROM login_failures
 		                      WHERE account = $1 AND updated_at > now() - $3::interval)
 		   FROM r`,
-		account, addrKey(ip), lockout.String(), maxFailures).Scan(&here, &total)
+		account, ratelimit.AddrKey(ip), lockout.String(), maxFailures).Scan(&here, &total)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, 0, ErrLocked
 	}
@@ -444,7 +436,7 @@ func (s *Service) reauthenticate(ctx context.Context, userID uuid.UUID, password
 		Scan(&email, &hash); err != nil {
 		return "", err
 	}
-	if !s.emLimit.Allow(normEmail(email)+"|"+addrKey(ip), time.Now()) {
+	if !s.emLimit.Allow(normEmail(email)+"|"+ratelimit.AddrKey(ip), time.Now()) {
 		return "", ErrRateLimited
 	}
 	account := s.accountKey(email)
@@ -461,6 +453,6 @@ func (s *Service) reauthenticate(ctx context.Context, userID uuid.UUID, password
 	if !ok {
 		return "", ErrBadCredentials
 	}
-	_, err = s.pool.Exec(ctx, `DELETE FROM login_failures WHERE account = $1 AND ip = $2`, account, addrKey(ip))
+	_, err = s.pool.Exec(ctx, `DELETE FROM login_failures WHERE account = $1 AND ip = $2`, account, ratelimit.AddrKey(ip))
 	return email, err
 }

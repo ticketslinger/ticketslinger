@@ -675,6 +675,59 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /storefront/{organizer}/{eventSlug}:
+    get:
+      operationId: getStorefrontEvent
+      security: []
+      description: "Anyone. A live event as buyers see it, by its storefront address; a draft or unknown event is 404. Hidden ticket types show only with a code that unlocks them (unlocked is true on those), and so do questions asked only of hidden types. promo is the code's terms when it works right now, and null otherwise: a code that doesn't work is simply no code here. state is ended once ends_at has passed, and then nothing is on sale. remaining counts what's sold and held right now."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { name: eventSlug, in: path, required: true, schema: { type: string } }
+        - { name: code, in: query, required: false, schema: { type: string }, description: "A promo or access code, as the buyer typed it." }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StorefrontEvent" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /checkouts:
+    post:
+      operationId: createCheckout
+      security: []
+      description: "Anyone. Holds the tickets for 15 minutes and returns the checkout with its token, the buyer's only key to it: we keep just a hash, so it can't be shown again. Not enough left is 409 sold_out, with error.available listing what's left of every ticket type the buyer can see. A paid ticket needs an organizer whose Stripe account can take cards (409 payments_not_ready) and a server with a payment provider (503 payments_not_configured); free carts need neither. Nothing is held when either is refused. A code that takes nothing off and unlocks nothing in this cart is 422 promo_not_applicable. When the server has Turnstile on, send a turnstile_token: a missing or refused one is 422 turnstile_failed, and 503 turnstile_unavailable means Cloudflare couldn't check it just now. 10 checkouts a minute per client address (an IPv6 /64 counts as one), then 429 rate_limited. 503 try_again with Retry-After: 1 when the organizer is reshuffling capacity at that moment. The same Idempotency-Key replays the same checkout and token."
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateCheckout" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Checkout" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /checkouts/{token}:
+    get:
+      operationId: getCheckout
+      security: []
+      description: "Whoever has the token. status is expired once the hold has run out without payment. A completed checkout carries order_code and order_url, the buyer's link to their tickets."
+      parameters: [{ $ref: "#/components/parameters/CheckoutTokenPath" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Checkout" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /checkouts/{token}/pay:
+    post:
+      operationId: payCheckout
+      security: []
+      x-idempotency-store: false
+      description: "Whoever has the token. Saves the buyer's email, names and answers, and starts paying: the first call gives the hold 5 more minutes. Calling it again (say, with a corrected email) updates the order and returns the same payment, never a second one. kind stripe or test: confirm the payment with client_secret (Stripe.js, with stripeAccount set to account). kind free: the order is already paid, and order_url is the buyer's link to it. 410 checkout_expired once the hold has run out; 409 checkout_completed when it's already paid (error.order_code says which order). 422 bad_email (field email); 422 bad_attendee when there are more names than tickets or one is over 120 characters (field attendees); 422 missing_answer for a required question left blank, and 422 bad_answer for an answer that isn't one of a select's options, a checkbox that isn't true or false, an answer over 1,000 characters, a question that isn't asked of that ticket, or a ticket_index out of range. Both name the answer as field answers.<question_id>.<ticket_index>, with -1 for questions asked once per order. A required checkbox has to be true. 422 below_minimum_charge when a paid order comes to less than $0.50. 409 payments_not_ready when the organizer's Stripe account can't take cards right now; 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached (the hold stays, so try again); 503 try_again with Retry-After: 1 when capacity is being reshuffled at that moment. 20 calls a minute per client address, then 429 rate_limited. Its response carries the payment's client secret, so we never keep it: a retry with the same key runs again and gets the same payment back, and a duplicate sent while the first is running gets 409 idempotency_in_progress."
+      parameters: [{ $ref: "#/components/parameters/CheckoutTokenPath" }, { $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PayCheckout" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PaymentStart" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     session: { type: http, scheme: bearer, description: "A session token, or an organizer API key (tsk_...). A key acts only within its own organizer, and gets 403 session_required on anything that needs a person: your account, your organizer list, the audit log and key management. A read key gets 403 scope_read_only on writes." }
@@ -686,6 +739,7 @@ components:
     QuestionPath: { name: question, in: path, required: true, schema: { type: string, format: uuid } }
     TicketTypePath: { name: ticketType, in: path, required: true, schema: { type: string, format: uuid } }
     EventPath: { name: event, in: path, required: true, schema: { type: string, format: uuid } }
+    CheckoutTokenPath: { name: token, in: path, required: true, schema: { type: string }, description: "The token createCheckout returned." }
   responses:
     Error: { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   schemas:
@@ -700,6 +754,144 @@ components:
             code: { type: string }
             message: { type: string }
             field: { type: string, description: "The request property this error is about, when there is one (e.g. price_cents, applies_to, options[2])." }
+            available: { type: array, items: { $ref: "#/components/schemas/Availability" }, description: "On 409 sold_out: what's left of every ticket type the buyer can see." }
+            order_code: { type: string, description: "On 409 checkout_completed: the order this checkout became." }
+    Availability:
+      type: object
+      required: [ticket_type_id, remaining]
+      properties: { ticket_type_id: { type: string, format: uuid }, remaining: { type: integer, minimum: 0 } }
+    StorefrontEvent:
+      type: object
+      required: [organizer, event, ticket_types, promo, questions]
+      properties:
+        organizer: { type: object, required: [name, slug], properties: { name: { type: string }, slug: { type: string } } }
+        event:
+          type: object
+          required: [id, slug, name, description, venue_name, venue_address, timezone, starts_at, ends_at, fee_mode, state]
+          properties:
+            id: { type: string, format: uuid }
+            slug: { type: string }
+            name: { type: string }
+            description: { type: string }
+            venue_name: { type: string }
+            venue_address: { type: string }
+            timezone: { type: string }
+            starts_at: { type: string, format: date-time }
+            ends_at: { type: string, format: date-time }
+            fee_mode: { type: string, enum: [absorb, pass] }
+            state: { type: string, enum: [on_sale, ended] }
+        ticket_types: { type: array, items: { $ref: "#/components/schemas/StorefrontTicketType" }, description: In position order. }
+        promo: { oneOf: [{ $ref: "#/components/schemas/StorefrontPromo" }, { type: "null" }], description: "The code's terms when it works right now; null otherwise." }
+        questions: { type: array, items: { $ref: "#/components/schemas/StorefrontQuestion" }, description: In position order. }
+    StorefrontPromo:
+      type: object
+      required: [code, kind, value]
+      properties:
+        code: { type: string }
+        kind: { type: string, enum: [percent, amount] }
+        value: { type: integer, format: int64, description: "percent: basis points. amount: cents off each ticket it covers. 0 is an access code: it unlocks, never discounts." }
+    StorefrontTicketType:
+      type: object
+      required: [id, name, description, price_cents, min_per_order, max_per_order, remaining, on_sale, sales_start, sales_end, unlocked]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        price_cents: { type: integer, format: int64 }
+        min_per_order: { type: integer }
+        max_per_order: { type: integer }
+        remaining: { type: integer, minimum: 0 }
+        on_sale: { type: boolean, description: "Whether it can be bought right now: the event hasn't ended and its sales window is open." }
+        sales_start: { type: [string, "null"], format: date-time }
+        sales_end: { type: [string, "null"], format: date-time }
+        unlocked: { type: boolean, description: A hidden ticket type that the request's code shows. }
+    StorefrontQuestion:
+      type: object
+      required: [id, label, kind, options, required, scope, applies_to_all, applies_to]
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string }
+        kind: { type: string, enum: [text, select, checkbox] }
+        options: { type: array, items: { type: string } }
+        required: { type: boolean }
+        scope: { type: string, enum: [order, ticket] }
+        applies_to_all: { type: boolean }
+        applies_to: { type: array, items: { type: string, format: uuid }, description: "When applies_to_all is false: the ticket types it's asked of, among those shown." }
+    CheckoutItem:
+      type: object
+      required: [ticket_type_id, quantity]
+      properties:
+        ticket_type_id: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1, maximum: 100 }
+    CreateCheckout:
+      type: object
+      required: [organizer, event, items]
+      properties:
+        organizer: { type: string, description: "The organizer's slug, as in the storefront address." }
+        event: { type: string, description: "The event's slug." }
+        items: { type: array, items: { $ref: "#/components/schemas/CheckoutItem" }, description: "Each ticket type once. Up to 100 tickets in all (422 too_many_tickets), and each type's min_per_order to max_per_order (422 quantity_out_of_range)." }
+        promo_code: { type: string, maxLength: 64, description: "Spaces around it and capitals don't matter." }
+        turnstile_token: { $ref: "#/components/schemas/TurnstileToken" }
+    QuoteTicket:
+      type: object
+      required: [ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, charge_cents]
+      properties:
+        ticket_type_id: { type: string, format: uuid }
+        price_cents: { type: integer, format: int64 }
+        discount_cents: { type: integer, format: int64 }
+        tax_cents: { type: integer, format: int64 }
+        fee_cents: { type: integer, format: int64 }
+        charge_cents: { type: integer, format: int64, description: "What the buyer pays for this ticket, before a passed-on fee." }
+    Quote:
+      type: object
+      required: [tickets, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents, fee_mode]
+      properties:
+        tickets: { type: array, items: { $ref: "#/components/schemas/QuoteTicket" } }
+        subtotal_cents: { type: integer, format: int64 }
+        discount_cents: { type: integer, format: int64 }
+        tax_cents: { type: integer, format: int64 }
+        fee_cents: { type: integer, format: int64, description: "Our service fee. The buyer pays it on top when fee_mode is pass; with absorb it comes out of the organizer's price." }
+        total_cents: { type: integer, format: int64 }
+        fee_mode: { type: string, enum: [absorb, pass] }
+    Checkout:
+      type: object
+      required: [id, event_id, status, expires_at, items, promo_code, quote]
+      properties:
+        id: { type: string, format: uuid }
+        event_id: { type: string, format: uuid }
+        token: { type: string, description: "Only when it's created. Keep it: it's the only key to this checkout." }
+        status: { type: string, enum: [open, paying, completed, expired] }
+        expires_at: { type: string, format: date-time }
+        items: { type: array, items: { $ref: "#/components/schemas/CheckoutItem" } }
+        promo_code: { type: [string, "null"] }
+        quote: { $ref: "#/components/schemas/Quote" }
+        order_code: { type: string, description: Once completed. }
+        order_url: { type: string, description: "Once completed: the buyer's link to their tickets." }
+    CheckoutAnswer:
+      type: object
+      required: [question_id, ticket_index, value]
+      properties:
+        question_id: { type: string, format: uuid }
+        ticket_index: { type: integer, minimum: -1, maximum: 99, description: "-1 for a question asked once per order; otherwise which ticket, from 0, counting through the checkout's items in order." }
+        value: { type: string, maxLength: 1000, description: "For a select, one of its options; for a checkbox, true or false." }
+    PayCheckout:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, maxLength: 254, description: "Where the tickets go: one plain address, like ada@example.com (422 bad_email)." }
+        attendees: { type: array, items: { type: string, maxLength: 120 }, description: "Optional names, one per ticket in the same order as ticket_index." }
+        answers: { type: array, items: { $ref: "#/components/schemas/CheckoutAnswer" } }
+    PaymentStart:
+      type: object
+      required: [kind, amount_cents]
+      properties:
+        kind: { type: string, enum: [stripe, test, free], description: "test is the built-in fake provider, for development." }
+        client_secret: { type: string, description: "For stripe and test: confirm the payment with it." }
+        publishable_key: { type: string }
+        account: { type: string, description: "The organizer's Stripe account, for Stripe.js's stripeAccount option." }
+        amount_cents: { type: integer, format: int64 }
+        order_code: { type: string, description: "For free: the order, already paid." }
+        order_url: { type: string, description: "For free: the buyer's link to their tickets." }
     Health: { type: object, required: [status], properties: { status: { type: string } } }
     PaymentsStatus:
       type: object
