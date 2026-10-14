@@ -35,7 +35,8 @@ function App() {
   }, [loadMe]);
   const signedOut = useCallback(() => {
     setMe(null);
-    navigate("/signin");
+    const here = location.pathname + location.search;
+    navigate(here === "/" ? "/signin" : `/signin?next=${encodeURIComponent(here)}`);
   }, []);
 
   // Move focus to the new page's heading so screen readers announce the change.

@@ -205,3 +205,29 @@ func TestTOTPEndpoints(t *testing.T) {
 		t.Fatalf("passkey from a password session: %d %v", st, e)
 	}
 }
+
+func TestMeReportsSecondFactors(t *testing.T) {
+	srv, _, pool := newAuthServerPool(t)
+	ctx := context.Background()
+	cases := []struct {
+		email, set      string
+		passkey, second bool
+	}{
+		{"none@example.com", "", false, false},
+		{"totp@example.com", `UPDATE users SET totp_enabled_at = now() WHERE email = $1`, false, true},
+		{"key@example.com", `INSERT INTO passkeys (user_id, credential_id, credential, name) SELECT id, '\x01', '{}', 'k' FROM users WHERE email = $1`, true, true},
+	}
+	for _, c := range cases {
+		_, body := do(t, "POST", srv.URL+"/v1/auth/signup", "", `{"email":"`+c.email+`","password":"a long passphrase","name":"A"}`)
+		tok := body["session_token"].(string)
+		if c.set != "" {
+			if _, err := pool.Exec(ctx, c.set, c.email); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_, me := do(t, "GET", srv.URL+"/v1/me", tok, "")
+		if me["has_passkey"] != c.passkey || me["has_second_factor"] != c.second {
+			t.Fatalf("%s: has_passkey=%v has_second_factor=%v", c.email, me["has_passkey"], me["has_second_factor"])
+		}
+	}
+}

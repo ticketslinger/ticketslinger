@@ -152,7 +152,7 @@ export function Security({
           type="button"
           className={passkeyAdded && !me.mfa ? "secondary" : undefined}
           onClick={addPasskey}
-          disabled={passkeyAction.busy}
+          disabled={passkeyAction.busy || needSecondStep}
         >
           Add a passkey
         </button>
@@ -187,7 +187,7 @@ export function Security({
           <>
             <p>Use an app like 1Password, Google Authenticator or Authy for a 6-digit code.</p>
             <ErrorText>{totpAction.error}</ErrorText>
-            <button type="button" onClick={startTotp} disabled={totpAction.busy}>
+            <button type="button" onClick={startTotp} disabled={totpAction.busy || needSecondStep}>
               Set up an authenticator app
             </button>
           </>
