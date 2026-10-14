@@ -62,10 +62,12 @@ func TestEverySecuredOperationHidesOtherTenants(t *testing.T) {
 	third := h.signupWithMFA("third@example.com")
 	h.createOrganizer(third, "third")
 	_, thirdKey := h.createKey(third, "third", "write")
+	event := h.must(h.do(owner, "POST", "/v1/organizers/acme/events",
+		`{"slug":"gala","name":"Gala","timezone":"Europe/London","starts_at":"2027-03-01T19:00:00Z","ends_at":"2027-03-01T22:00:00Z"}`), 201)["id"].(string)
 	// The other tenant's real resources, by path parameter name.
 	// challengeId only appears on a user-scoped operation, which the key run
 	// still calls; any well-formed id will do.
-	fixture := map[string]string{"organizer": "acme", "apiKey": acmeKey, "challengeId": "0190a0a0-0000-7000-8000-000000000000"}
+	fixture := map[string]string{"organizer": "acme", "apiKey": acmeKey, "event": event, "challengeId": "0190a0a0-0000-7000-8000-000000000000"}
 
 	t.Run("stranger", func(t *testing.T) {
 		walk(t, h, stranger, fixture, func(id string) (int, string) {

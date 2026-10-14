@@ -61,6 +61,99 @@ func (e CreateApiKeyScope) Valid() bool {
 	}
 }
 
+// Defines values for CreateEventFeeMode.
+const (
+	CreateEventFeeModeAbsorb CreateEventFeeMode = "absorb"
+	CreateEventFeeModePass   CreateEventFeeMode = "pass"
+)
+
+// Valid indicates whether the value is a known member of the CreateEventFeeMode enum.
+func (e CreateEventFeeMode) Valid() bool {
+	switch e {
+	case CreateEventFeeModeAbsorb:
+		return true
+	case CreateEventFeeModePass:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EventCurrency.
+const (
+	USD EventCurrency = "USD"
+)
+
+// Valid indicates whether the value is a known member of the EventCurrency enum.
+func (e EventCurrency) Valid() bool {
+	switch e {
+	case USD:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EventFeeMode.
+const (
+	EventFeeModeAbsorb EventFeeMode = "absorb"
+	EventFeeModePass   EventFeeMode = "pass"
+)
+
+// Valid indicates whether the value is a known member of the EventFeeMode enum.
+func (e EventFeeMode) Valid() bool {
+	switch e {
+	case EventFeeModeAbsorb:
+		return true
+	case EventFeeModePass:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EventStatus.
+const (
+	EventStatusCancelled EventStatus = "cancelled"
+	EventStatusDraft     EventStatus = "draft"
+	EventStatusEnded     EventStatus = "ended"
+	EventStatusLive      EventStatus = "live"
+)
+
+// Valid indicates whether the value is a known member of the EventStatus enum.
+func (e EventStatus) Valid() bool {
+	switch e {
+	case EventStatusCancelled:
+		return true
+	case EventStatusDraft:
+		return true
+	case EventStatusEnded:
+		return true
+	case EventStatusLive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EventFieldsFeeMode.
+const (
+	EventFieldsFeeModeAbsorb EventFieldsFeeMode = "absorb"
+	EventFieldsFeeModePass   EventFieldsFeeMode = "pass"
+)
+
+// Valid indicates whether the value is a known member of the EventFieldsFeeMode enum.
+func (e EventFieldsFeeMode) Valid() bool {
+	switch e {
+	case EventFieldsFeeModeAbsorb:
+		return true
+	case EventFieldsFeeModePass:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OrganizerRole.
 const (
 	Admin    OrganizerRole = "admin"
@@ -82,6 +175,48 @@ func (e OrganizerRole) Valid() bool {
 	case KeyWrite:
 		return true
 	case Owner:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateEventFeeMode.
+const (
+	UpdateEventFeeModeAbsorb UpdateEventFeeMode = "absorb"
+	UpdateEventFeeModePass   UpdateEventFeeMode = "pass"
+)
+
+// Valid indicates whether the value is a known member of the UpdateEventFeeMode enum.
+func (e UpdateEventFeeMode) Valid() bool {
+	switch e {
+	case UpdateEventFeeModeAbsorb:
+		return true
+	case UpdateEventFeeModePass:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateEventStatus.
+const (
+	UpdateEventStatusCancelled UpdateEventStatus = "cancelled"
+	UpdateEventStatusDraft     UpdateEventStatus = "draft"
+	UpdateEventStatusEnded     UpdateEventStatus = "ended"
+	UpdateEventStatusLive      UpdateEventStatus = "live"
+)
+
+// Valid indicates whether the value is a known member of the UpdateEventStatus enum.
+func (e UpdateEventStatus) Valid() bool {
+	switch e {
+	case UpdateEventStatusCancelled:
+		return true
+	case UpdateEventStatusDraft:
+		return true
+	case UpdateEventStatusEnded:
+		return true
+	case UpdateEventStatusLive:
 		return true
 	default:
 		return false
@@ -138,6 +273,34 @@ type CreateApiKey struct {
 // CreateApiKeyScope write can also read.
 type CreateApiKeyScope string
 
+// CreateEvent defines model for CreateEvent.
+type CreateEvent struct {
+	Description *string `json:"description,omitempty"`
+
+	// EndsAt Must be after starts_at.
+	EndsAt time.Time `json:"ends_at"`
+
+	// FeeMode pass (the default) adds our fee to the buyer's total; absorb takes it out of your price.
+	FeeMode          *CreateEventFeeMode `json:"fee_mode,omitempty"`
+	Name             string              `json:"name"`
+	PricesIncludeTax *bool               `json:"prices_include_tax,omitempty"`
+
+	// Slug Part of the event's web address. It can't change later.
+	Slug     string    `json:"slug"`
+	StartsAt time.Time `json:"starts_at"`
+
+	// TaxRateBp Tax in basis points: 825 is 8.25%.
+	TaxRateBp *int `json:"tax_rate_bp,omitempty"`
+
+	// Timezone An IANA time zone name, like Europe/London.
+	Timezone     string  `json:"timezone"`
+	VenueAddress *string `json:"venue_address,omitempty"`
+	VenueName    *string `json:"venue_name,omitempty"`
+}
+
+// CreateEventFeeMode pass (the default) adds our fee to the buyer's total; absorb takes it out of your price.
+type CreateEventFeeMode string
+
 // CreateOrganizer defines model for CreateOrganizer.
 type CreateOrganizer struct {
 	Name string `json:"name"`
@@ -151,6 +314,60 @@ type Error struct {
 		Message string `json:"message"`
 	} `json:"error"`
 }
+
+// Event defines model for Event.
+type Event struct {
+	CreatedAt        time.Time          `json:"created_at"`
+	Currency         EventCurrency      `json:"currency"`
+	Description      string             `json:"description"`
+	EndsAt           time.Time          `json:"ends_at"`
+	FeeMode          EventFeeMode       `json:"fee_mode"`
+	Id               openapi_types.UUID `json:"id"`
+	Name             string             `json:"name"`
+	PricesIncludeTax bool               `json:"prices_include_tax"`
+	Slug             string             `json:"slug"`
+	StartsAt         time.Time          `json:"starts_at"`
+	Status           EventStatus        `json:"status"`
+	TaxRateBp        int                `json:"tax_rate_bp"`
+	Timezone         string             `json:"timezone"`
+	UpdatedAt        time.Time          `json:"updated_at"`
+	VenueAddress     string             `json:"venue_address"`
+	VenueName        string             `json:"venue_name"`
+}
+
+// EventCurrency defines model for Event.Currency.
+type EventCurrency string
+
+// EventFeeMode defines model for Event.FeeMode.
+type EventFeeMode string
+
+// EventStatus defines model for Event.Status.
+type EventStatus string
+
+// EventFields defines model for EventFields.
+type EventFields struct {
+	Description *string `json:"description,omitempty"`
+
+	// EndsAt Must be after starts_at.
+	EndsAt *time.Time `json:"ends_at,omitempty"`
+
+	// FeeMode pass (the default) adds our fee to the buyer's total; absorb takes it out of your price.
+	FeeMode          *EventFieldsFeeMode `json:"fee_mode,omitempty"`
+	Name             *string             `json:"name,omitempty"`
+	PricesIncludeTax *bool               `json:"prices_include_tax,omitempty"`
+	StartsAt         *time.Time          `json:"starts_at,omitempty"`
+
+	// TaxRateBp Tax in basis points: 825 is 8.25%.
+	TaxRateBp *int `json:"tax_rate_bp,omitempty"`
+
+	// Timezone An IANA time zone name, like Europe/London.
+	Timezone     *string `json:"timezone,omitempty"`
+	VenueAddress *string `json:"venue_address,omitempty"`
+	VenueName    *string `json:"venue_name,omitempty"`
+}
+
+// EventFieldsFeeMode pass (the default) adds our fee to the buyer's total; absorb takes it out of your price.
+type EventFieldsFeeMode string
 
 // Health defines model for Health.
 type Health struct {
@@ -222,11 +439,43 @@ type TotpSetup struct {
 	Secret     string `json:"secret"`
 }
 
+// UpdateEvent defines model for UpdateEvent.
+type UpdateEvent struct {
+	Description *string `json:"description,omitempty"`
+
+	// EndsAt Must be after starts_at.
+	EndsAt *time.Time `json:"ends_at,omitempty"`
+
+	// FeeMode pass (the default) adds our fee to the buyer's total; absorb takes it out of your price.
+	FeeMode          *UpdateEventFeeMode `json:"fee_mode,omitempty"`
+	Name             *string             `json:"name,omitempty"`
+	PricesIncludeTax *bool               `json:"prices_include_tax,omitempty"`
+	StartsAt         *time.Time          `json:"starts_at,omitempty"`
+	Status           *UpdateEventStatus  `json:"status,omitempty"`
+
+	// TaxRateBp Tax in basis points: 825 is 8.25%.
+	TaxRateBp *int `json:"tax_rate_bp,omitempty"`
+
+	// Timezone An IANA time zone name, like Europe/London.
+	Timezone     *string `json:"timezone,omitempty"`
+	VenueAddress *string `json:"venue_address,omitempty"`
+	VenueName    *string `json:"venue_name,omitempty"`
+}
+
+// UpdateEventFeeMode pass (the default) adds our fee to the buyer's total; absorb takes it out of your price.
+type UpdateEventFeeMode string
+
+// UpdateEventStatus defines model for UpdateEvent.Status.
+type UpdateEventStatus string
+
 // WebAuthnChallenge defines model for WebAuthnChallenge.
 type WebAuthnChallenge struct {
 	ChallengeId openapi_types.UUID     `json:"challenge_id"`
 	Options     map[string]interface{} `json:"options"`
 }
+
+// EventPath defines model for EventPath.
+type EventPath = openapi_types.UUID
 
 // OrganizerPath defines model for OrganizerPath.
 type OrganizerPath = string
@@ -292,6 +541,12 @@ type CreateOrganizerJSONRequestBody = CreateOrganizer
 // CreateApiKeyJSONRequestBody defines body for CreateApiKey for application/json ContentType.
 type CreateApiKeyJSONRequestBody = CreateApiKey
 
+// CreateEventJSONRequestBody defines body for CreateEvent for application/json ContentType.
+type CreateEventJSONRequestBody = CreateEvent
+
+// UpdateEventJSONRequestBody defines body for UpdateEvent for application/json ContentType.
+type UpdateEventJSONRequestBody = UpdateEvent
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 
@@ -354,6 +609,21 @@ type ServerInterface interface {
 
 	// (GET /organizers/{organizer}/audit)
 	ListAudit(w http.ResponseWriter, r *http.Request, organizer OrganizerPath)
+
+	// (GET /organizers/{organizer}/events)
+	ListEvents(w http.ResponseWriter, r *http.Request, organizer OrganizerPath)
+
+	// (POST /organizers/{organizer}/events)
+	CreateEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath)
+
+	// (DELETE /organizers/{organizer}/events/{event})
+	DeleteEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+
+	// (GET /organizers/{organizer}/events/{event})
+	GetEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+
+	// (PATCH /organizers/{organizer}/events/{event})
+	UpdateEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -754,6 +1024,163 @@ func (siw *ServerInterfaceWrapper) ListAudit(w http.ResponseWriter, r *http.Requ
 	handler.ServeHTTP(w, r)
 }
 
+// ListEvents operation middleware
+func (siw *ServerInterfaceWrapper) ListEvents(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListEvents(w, r, organizer)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateEvent operation middleware
+func (siw *ServerInterfaceWrapper) CreateEvent(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateEvent(w, r, organizer)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteEvent operation middleware
+func (siw *ServerInterfaceWrapper) DeleteEvent(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteEvent(w, r, organizer, event)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetEvent operation middleware
+func (siw *ServerInterfaceWrapper) GetEvent(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetEvent(w, r, organizer, event)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateEvent operation middleware
+func (siw *ServerInterfaceWrapper) UpdateEvent(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateEvent(w, r, organizer, event)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -894,6 +1321,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/api-keys", wrapper.ListApiKeys)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/organizers/{organizer}/api-keys", wrapper.CreateApiKey)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/organizers/{organizer}/api-keys/{apiKey}", wrapper.RevokeApiKey)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/events", wrapper.ListEvents)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/organizers/{organizer}/events", wrapper.CreateEvent)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/organizers/{organizer}/events/{event}", wrapper.DeleteEvent)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/events/{event}", wrapper.GetEvent)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/organizers/{organizer}/events/{event}", wrapper.UpdateEvent)
 
 	return m
 }
@@ -1905,6 +2337,283 @@ func (response ListAudit404JSONResponse) VisitListAuditResponse(w http.ResponseW
 	return err
 }
 
+type ListEventsRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+}
+
+type ListEventsResponseObject interface {
+	VisitListEventsResponse(w http.ResponseWriter) error
+}
+
+type ListEvents200JSONResponse []Event
+
+func (response ListEvents200JSONResponse) VisitListEventsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEvents404JSONResponse struct{ ErrorJSONResponse }
+
+func (response ListEvents404JSONResponse) VisitListEventsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEventRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Body      *CreateEventJSONRequestBody
+}
+
+type CreateEventResponseObject interface {
+	VisitCreateEventResponse(w http.ResponseWriter) error
+}
+
+type CreateEvent201JSONResponse Event
+
+func (response CreateEvent201JSONResponse) VisitCreateEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEvent403JSONResponse struct{ ErrorJSONResponse }
+
+func (response CreateEvent403JSONResponse) VisitCreateEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEvent404JSONResponse Error
+
+func (response CreateEvent404JSONResponse) VisitCreateEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEvent409JSONResponse Error
+
+func (response CreateEvent409JSONResponse) VisitCreateEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEvent422JSONResponse Error
+
+func (response CreateEvent422JSONResponse) VisitCreateEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteEventRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+}
+
+type DeleteEventResponseObject interface {
+	VisitDeleteEventResponse(w http.ResponseWriter) error
+}
+
+type DeleteEvent204Response struct {
+}
+
+func (response DeleteEvent204Response) VisitDeleteEventResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteEvent403JSONResponse struct{ ErrorJSONResponse }
+
+func (response DeleteEvent403JSONResponse) VisitDeleteEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteEvent404JSONResponse Error
+
+func (response DeleteEvent404JSONResponse) VisitDeleteEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteEvent409JSONResponse Error
+
+func (response DeleteEvent409JSONResponse) VisitDeleteEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEventRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+}
+
+type GetEventResponseObject interface {
+	VisitGetEventResponse(w http.ResponseWriter) error
+}
+
+type GetEvent200JSONResponse Event
+
+func (response GetEvent200JSONResponse) VisitGetEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEvent404JSONResponse struct{ ErrorJSONResponse }
+
+func (response GetEvent404JSONResponse) VisitGetEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEventRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+	Body      *UpdateEventJSONRequestBody
+}
+
+type UpdateEventResponseObject interface {
+	VisitUpdateEventResponse(w http.ResponseWriter) error
+}
+
+type UpdateEvent200JSONResponse Event
+
+func (response UpdateEvent200JSONResponse) VisitUpdateEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEvent403JSONResponse struct{ ErrorJSONResponse }
+
+func (response UpdateEvent403JSONResponse) VisitUpdateEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEvent404JSONResponse Error
+
+func (response UpdateEvent404JSONResponse) VisitUpdateEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEvent422JSONResponse Error
+
+func (response UpdateEvent422JSONResponse) VisitUpdateEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 
@@ -1967,6 +2676,21 @@ type StrictServerInterface interface {
 
 	// (GET /organizers/{organizer}/audit)
 	ListAudit(ctx context.Context, request ListAuditRequestObject) (ListAuditResponseObject, error)
+
+	// (GET /organizers/{organizer}/events)
+	ListEvents(ctx context.Context, request ListEventsRequestObject) (ListEventsResponseObject, error)
+
+	// (POST /organizers/{organizer}/events)
+	CreateEvent(ctx context.Context, request CreateEventRequestObject) (CreateEventResponseObject, error)
+
+	// (DELETE /organizers/{organizer}/events/{event})
+	DeleteEvent(ctx context.Context, request DeleteEventRequestObject) (DeleteEventResponseObject, error)
+
+	// (GET /organizers/{organizer}/events/{event})
+	GetEvent(ctx context.Context, request GetEventRequestObject) (GetEventResponseObject, error)
+
+	// (PATCH /organizers/{organizer}/events/{event})
+	UpdateEvent(ctx context.Context, request UpdateEventRequestObject) (UpdateEventResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -2580,57 +3304,216 @@ func (sh *strictHandler) ListAudit(w http.ResponseWriter, r *http.Request, organ
 	}
 }
 
+// ListEvents operation middleware
+func (sh *strictHandler) ListEvents(w http.ResponseWriter, r *http.Request, organizer OrganizerPath) {
+	var request ListEventsRequestObject
+
+	request.Organizer = organizer
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListEvents(ctx, request.(ListEventsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListEvents")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListEventsResponseObject); ok {
+		if err := validResponse.VisitListEventsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateEvent operation middleware
+func (sh *strictHandler) CreateEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath) {
+	var request CreateEventRequestObject
+
+	request.Organizer = organizer
+
+	var body CreateEventJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateEvent(ctx, request.(CreateEventRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateEvent")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateEventResponseObject); ok {
+		if err := validResponse.VisitCreateEventResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteEvent operation middleware
+func (sh *strictHandler) DeleteEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+	var request DeleteEventRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteEvent(ctx, request.(DeleteEventRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteEvent")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteEventResponseObject); ok {
+		if err := validResponse.VisitDeleteEventResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetEvent operation middleware
+func (sh *strictHandler) GetEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+	var request GetEventRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetEvent(ctx, request.(GetEventRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetEvent")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetEventResponseObject); ok {
+		if err := validResponse.VisitGetEventResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateEvent operation middleware
+func (sh *strictHandler) UpdateEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+	var request UpdateEventRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+
+	var body UpdateEventJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateEvent(ctx, request.(UpdateEventRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateEvent")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateEventResponseObject); ok {
+		if err := validResponse.VisitUpdateEventResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // Base64 encoded, compressed with deflate, json marshaled OpenAPI spec.
 // Stored as a slice of fixed-width chunks rather than one concatenated
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"vFn+ZwA=",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,
