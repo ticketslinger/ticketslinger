@@ -69,6 +69,11 @@ func TestAuditNamesTheActor(t *testing.T) {
 	check(rows[0], "CI", nil)
 	check(rows[1], "Sam Staff", "staff@example.com")
 	check(rows[2], "Olive Owner", "owner@example.com")
+	for i, want := range []string{"api_key", "user", "user"} {
+		if rows[i]["actor_type"] != want {
+			t.Errorf("row %d: actor_type %v, want %s", i, rows[i]["actor_type"], want)
+		}
+	}
 
 	// A revoked key keeps its name; a former member loses theirs.
 	keyID := rows[0]["actor_api_key_id"].(string)
@@ -78,4 +83,28 @@ func TestAuditNamesTheActor(t *testing.T) {
 	check(rows[0], "CI", nil)
 	check(rows[1], nil, nil)
 	check(rows[2], "Olive Owner", "owner@example.com")
+
+	// A row the system wrote names nobody, and says it was the system; a
+	// deleted user's row (no ids left) is still a person's.
+	exec(`INSERT INTO audit_log (organizer_id, actor_system, action, entity_type, entity_id)
+		SELECT id, true, 'order.cancelled_late', 'order', id FROM organizers WHERE slug = 'acme'`)
+	exec(`UPDATE audit_log SET actor_user_id = NULL WHERE action = 'event.created' AND entity_id IN (SELECT id FROM events WHERE slug = 'by-staff')`)
+	res := h.do(owner, "GET", "/v1/organizers/acme/audit", "")
+	var all []map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&all); err != nil {
+		t.Fatal(err)
+	}
+	types := map[string]any{}
+	for _, r := range all {
+		if r["action"] == "order.cancelled_late" {
+			types["system"] = r["actor_type"]
+			check(r, nil, nil)
+		}
+		if r["action"] == "event.created" && r["actor_user_id"] == nil && r["actor_api_key_id"] == nil {
+			types["deleted"] = r["actor_type"]
+		}
+	}
+	if types["system"] != "system" || types["deleted"] != "user" {
+		t.Errorf("actor types %v, want system for the system's row and user for a deleted user's", types)
+	}
 }

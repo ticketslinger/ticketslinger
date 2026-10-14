@@ -48,8 +48,8 @@ type server struct {
 	Deps
 	public map[string]bool // mux patterns ("POST /v1/auth/login") whose spec says security: []
 	// Per client address (ratelimit.AddrKey): checkouts created, pay calls,
-	// and storefront reads that try a code.
-	checkoutLimit, payLimit, codeLimit *ratelimit.Limiter
+	// storefront reads that try a code, and order page reads.
+	checkoutLimit, payLimit, codeLimit, orderLimit *ratelimit.Limiter
 }
 
 func New(d Deps) http.Handler {
@@ -65,7 +65,7 @@ func New(d Deps) http.Handler {
 	}
 	noStore := noStoreRoutes()
 	s := &server{Deps: d, public: publicRoutes(), checkoutLimit: ratelimit.New(10, time.Minute), payLimit: ratelimit.New(20, time.Minute),
-		codeLimit: ratelimit.New(30, time.Minute)}
+		codeLimit: ratelimit.New(30, time.Minute), orderLimit: ratelimit.New(60, time.Minute)}
 	strict := NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc:  func(w http.ResponseWriter, r *http.Request, err error) { writeBadRequest(w, r, err) },
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) { writeError(w, err) },
@@ -78,10 +78,11 @@ func New(d Deps) http.Handler {
 		// unauthenticated request is a 401 whatever it sends.
 		// idempotent is listed first, so it runs inside authenticate and
 		// can scope keys by the caller.
-		Middlewares: []MiddlewareFunc{idempotency.Middleware(d.Pool, idempotencyScope, func(r *http.Request) bool { return noStore[r.Pattern] }), s.authenticate},
+		Middlewares: []MiddlewareFunc{idempotency.Middleware(d.Pool, idempotencyScope, func(r *http.Request) bool { return noStore[r.Pattern] }), s.authenticate, privateAnswers},
 		// Path-parameter parse failures from the generated wrapper.
 		ErrorHandlerFunc: writeBadRequest,
 	})
+	mux.HandleFunc("POST /v1/webhooks/stripe", s.stripeWebhook)
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { writeError(w, notFound()) })
 	return requestID(recoverer(limitBody(mux)))
 }
@@ -706,7 +707,8 @@ func (s *server) ListAudit(ctx context.Context, req ListAuditRequestObject) (Lis
 		// Names come from the member directory (current members only) and
 		// api_keys (revoked keys included); a former member's name is null.
 		rows, err := tx.Query(ctx, `select a.id, a.action, a.entity_type, a.entity_id, a.actor_user_id, a.actor_api_key_id, a.at,
-				coalesce(d.name, k.name), d.email
+				coalesce(d.name, k.name), d.email,
+				case when a.actor_system then 'system' when a.actor_api_key_id is not null then 'api_key' else 'user' end
 			from audit_log a
 			left join app_member_directory() d on d.user_id = a.actor_user_id
 			left join api_keys k on k.id = a.actor_api_key_id
@@ -718,7 +720,7 @@ func (s *server) ListAudit(ctx context.Context, req ListAuditRequestObject) (Lis
 		for rows.Next() {
 			var e AuditEntry
 			var name, email *string
-			if err := rows.Scan(&e.Id, &e.Action, &e.EntityType, &e.EntityId, &e.ActorUserId, &e.ActorApiKeyId, &e.At, &name, &email); err != nil {
+			if err := rows.Scan(&e.Id, &e.Action, &e.EntityType, &e.EntityId, &e.ActorUserId, &e.ActorApiKeyId, &e.At, &name, &email, &e.ActorType); err != nil {
 				return err
 			}
 			e.ActorName, e.ActorEmail = nullOf(name), nullOf(email)

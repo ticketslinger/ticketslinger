@@ -730,6 +730,19 @@ paths:
         "422": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+  /orders/{code}:
+    get:
+      operationId: getOrder
+      security: []
+      description: "The buyer's order page, for whoever holds the token from the order's link (the t= value in the email, and order_url). An unknown code, a wrong token and an order that isn't paid yet all get the same 404. The answer carries the tickets' QR values, so it comes with Cache-Control: no-store and Referrer-Policy: no-referrer. 60 reads a minute per client address, then 429 rate_limited. A cancelled order (the payment arrived after the tickets had gone) has no tickets; it shows refunded once the refund is on its way."
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string }, description: "The order code, like TS-7K2QF." }
+        - { name: token, in: query, required: true, schema: { type: string }, description: "The t= value from the order's link." }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     session: { type: http, scheme: bearer, description: "A session token, or an organizer API key (tsk_...). A key acts only within its own organizer, and gets 403 session_required on anything that needs a person: your account, your organizer list, the audit log and key management. A read key gets 403 scope_read_only on writes." }
@@ -883,6 +896,43 @@ components:
         email: { type: string, maxLength: 254, description: "Where the tickets go: one plain address, like ada@example.com (422 bad_email)." }
         attendees: { type: array, items: { type: string, maxLength: 120 }, description: "Optional names, one per ticket in the same order as ticket_index." }
         answers: { type: array, items: { $ref: "#/components/schemas/CheckoutAnswer" } }
+    Order:
+      type: object
+      required: [code, status, email, event, totals, tickets]
+      properties:
+        code: { type: string }
+        status: { type: string, enum: [paid, cancelled, refunded, partially_refunded] }
+        email: { type: string }
+        event:
+          type: object
+          required: [name, starts_at, ends_at, timezone, venue_name, venue_address, organizer_name]
+          properties:
+            name: { type: string }
+            starts_at: { type: string, format: date-time }
+            ends_at: { type: string, format: date-time }
+            timezone: { type: string }
+            venue_name: { type: string }
+            venue_address: { type: string }
+            organizer_name: { type: string }
+        totals:
+          type: object
+          required: [subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents]
+          properties:
+            subtotal_cents: { type: integer, format: int64 }
+            discount_cents: { type: integer, format: int64 }
+            tax_cents: { type: integer, format: int64 }
+            fee_cents: { type: integer, format: int64 }
+            total_cents: { type: integer, format: int64 }
+        tickets: { type: array, items: { $ref: "#/components/schemas/OrderTicket" } }
+    OrderTicket:
+      type: object
+      required: [id, ticket_type_name, attendee_name, status, qr]
+      properties:
+        id: { type: string, format: uuid }
+        ticket_type_name: { type: string }
+        attendee_name: { type: string, description: "Empty when the buyer didn't give one." }
+        status: { type: string, enum: [valid, void] }
+        qr: { type: string, description: "What the ticket's QR code holds: 22 base64url characters. Whoever has it can get in, so show it only to the ticket's holder." }
     PaymentStart:
       type: object
       required: [kind, amount_cents]
@@ -970,7 +1020,7 @@ components:
         role: { type: string, enum: [owner, admin, checkin, "key:read", "key:write"], description: "Your role here. An API key sees its own scope as key:read or key:write." }
     AuditEntry:
       type: object
-      required: [id, action, entity_type, entity_id, at]
+      required: [id, action, entity_type, entity_id, actor_type, at]
       properties:
         id: { type: string, format: uuid }
         action: { type: string }
@@ -978,6 +1028,7 @@ components:
         entity_id: { type: string, format: uuid }
         actor_user_id: { type: string, format: uuid }
         actor_api_key_id: { type: string, format: uuid, description: Set instead of actor_user_id when an API key did it. }
+        actor_type: { type: string, enum: [user, api_key, system], description: "Who did it: a person, an API key, or TicketSlinger itself (say, cancelling and refunding an order whose payment arrived after its tickets had gone)." }
         actor_name: { type: [string, "null"], description: "The person's name if they are still a member of this organizer, or the API key's name. Null for former members." }
         actor_email: { type: [string, "null"], description: "The person's email if they are still a member of this organizer. Null for API keys and former members." }
         at: { type: string, format: date-time }

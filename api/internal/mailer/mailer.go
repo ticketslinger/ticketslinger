@@ -13,11 +13,13 @@ type Mailer interface {
 	Send(ctx context.Context, to, subject, text string) error
 }
 
-// Log writes messages to the log instead of sending them. Real delivery comes later.
+// Log writes messages to the log instead of sending them. Real delivery
+// comes later. Links are cut out first: a sign-in or order link is a key,
+// and logs are kept and read far more widely than inboxes.
 type Log struct{}
 
 func (Log) Send(ctx context.Context, to, subject, text string) error {
-	slog.InfoContext(ctx, "email", "to", to, "subject", subject, "text", text)
+	slog.InfoContext(ctx, "email", "to", to, "subject", subject, "text", linkRe.ReplaceAllString(text, "[link removed]"))
 	return nil
 }
 

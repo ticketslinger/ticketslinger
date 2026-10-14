@@ -193,8 +193,10 @@ func TestAuditLogIsAppendOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The app role holds no UPDATE or DELETE privilege at all: refused
-	// outright (42501), not merely filtered to zero rows by a policy.
-	for _, q := range []string{`update audit_log set action = 'x'`, `delete from audit_log`} {
+	// outright (42501), not merely filtered to zero rows by a policy. Nor can
+	// a member write a row as if the system had done it.
+	for _, q := range []string{`update audit_log set action = 'x'`, `delete from audit_log`,
+		`insert into audit_log(organizer_id, actor_system, action, entity_type, entity_id) values ((select app_organizer()), true, 'test', 'order', gen_random_uuid())`} {
 		err := db.WithOrganizer(ctx, pool, ua, oa, func(tx pgx.Tx, _ string) error {
 			_, err := tx.Exec(ctx, q)
 			return err

@@ -640,6 +640,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/orders/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The buyer's order page, for whoever holds the token from the order's link (the t= value in the email, and order_url). An unknown code, a wrong token and an order that isn't paid yet all get the same 404. The answer carries the tickets' QR values, so it comes with Cache-Control: no-store and Referrer-Policy: no-referrer. 60 reads a minute per client address, then 429 rate_limited. A cancelled order (the payment arrived after the tickets had gone) has no tickets; it shows refunded once the refund is on its way. */
+        get: operations["getOrder"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -819,6 +836,47 @@ export interface components {
             attendees?: string[];
             answers?: components["schemas"]["CheckoutAnswer"][];
         };
+        Order: {
+            code: string;
+            /** @enum {string} */
+            status: "paid" | "cancelled" | "refunded" | "partially_refunded";
+            email: string;
+            event: {
+                name: string;
+                /** Format: date-time */
+                starts_at: string;
+                /** Format: date-time */
+                ends_at: string;
+                timezone: string;
+                venue_name: string;
+                venue_address: string;
+                organizer_name: string;
+            };
+            totals: {
+                /** Format: int64 */
+                subtotal_cents: number;
+                /** Format: int64 */
+                discount_cents: number;
+                /** Format: int64 */
+                tax_cents: number;
+                /** Format: int64 */
+                fee_cents: number;
+                /** Format: int64 */
+                total_cents: number;
+            };
+            tickets: components["schemas"]["OrderTicket"][];
+        };
+        OrderTicket: {
+            /** Format: uuid */
+            id: string;
+            ticket_type_name: string;
+            /** @description Empty when the buyer didn't give one. */
+            attendee_name: string;
+            /** @enum {string} */
+            status: "valid" | "void";
+            /** @description What the ticket's QR code holds: 22 base64url characters. Whoever has it can get in, so show it only to the ticket's holder. */
+            qr: string;
+        };
         PaymentStart: {
             /**
              * @description test is the built-in fake provider, for development.
@@ -939,6 +997,11 @@ export interface components {
              * @description Set instead of actor_user_id when an API key did it.
              */
             actor_api_key_id?: string;
+            /**
+             * @description Who did it: a person, an API key, or TicketSlinger itself (say, cancelling and refunding an order whose payment arrived after its tickets had gone).
+             * @enum {string}
+             */
+            actor_type: "user" | "api_key" | "system";
             /** @description The person's name if they are still a member of this organizer, or the API key's name. Null for former members. */
             actor_name?: string | null;
             /** @description The person's email if they are still a member of this organizer. Null for API keys and former members. */
@@ -2897,6 +2960,35 @@ export interface operations {
             422: components["responses"]["Error"];
             429: components["responses"]["Error"];
             503: components["responses"]["Error"];
+        };
+    };
+    getOrder: {
+        parameters: {
+            query: {
+                /** @description The t= value from the order's link. */
+                token: string;
+            };
+            header?: never;
+            path: {
+                /** @description The order code, like TS-7K2QF. */
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Order"];
+                };
+            };
+            400: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            429: components["responses"]["Error"];
         };
     };
 }

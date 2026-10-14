@@ -11,6 +11,7 @@ const THING: Record<string, string> = {
   promo_code: "Promo code",
   question: "Question",
   api_key: "API key",
+  order: "Order",
 };
 const DONE: Record<string, string> = {
   created: "created",
@@ -18,6 +19,7 @@ const DONE: Record<string, string> = {
   deleted: "deleted",
   revoked: "revoked",
   reordered: "reordered",
+  cancelled_late: "cancelled (refund queued)",
 };
 
 /** "ticket_type.updated" → "Ticket type changed"; anything unfamiliar shows as it is. */
@@ -33,11 +35,15 @@ const when = (iso: string) =>
 
 type Actor = Pick<
   components["schemas"]["AuditEntry"],
-  "actor_user_id" | "actor_api_key_id" | "actor_name" | "actor_email"
+  "actor_type" | "actor_user_id" | "actor_api_key_id" | "actor_name" | "actor_email"
 >;
 
-/** The Who cell: a key by name, you as "You", a member by name with their email beneath. */
+/**
+ * The Who cell: a key by name, you as "You", a member by name with their
+ * email beneath, and "Automatic" for what TicketSlinger did by itself.
+ */
 export function who(e: Actor, meId: string) {
+  if (e.actor_type === "system") return "Automatic";
   if (e.actor_api_key_id) return e.actor_name ? `API key: ${e.actor_name}` : "An API key";
   if (e.actor_user_id === meId) return "You";
   return e.actor_name ?? "Someone on your team";

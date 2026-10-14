@@ -187,6 +187,20 @@ func TestRefundReturnsTheFee(t *testing.T) {
 	}
 }
 
+// A refund retried after Stripe's 24-hour idempotency window finds the money
+// already back with the buyer: that's done, not an error to retry forever.
+func TestAlreadyRefundedIsItsOwnError(t *testing.T) {
+	s, rec := newStripe(t)
+	rec.status, rec.fail = 400, `{"error":{"type":"invalid_request_error","code":"charge_already_refunded","message":"Charge ch_1 has already been refunded."}}`
+	if _, err := s.Refund(context.Background(), plugin.RefundInput{Account: "acct_test1", PaymentIntentID: "pi_test1", IdempotencyKey: "refund-1"}); !errors.Is(err, plugin.ErrAlreadyRefunded) {
+		t.Fatalf("got %v, want ErrAlreadyRefunded", err)
+	}
+	rec.fail = `{"error":{"type":"invalid_request_error","code":"resource_missing","message":"No such payment_intent"}}`
+	if _, err := s.Refund(context.Background(), plugin.RefundInput{Account: "acct_test1", PaymentIntentID: "pi_test1", IdempotencyKey: "refund-1"}); err == nil || errors.Is(err, plugin.ErrAlreadyRefunded) {
+		t.Fatalf("another error: %v", err)
+	}
+}
+
 func TestStripeErrorsAreWrapped(t *testing.T) {
 	for _, tc := range []struct {
 		status int
