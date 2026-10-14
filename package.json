@@ -1,7 +1,7 @@
 {
   "name": "ticketslinger",
   "private": true,
-  "workspaces": ["web/*"],
+  "workspaces": ["web/*", "e2e"],
   "scripts": { "gen": "bun run --filter '*' gen" },
   "devDependencies": { "@biomejs/biome": "2.5.15" }
 }
