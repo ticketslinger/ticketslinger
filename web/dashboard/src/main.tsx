@@ -78,7 +78,7 @@ function App() {
   }
   switch (path) {
     case "/security":
-      return <Security me={me} onChanged={loadMe} />;
+      return <Security me={me} onChanged={loadMe} onSignedIn={signedIn} onSignedOut={signedOut} />;
     case "/organizers/new":
       return <NewOrganizer me={me} />;
     case "/":

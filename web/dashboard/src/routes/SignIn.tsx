@@ -4,22 +4,13 @@ import { ErrorText, Field, Link, useAction } from "../ui";
 
 export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
   const [needCode, setNeedCode] = useState(false);
-  const { busy, error, setError, run } = useAction();
+  const { busy, error, run } = useAction();
 
-  async function withPasskey() {
-    setError("");
-    try {
+  const withPasskey = () =>
+    run(async () => {
       await session.passkeyLogin();
-    } catch (e) {
-      setError(
-        e instanceof ApiFailure
-          ? e.message
-          : "That passkey didn't go through. Try again, or use your password below.",
-      );
-      return;
-    }
-    onSignedIn();
-  }
+      onSignedIn();
+    });
 
   return (
     <main>

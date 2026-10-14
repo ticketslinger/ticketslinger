@@ -11,6 +11,11 @@ export function Home({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
   const [orgs, setOrgs] = useState<Organizer[] | null>(null);
   const [loadError, setLoadError] = useState("");
   const signOut = useAction();
+  const signOutNow = () =>
+    signOut.run(async () => {
+      await session.logout();
+      onSignedOut();
+    });
 
   useEffect(() => {
     api
@@ -27,17 +32,7 @@ export function Home({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
     <main>
       <header className="top">
         <p className="muted">Signed in as {me.email}</p>
-        <button
-          type="button"
-          className="secondary"
-          disabled={signOut.busy}
-          onClick={() =>
-            signOut.run(async () => {
-              await session.logout();
-              onSignedOut();
-            })
-          }
-        >
+        <button type="button" className="secondary" disabled={signOut.busy} onClick={signOutNow}>
           Sign out
         </button>
       </header>
@@ -52,6 +47,21 @@ export function Home({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
       )}
 
       <h2>Your organizers</h2>
+      {!me.mfa &&
+        orgs?.some((o) => o.role !== "checkin") &&
+        (me.totp_enabled ? (
+          <div className="notice">
+            <p>You've set up a second step. Sign in again with it to manage this organizer.</p>
+            <button type="button" disabled={signOut.busy} onClick={signOutNow}>
+              Sign in again
+            </button>
+          </div>
+        ) : (
+          <p className="notice">
+            Add a passkey or an authenticator app to manage this organizer.{" "}
+            <Link href="/security">Set one up</Link>
+          </p>
+        ))}
       <ErrorText>{loadError}</ErrorText>
       {orgs === null && !loadError && <p className="muted">Loading…</p>}
       {orgs?.length === 0 && <p>You're not part of an organizer yet. Create one to get going.</p>}
@@ -60,12 +70,6 @@ export function Home({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
           {orgs.map((o) => (
             <li key={o.id}>
               <strong>{o.name}</strong> <span className="muted">· {ROLE[o.role]}</span>
-              {!me.mfa && o.role !== "checkin" && (
-                <p className="notice">
-                  Add a passkey or an authenticator app to manage this organizer.{" "}
-                  <Link href="/security">Set one up</Link>
-                </p>
-              )}
             </li>
           ))}
         </ul>

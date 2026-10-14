@@ -77,7 +77,12 @@ export const session = {
     const optionsJSON = (
       options as { publicKey: Parameters<typeof startAuthentication>[0]["optionsJSON"] }
     ).publicKey;
-    const assertion = await startAuthentication({ optionsJSON });
+    let assertion: Awaited<ReturnType<typeof startAuthentication>>;
+    try {
+      assertion = await startAuthentication({ optionsJSON });
+    } catch {
+      throw new ApiFailure("cancelled", "That passkey didn't go through. Give it another try.", 0);
+    }
     return post(`/session/passkey/${encodeURIComponent(challenge_id)}`, assertion);
   },
   logout: () => post("/session/logout"),

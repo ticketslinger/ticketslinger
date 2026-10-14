@@ -1,7 +1,7 @@
 import { startRegistration } from "@simplewebauthn/browser";
 import qrcode from "qrcode-generator";
 import { useState } from "react";
-import { ApiFailure, api, must } from "../api";
+import { ApiFailure, api, must, session } from "../api";
 import { ErrorText, Field, Link, type Me, useAction } from "../ui";
 
 /** QR code as SVG elements: the CSP allows neither data: images nor injected markup. */
@@ -22,13 +22,24 @@ export function QrCode({ text, label }: { text: string; label: string }) {
   );
 }
 
-export function Security({ me, onChanged }: { me: Me; onChanged: () => void }) {
+export function Security({
+  me,
+  onChanged,
+  onSignedIn,
+  onSignedOut,
+}: {
+  me: Me;
+  onChanged: () => void;
+  onSignedIn: () => void;
+  onSignedOut: () => void;
+}) {
   const [password, setPassword] = useState("");
   const [totp, setTotp] = useState<{ secret: string; otpauth_url: string } | null>(null);
   const [totpOn, setTotpOn] = useState(false);
   const [passkeyAdded, setPasskeyAdded] = useState(false);
   const totpAction = useAction();
   const passkeyAction = useAction();
+  const signInAgain = useAction();
   // A session that already passed a second factor can add a passkey without the password.
   const needPassword = !me.mfa;
 
@@ -105,9 +116,31 @@ export function Security({ me, onChanged }: { me: Me; onChanged: () => void }) {
         <p>Sign in with your fingerprint, face or device PIN. No password to type.</p>
         <ErrorText>{passkeyAction.error}</ErrorText>
         <p className="success" role="status">
-          {passkeyAdded && "Passkey added. Next time, you can sign in with it."}
+          {passkeyAdded &&
+            (me.mfa
+              ? "Passkey added. Next time, you can sign in with it."
+              : "Passkey added. Sign in with it now and you can manage your organizers straight away.")}
         </p>
-        <button type="button" onClick={addPasskey} disabled={passkeyAction.busy}>
+        {passkeyAdded && !me.mfa && (
+          <button
+            type="button"
+            disabled={passkeyAction.busy}
+            onClick={() =>
+              passkeyAction.run(async () => {
+                await session.passkeyLogin();
+                onSignedIn();
+              })
+            }
+          >
+            Use it now
+          </button>
+        )}
+        <button
+          type="button"
+          className={passkeyAdded && !me.mfa ? "secondary" : undefined}
+          onClick={addPasskey}
+          disabled={passkeyAction.busy}
+        >
           Add a passkey
         </button>
       </section>
@@ -116,8 +149,27 @@ export function Security({ me, onChanged }: { me: Me; onChanged: () => void }) {
         <h2 id="totp-h">Authenticator app</h2>
         <p className="success" role="status">
           {(me.totp_enabled || totpOn) &&
-            "Your authenticator app is set up. We'll ask for a code when you sign in with your password."}
+            (me.mfa
+              ? "Your authenticator app is set up. We'll ask for a code when you sign in with your password."
+              : "Your authenticator app is on. It kicks in from your next sign-in, so sign in again with a code to manage your organizers.")}
         </p>
+        {(me.totp_enabled || totpOn) && !me.mfa && (
+          <>
+            <ErrorText>{signInAgain.error}</ErrorText>
+            <button
+              type="button"
+              disabled={signInAgain.busy}
+              onClick={() =>
+                signInAgain.run(async () => {
+                  await session.logout();
+                  onSignedOut();
+                })
+              }
+            >
+              Sign in again
+            </button>
+          </>
+        )}
         {!me.totp_enabled && !totpOn && !totp && (
           <>
             <p>Use an app like 1Password, Google Authenticator or Authy for a 6-digit code.</p>
