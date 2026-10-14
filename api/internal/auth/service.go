@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/url"
 	"strings"
@@ -41,6 +40,7 @@ const (
 	maxName         = 120
 	sessionLifetime = 30 * 24 * time.Hour
 	verifyLifetime  = 48 * time.Hour
+	maxSessionAge   = 90 * 24 * time.Hour // absolute cap, however often a session slides
 	maxFailures     = 5
 	lockout         = 15 * time.Minute
 )
@@ -101,6 +101,9 @@ func newToken() (string, []byte, error) {
 func hashToken(tok string) []byte { h := sha256.Sum256([]byte(tok)); return h[:] }
 
 func (s *Service) Signup(ctx context.Context, email, password, name, ip, ua string) (Session, User, error) {
+	if !s.ipLimit.allow("signup:"+ip, time.Now()) {
+		return Session{}, User{}, ErrRateLimited
+	}
 	email, name = normEmail(email), strings.TrimSpace(name)
 	switch n := utf8.RuneCountInString(password); {
 	case n < minPassword:
@@ -111,10 +114,7 @@ func (s *Service) Signup(ctx context.Context, email, password, name, ip, ua stri
 	if name == "" || utf8.RuneCountInString(name) > maxName {
 		return Session{}, User{}, ErrInvalidName
 	}
-	if !s.ipLimit.allow("signup:"+ip, time.Now()) {
-		return Session{}, User{}, ErrRateLimited
-	}
-	hash, err := HashPassword(password)
+	hash, err := hashPassword(ctx, password)
 	if err != nil {
 		return Session{}, User{}, err
 	}
@@ -147,7 +147,9 @@ func (s *Service) Signup(ctx context.Context, email, password, name, ip, ua stri
 		return Session{}, User{}, err
 	}
 	link := s.opts.Origin + "/verify-email?token=" + url.QueryEscape(verifyTok)
-	body := fmt.Sprintf("Hi %s,\n\nConfirm your email for TicketSlinger by opening this link:\n\n%s\n\nIt works for 48 hours. If you didn't sign up, you can ignore this email.\n", name, link)
+	// The name is user-supplied, so it stays out of the email.
+	body := "Hi,\n\nConfirm your email for TicketSlinger by opening this link:\n\n" + link +
+		"\n\nIt works for 48 hours. If you didn't sign up, you can ignore this email.\n"
 	// The account exists either way; a failed send must not fail the signup.
 	if err := s.mail.Send(ctx, email, "Confirm your email", body); err != nil {
 		slog.ErrorContext(ctx, "verification email not sent", "user", u.ID, "err", err)
@@ -173,7 +175,7 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, ip, ua s
 		   FROM users WHERE email = $1`, email).
 		Scan(&u.ID, &u.Email, &u.Name, &u.EmailVerified, &totpOn, &hash, &locked)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && hash == nil) {
-		_, _ = CheckPassword(dummyHash(), password)
+		_, _ = checkPassword(ctx, dummyHash(), password)
 		return Session{}, User{}, ErrBadCredentials
 	}
 	if err != nil {
@@ -183,7 +185,7 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, ip, ua s
 		return Session{}, User{}, ErrLocked
 	}
 	u.TOTPEnabled = totpOn
-	ok, err := CheckPassword(*hash, password)
+	ok, err := checkPassword(ctx, *hash, password)
 	if err != nil {
 		return Session{}, User{}, err
 	}
@@ -235,7 +237,7 @@ func createSession(ctx context.Context, tx pgx.Tx, userID uuid.UUID, mfa bool, i
 }
 
 // Authenticate resolves a session token. Sessions slide: each day of use
-// pushes expiry back out to 30 days.
+// pushes expiry back out to 30 days, but none lives past 90 days from creation.
 func (s *Service) Authenticate(ctx context.Context, token string) (User, Session, error) {
 	var u User
 	var sess Session
@@ -243,7 +245,8 @@ func (s *Service) Authenticate(ctx context.Context, token string) (User, Session
 		`SELECT s.id, s.mfa, s.expires_at,
 		        u.id, u.email, u.name, u.email_verified_at IS NOT NULL, u.totp_enabled_at IS NOT NULL
 		   FROM sessions s JOIN users u ON u.id = s.user_id
-		  WHERE s.token_hash = $1 AND s.expires_at > now()`, hashToken(token)).
+		  WHERE s.token_hash = $1 AND s.expires_at > now() AND s.created_at > now() - $2::interval`,
+		hashToken(token), maxSessionAge.String()).
 		Scan(&sess.ID, &sess.MFA, &sess.ExpiresAt, &u.ID, &u.Email, &u.Name, &u.EmailVerified, &u.TOTPEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, Session{}, ErrBadToken

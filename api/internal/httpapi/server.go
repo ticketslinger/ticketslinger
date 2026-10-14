@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 
 	"github.com/google/uuid"
@@ -84,11 +84,7 @@ type authed struct {
 func (s *server) authenticate(next StrictHandlerFunc, op string) StrictHandlerFunc {
 	public := s.public[op]
 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, req any) (any, error) {
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			ip = ""
-		}
-		ctx = context.WithValue(ctx, clientKey, client{ip, r.UserAgent()})
+		ctx = context.WithValue(ctx, clientKey, client{clientIP(r, s.Config.TrustedProxies), r.UserAgent()})
 		if public {
 			return next(ctx, w, r, req)
 		}
@@ -105,6 +101,25 @@ func (s *server) authenticate(next StrictHandlerFunc, op string) StrictHandlerFu
 		}
 		return next(context.WithValue(ctx, authKey, authed{u, sess, token}), w, r, req)
 	}
+}
+
+// clientIP is the peer's address, or X-Real-IP when the peer is a trusted
+// proxy. X-Forwarded-For is ignored. Returns "" if nothing parses.
+func clientIP(r *http.Request, trusted []netip.Prefix) string {
+	ap, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return ""
+	}
+	peer := ap.Addr().Unmap().WithZone("")
+	for _, p := range trusted {
+		if p.Contains(peer) {
+			if real, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("X-Real-IP"))); err == nil {
+				return real.Unmap().WithZone("").String()
+			}
+			break
+		}
+	}
+	return peer.String()
 }
 
 func userFrom(ctx context.Context) (auth.User, auth.Session, bool) {

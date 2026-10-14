@@ -15,7 +15,16 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.HTTPAddr != "127.0.0.1:3000" || c.WebAuthnRPID != "localhost" {
+	if c.HTTPAddr != "127.0.0.1:3000" || c.WebAuthnRPID != "localhost" ||
+		len(c.TrustedProxies) != 2 || c.TrustedProxies[0].String() != "127.0.0.1/32" || c.TrustedProxies[1].String() != "::1/128" {
 		t.Fatalf("unexpected defaults: %+v", c)
+	}
+}
+
+func TestLoadRejectsBadTrustedProxy(t *testing.T) {
+	t.Setenv("TS_DATABASE_URL", "postgres://x")
+	t.Setenv("TS_TRUSTED_PROXIES", "10.0.0.0/8, nonsense")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error for an invalid CIDR")
 	}
 }

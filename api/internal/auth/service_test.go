@@ -3,6 +3,7 @@ package auth_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,5 +94,69 @@ func TestSessionSlidesOnUse(t *testing.T) {
 	_, got, err := s.Authenticate(ctx, sess.Token)
 	if err != nil || time.Until(got.ExpiresAt) < 29*24*time.Hour {
 		t.Fatalf("session did not slide: %v %v", got.ExpiresAt, err)
+	}
+}
+
+func TestExpiredEmailTokenIsRejected(t *testing.T) {
+	pool := testdb.New(t)
+	m := &mailer.Memory{}
+	s := auth.NewService(pool, m, auth.Options{Origin: "http://localhost:5173"})
+	ctx := context.Background()
+	if _, _, err := s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE email_tokens SET expires_at = now() - interval '1 minute'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.VerifyEmail(ctx, m.LastToken()); !errors.Is(err, auth.ErrBadToken) {
+		t.Fatalf("got %v, want ErrBadToken", err)
+	}
+}
+
+func TestSuccessfulLoginResetsFailures(t *testing.T) {
+	s, _ := newSvc(t)
+	ctx := context.Background()
+	_, _, _ = s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", "")
+	fail4 := func() {
+		for i := 0; i < 4; i++ {
+			if _, _, err := s.Login(ctx, "a@example.com", "wrong", "", "", ""); !errors.Is(err, auth.ErrBadCredentials) {
+				t.Fatalf("failure %d: %v", i, err)
+			}
+		}
+	}
+	fail4()
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	fail4()
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", ""); err != nil {
+		t.Fatalf("got %v; 4+4 failures split by a success must not lock", err)
+	}
+}
+
+func TestSessionsDieAfterNinetyDays(t *testing.T) {
+	pool := testdb.New(t)
+	s := auth.NewService(pool, &mailer.Memory{}, auth.Options{Origin: "http://localhost:5173"})
+	ctx := context.Background()
+	sess, _, err := s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE sessions SET created_at = now() - interval '91 days'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Authenticate(ctx, sess.Token); !errors.Is(err, auth.ErrBadToken) {
+		t.Fatalf("got %v, want ErrBadToken for a 91-day-old session", err)
+	}
+}
+
+func TestVerificationEmailLeavesOutName(t *testing.T) {
+	s, m := newSvc(t)
+	name := "Visit https://evil.example now"
+	if _, _, err := s.Signup(context.Background(), "a@example.com", "a long passphrase", name, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if body := m.Sent[0].Text; strings.Contains(body, "evil.example") || m.LastToken() == "" {
+		t.Fatalf("email body: %q", body)
 	}
 }

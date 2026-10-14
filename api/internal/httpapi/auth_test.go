@@ -1,13 +1,16 @@
 package httpapi_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
+	"github.com/ticketslinger/ticketslinger/api/internal/config"
 	"github.com/ticketslinger/ticketslinger/api/internal/httpapi"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
@@ -24,7 +27,16 @@ func newAuthServer(t *testing.T) (*httptest.Server, *mailer.Memory) {
 
 func do(t *testing.T, method, url, token, body string) (int, map[string]any) {
 	t.Helper()
+	return doFrom(t, "", method, url, token, body)
+}
+
+// doFrom sends a request as if relayed by a local proxy for realIP.
+func doFrom(t *testing.T, realIP, method, url, token, body string) (int, map[string]any) {
+	t.Helper()
 	req, _ := http.NewRequest(method, url, strings.NewReader(body))
+	if realIP != "" {
+		req.Header.Set("X-Real-IP", realIP)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -122,5 +134,32 @@ func TestOversizedBodyIs400(t *testing.T) {
 	big := `{"email":"a@example.com","password":"` + strings.Repeat("x", 2<<20) + `","name":"A"}`
 	if code, body := do(t, "POST", srv.URL+"/v1/auth/signup", "", big); code != 400 || errCode(body) != "bad_request" {
 		t.Fatalf("got %d %v", code, body)
+	}
+}
+
+func TestRateLimitAndSessionIPUseRealClientIP(t *testing.T) {
+	pool := testdb.New(t)
+	svc := auth.NewService(pool, &mailer.Memory{}, auth.Options{Origin: "http://localhost:5173"})
+	cfg := config.Config{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.MustParsePrefix("::1/128")}}
+	srv := httptest.NewServer(httpapi.New(httpapi.Deps{Pool: pool, Auth: svc, Config: cfg}))
+	defer srv.Close()
+
+	// Short passwords are rejected after the rate limit but before any hashing.
+	short := `{"email":"a@example.com","password":"short","name":"A"}`
+	for i := 0; i < 20; i++ {
+		if code, _ := doFrom(t, "203.0.113.1", "POST", srv.URL+"/v1/auth/signup", "", short); code != 422 {
+			t.Fatalf("attempt %d: %d", i, code)
+		}
+	}
+	if code, body := doFrom(t, "203.0.113.1", "POST", srv.URL+"/v1/auth/signup", "", short); code != 429 || errCode(body) != "rate_limited" {
+		t.Fatalf("21st from one client: %d %v", code, body)
+	}
+	ok := `{"email":"b@example.com","password":"a long passphrase","name":"B"}`
+	if code, body := doFrom(t, "203.0.113.2", "POST", srv.URL+"/v1/auth/signup", "", ok); code != 201 {
+		t.Fatalf("another client behind the same proxy: %d %v", code, body)
+	}
+	var ip string
+	if err := pool.QueryRow(context.Background(), `SELECT host(ip) FROM sessions`).Scan(&ip); err != nil || ip != "203.0.113.2" {
+		t.Fatalf("sessions.ip = %q, %v", ip, err)
 	}
 }
