@@ -466,3 +466,21 @@ dialog.confirm::backdrop {
 dialog.confirm p {
   margin: 0 0 1rem;
 }
+
+dialog.form {
+  width: min(36rem, calc(100% - 2rem));
+  max-height: calc(100% - 2rem);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  padding: 1rem 1.25rem;
+}
+
+dialog.form::backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+
+.tickets-section {
+  margin-top: 2rem;
+}

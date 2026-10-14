@@ -164,18 +164,23 @@ export function useLoad<T>(load: () => Promise<T>) {
 export function useAction() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // The API's error code for the last failure, so a form can point at the field it names.
+  const [code, setCode] = useState("");
   async function run(fn: () => Promise<void>) {
     setBusy(true);
     setError("");
+    setCode("");
     try {
       await fn();
     } catch (e) {
-      setError(asFailure(e).message);
+      const f = asFailure(e);
+      setError(f.message);
+      setCode(f.code);
     } finally {
       setBusy(false);
     }
   }
-  return { busy, error, setError, run };
+  return { busy, error, code, setError, run };
 }
 
 /** Errors live in an always-present alert region so screen readers announce them. */
