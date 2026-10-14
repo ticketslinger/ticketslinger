@@ -65,7 +65,8 @@ children.push(
     cwd: dashboard,
     env: {
       ...process.env,
-      NODE_ENV: "development",
+      // Plain http on localhost: Secure cookies would never come back.
+      TS_DASHBOARD_DEV: "1",
       TS_API_URL: "http://127.0.0.1:3001/v1",
       TS_DASHBOARD_PORT: "3002",
       TS_DASHBOARD_STATIC: "./dist",

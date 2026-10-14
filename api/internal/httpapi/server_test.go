@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"testing"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/httpapi"
@@ -70,5 +71,27 @@ func TestSecuredOperationsReject401BeforeBody(t *testing.T) {
 	}
 	if n == 0 {
 		t.Fatal("no secured operations found")
+	}
+}
+
+// The operations that need no session are exactly these. Adding
+// `security: []` to anything else fails here, so it can't slip in unreviewed.
+func TestPublicOperationsAreExactlyThese(t *testing.T) {
+	want := []string{"beginPasskeyLogin", "finishPasskeyLogin", "getHealth", "login", "signup", "verifyEmail"}
+	spec, err := httpapi.GetSwagger()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, item := range spec.Paths.Map() {
+		for _, op := range item.Operations() {
+			if op.Security != nil && len(*op.Security) == 0 {
+				got = append(got, opID(op))
+			}
+		}
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Fatalf("public operations = %v, want %v", got, want)
 	}
 }

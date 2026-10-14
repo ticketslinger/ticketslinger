@@ -93,6 +93,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Starts setting up an authenticator app. Unless this session passed a second factor, send the current password. Once the account has a passkey or an authenticator app, only a session that passed one may start (403 mfa_required). The setup expires if not confirmed within 10 minutes. */
         post: operations["startTotp"];
         delete?: never;
         options?: never;
@@ -109,6 +110,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Switches the authenticator app on. Refused (403 mfa_required) if the account gained a passkey since setup started and this session hasn't passed it; a setup older than 10 minutes is 400 totp_not_started. */
         post: operations["confirmTotp"];
         delete?: never;
         options?: never;
@@ -125,7 +127,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts adding a passkey. Unless this session passed a second factor, send the current password. */
+        /** @description Starts adding a passkey. Unless this session passed a second factor, send the current password. Once the account has a passkey or authenticator app, only a session that passed one may add another (403 mfa_required). */
         post: operations["beginPasskeyRegistration"];
         delete?: never;
         options?: never;
@@ -471,10 +473,10 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
                 "application/json": {
-                    password: string;
+                    password?: string;
                 };
             };
         };
@@ -489,6 +491,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     confirmTotp: {
@@ -514,6 +517,7 @@ export interface operations {
                 content?: never;
             };
             400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     beginPasskeyRegistration: {
@@ -541,6 +545,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             423: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
@@ -574,6 +579,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };

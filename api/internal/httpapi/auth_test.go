@@ -1,16 +1,17 @@
 package httpapi_test
 
 import (
-	"time"
-
 	"context"
 	"encoding/json"
-	"github.com/pquerna/otp/totp"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pquerna/otp/totp"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
 	"github.com/ticketslinger/ticketslinger/api/internal/config"
@@ -20,12 +21,17 @@ import (
 )
 
 func newAuthServer(t *testing.T) (*httptest.Server, *mailer.Memory) {
+	srv, m, _ := newAuthServerPool(t)
+	return srv, m
+}
+
+func newAuthServerPool(t *testing.T) (*httptest.Server, *mailer.Memory, *pgxpool.Pool) {
 	pool := testdb.New(t)
 	m := &mailer.Memory{}
 	svc := auth.NewService(pool, m, auth.Options{RPID: "localhost", Origin: "http://localhost:5173", SecretKey: []byte("0123456789abcdef0123456789abcdef")})
 	srv := httptest.NewServer(httpapi.New(httpapi.Deps{Pool: pool, Auth: svc}))
 	t.Cleanup(srv.Close)
-	return srv, m
+	return srv, m, pool
 }
 
 func do(t *testing.T, method, url, token, body string) (int, map[string]any) {
@@ -174,6 +180,9 @@ func TestTOTPEndpoints(t *testing.T) {
 	if st, _ := do(t, "POST", srv.URL+"/v1/auth/totp", "", ""); st != 401 {
 		t.Fatalf("unauthenticated start: %d", st)
 	}
+	if st, b := do(t, "POST", srv.URL+"/v1/auth/totp", tok, ""); st != 401 || errCode(b) != "password_required" {
+		t.Fatalf("no password: %d %v", st, b)
+	}
 	if st, _ := do(t, "POST", srv.URL+"/v1/auth/totp", tok, `{"password":"wrong password!"}`); st != 401 {
 		t.Fatalf("wrong password: %d", st)
 	}
@@ -188,7 +197,11 @@ func TestTOTPEndpoints(t *testing.T) {
 	if st, _ := do(t, "POST", srv.URL+"/v1/auth/totp/confirm", tok, `{"code":"`+code+`"}`); st != 204 {
 		t.Fatalf("confirm: %d", st)
 	}
-	if st, e := do(t, "POST", srv.URL+"/v1/auth/totp", tok, `{"password":"a long passphrase"}`); st != 409 {
-		t.Fatalf("restart while enabled: %d %v", st, e)
+	// The session predates the authenticator, so it hasn't passed it.
+	if st, e := do(t, "POST", srv.URL+"/v1/auth/totp", tok, `{"password":"a long passphrase"}`); st != 403 || errCode(e) != "mfa_required" {
+		t.Fatalf("restart from a password session: %d %v", st, e)
+	}
+	if st, e := do(t, "POST", srv.URL+"/v1/auth/passkeys/register", tok, `{"password":"a long passphrase"}`); st != 403 || errCode(e) != "mfa_required" {
+		t.Fatalf("passkey from a password session: %d %v", st, e)
 	}
 }

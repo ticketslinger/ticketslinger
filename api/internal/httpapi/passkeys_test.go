@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/descope/virtualwebauthn"
 	"github.com/google/uuid"
+	"github.com/pquerna/otp/totp"
 )
 
 func TestPasskeyEndpoints(t *testing.T) {
@@ -15,6 +17,9 @@ func TestPasskeyEndpoints(t *testing.T) {
 	tok := body["session_token"].(string)
 	user := body["user"].(map[string]any)
 	uid := uuid.MustParse(user["id"].(string))
+
+	// Left pending: confirming it must fail once the account has a passkey.
+	_, pending := do(t, "POST", srv.URL+"/v1/auth/totp", tok, `{"password":"a long passphrase"}`)
 
 	// A password session must re-authenticate to add a passkey.
 	if st, b := do(t, "POST", srv.URL+"/v1/auth/passkeys/register", tok, ""); st != 401 || errCode(b) != "password_required" {
@@ -66,6 +71,19 @@ func TestPasskeyEndpoints(t *testing.T) {
 	}
 	if st, b := do(t, "POST", srv.URL+"/v1/auth/passkeys/register", sess["session_token"].(string), ""); st != 200 {
 		t.Fatalf("mfa session begin register: %d %v", st, b)
+	}
+
+	// Now the account has a passkey, the password session can't add a second
+	// factor of any kind, even with the right password.
+	if st, b := do(t, "POST", srv.URL+"/v1/auth/passkeys/register", tok, `{"password":"a long passphrase"}`); st != 403 || errCode(b) != "mfa_required" {
+		t.Fatalf("password session adding a second passkey: %d %v", st, b)
+	}
+	if st, b := do(t, "POST", srv.URL+"/v1/auth/totp", tok, `{"password":"a long passphrase"}`); st != 403 || errCode(b) != "mfa_required" {
+		t.Fatalf("password session starting totp: %d %v", st, b)
+	}
+	code, _ := totp.GenerateCode(pending["secret"].(string), time.Now())
+	if st, b := do(t, "POST", srv.URL+"/v1/auth/totp/confirm", tok, `{"code":"`+code+`"}`); st != 403 || errCode(b) != "mfa_required" {
+		t.Fatalf("password session confirming a stale totp: %d %v", st, b)
 	}
 }
 

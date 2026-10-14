@@ -19,12 +19,12 @@ func TestTOTPEnrollThenLoginNeedsCode(t *testing.T) {
 	s, _ := newSvc(t)
 	ctx := context.Background()
 	_, u, _ := s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", "")
-	secret, _, err := s.StartTOTP(ctx, u.ID, "a long passphrase")
+	secret, _, err := s.StartTOTP(ctx, u.ID, false, "a long passphrase")
 	if err != nil {
 		t.Fatal(err)
 	}
 	code, _ := totp.GenerateCode(secret, time.Now())
-	if err := s.ConfirmTOTP(ctx, u.ID, code); err != nil {
+	if err := s.ConfirmTOTP(ctx, u.ID, false, code); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", ""); !errors.Is(err, auth.ErrTOTPRequired) {
@@ -41,9 +41,9 @@ func TestTOTPCodeCannotBeReused(t *testing.T) {
 	s, _ := newSvc(t)
 	ctx := context.Background()
 	_, u, _ := s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", "")
-	secret, _, _ := s.StartTOTP(ctx, u.ID, "a long passphrase")
+	secret, _, _ := s.StartTOTP(ctx, u.ID, false, "a long passphrase")
 	c1, _ := totp.GenerateCode(secret, time.Now())
-	_ = s.ConfirmTOTP(ctx, u.ID, c1)
+	_ = s.ConfirmTOTP(ctx, u.ID, false, c1)
 	c2, _ := totp.GenerateCode(secret, time.Now().Add(30*time.Second))
 	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", c2, "", ""); err != nil {
 		t.Fatal(err)
@@ -58,9 +58,9 @@ func enrolled(t *testing.T) (*auth.Service, auth.User, string) {
 	s, _ := newSvc(t)
 	ctx := context.Background()
 	_, u, _ := s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", "")
-	secret, _, _ := s.StartTOTP(ctx, u.ID, "a long passphrase")
+	secret, _, _ := s.StartTOTP(ctx, u.ID, false, "a long passphrase")
 	c, _ := totp.GenerateCode(secret, time.Now())
-	if err := s.ConfirmTOTP(ctx, u.ID, c); err != nil {
+	if err := s.ConfirmTOTP(ctx, u.ID, false, c); err != nil {
 		t.Fatal(err)
 	}
 	return s, u, secret
@@ -98,7 +98,7 @@ func TestTOTPWrongCodeIsBadCredentials(t *testing.T) {
 
 func TestTOTPStartWhileEnabledIsRefused(t *testing.T) {
 	s, u, _ := enrolled(t)
-	if _, _, err := s.StartTOTP(context.Background(), u.ID, "a long passphrase"); !errors.Is(err, auth.ErrTOTPAlreadyEnabled) {
+	if _, _, err := s.StartTOTP(context.Background(), u.ID, true, "a long passphrase"); !errors.Is(err, auth.ErrTOTPAlreadyEnabled) {
 		t.Fatalf("got %v, want ErrTOTPAlreadyEnabled", err)
 	}
 }
@@ -107,11 +107,11 @@ func TestTOTPConfirmRejectsWrongCode(t *testing.T) {
 	s, _ := newSvc(t)
 	ctx := context.Background()
 	_, u, _ := s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", "")
-	if err := s.ConfirmTOTP(ctx, u.ID, "123456"); !errors.Is(err, auth.ErrTOTPNotStarted) {
+	if err := s.ConfirmTOTP(ctx, u.ID, false, "123456"); !errors.Is(err, auth.ErrTOTPNotStarted) {
 		t.Fatalf("before start: got %v, want ErrTOTPNotStarted", err)
 	}
-	_, _, _ = s.StartTOTP(ctx, u.ID, "a long passphrase")
-	if err := s.ConfirmTOTP(ctx, u.ID, "000000"); !errors.Is(err, auth.ErrBadCode) {
+	_, _, _ = s.StartTOTP(ctx, u.ID, false, "a long passphrase")
+	if err := s.ConfirmTOTP(ctx, u.ID, false, "000000"); !errors.Is(err, auth.ErrBadCode) {
 		t.Fatalf("got %v, want ErrBadCode", err)
 	}
 }
@@ -121,7 +121,7 @@ func TestTOTPSecretEncryptedAtRest(t *testing.T) {
 	s := auth.NewService(pool, &mailer.Memory{}, auth.Options{SecretKey: testKey})
 	ctx := context.Background()
 	_, u, _ := s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", "")
-	secret, _, err := s.StartTOTP(ctx, u.ID, "a long passphrase")
+	secret, _, err := s.StartTOTP(ctx, u.ID, false, "a long passphrase")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,10 @@ func TestTOTPStartNeedsPassword(t *testing.T) {
 	s := auth.NewService(pool, &mailer.Memory{}, auth.Options{SecretKey: testKey})
 	ctx := context.Background()
 	_, u, _ := s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", "")
-	if _, _, err := s.StartTOTP(ctx, u.ID, "wrong"); !errors.Is(err, auth.ErrBadCredentials) {
+	if _, _, err := s.StartTOTP(ctx, u.ID, false, ""); !errors.Is(err, auth.ErrPasswordRequired) {
+		t.Fatalf("no password: got %v, want ErrPasswordRequired", err)
+	}
+	if _, _, err := s.StartTOTP(ctx, u.ID, false, "wrong"); !errors.Is(err, auth.ErrBadCredentials) {
 		t.Fatalf("got %v, want ErrBadCredentials", err)
 	}
 	var n int
@@ -147,7 +150,7 @@ func TestTOTPStartNeedsPassword(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("failed_logins = %d, want 1", n)
 	}
-	if secret, _, err := s.StartTOTP(ctx, u.ID, "a long passphrase"); err != nil || secret == "" {
+	if secret, _, err := s.StartTOTP(ctx, u.ID, false, "a long passphrase"); err != nil || secret == "" {
 		t.Fatalf("right password: %q %v", secret, err)
 	}
 }
@@ -158,13 +161,13 @@ func TestTOTPSecretBoundToUser(t *testing.T) {
 	ctx := context.Background()
 	_, a, _ := s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", "")
 	_, b, _ := s.Signup(ctx, "b@example.com", "a long passphrase", "B", "", "")
-	secret, _, _ := s.StartTOTP(ctx, a.ID, "a long passphrase")
+	secret, _, _ := s.StartTOTP(ctx, a.ID, false, "a long passphrase")
 	// Copy A's sealed secret onto B's row, as an attacker with DB write access might.
 	if _, err := pool.Exec(ctx, `UPDATE users SET totp_secret = (SELECT totp_secret FROM users WHERE id = $1) WHERE id = $2`, a.ID, b.ID); err != nil {
 		t.Fatal(err)
 	}
 	code, _ := totp.GenerateCode(secret, time.Now())
-	if err := s.ConfirmTOTP(ctx, b.ID, code); err == nil || errors.Is(err, auth.ErrBadCode) {
+	if err := s.ConfirmTOTP(ctx, b.ID, false, code); err == nil || errors.Is(err, auth.ErrBadCode) {
 		t.Fatalf("copied secret opened for another user: %v", err)
 	}
 }

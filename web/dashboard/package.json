@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "gen": "true",
-    "dev": "bun --watch server/index.ts",
+    "dev": "TS_DASHBOARD_DEV=1 bun --watch server/index.ts",
     "start": "bun server/index.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",

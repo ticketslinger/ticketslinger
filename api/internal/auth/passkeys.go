@@ -100,11 +100,15 @@ func (s *Service) consumeChallenge(ctx context.Context, id uuid.UUID, kind strin
 }
 
 // BeginPasskeyRegistration starts adding a passkey to the signed-in user.
-// Unless the session already passed a second factor, the current password is
-// required, so a stolen session token can't plant a passkey of its own.
+// Once the account has a second factor, only a session that passed one may
+// add another (see checkEnrolment). The first passkey on a password session
+// needs the current password, so a stolen session token can't plant one.
 func (s *Service) BeginPasskeyRegistration(ctx context.Context, userID uuid.UUID, mfa bool, password string) (uuid.UUID, *protocol.CredentialCreation, error) {
 	if s.waErr != nil {
 		return uuid.Nil, nil, s.waErr
+	}
+	if err := s.checkEnrolment(ctx, userID, mfa); err != nil {
+		return uuid.Nil, nil, err
 	}
 	if !mfa {
 		if password == "" {
@@ -127,9 +131,43 @@ func (s *Service) BeginPasskeyRegistration(ctx context.Context, userID uuid.UUID
 	return id, creation, err
 }
 
+// checkEnrolment refuses to add a second factor from a session that hasn't
+// passed one when the account already has a passkey or an authenticator app.
+// A password alone would otherwise let whoever knows it enrol their own
+// factor and then sign in with it as mfa. Starting a ceremony checks it
+// early; saving the factor checks it again under the same lock.
+func (s *Service) checkEnrolment(ctx context.Context, userID uuid.UUID, mfa bool) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error { return lockEnrolment(ctx, tx, userID, mfa) })
+}
+
+// lockEnrolment locks the user's row for the rest of tx, then applies the
+// checkEnrolment rule. Every enrolment takes this lock before adding a
+// factor, so two racing enrolments serialise and the second sees the first.
+// The lock and the look are separate statements: under READ COMMITTED the
+// second one gets a fresh snapshot that includes what the lock holder committed.
+func lockEnrolment(ctx context.Context, tx pgx.Tx, userID uuid.UUID, mfa bool) error {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, userID); err != nil {
+		return err
+	}
+	if mfa {
+		return nil
+	}
+	var has bool
+	if err := tx.QueryRow(ctx,
+		`SELECT totp_enabled_at IS NOT NULL OR EXISTS (SELECT 1 FROM passkeys WHERE user_id = $1)
+		   FROM users WHERE id = $1`, userID).Scan(&has); err != nil {
+		return err
+	}
+	if has {
+		return ErrMFARequired
+	}
+	return nil
+}
+
 // FinishPasskeyRegistration verifies the authenticator's attestation (the
-// JSON body from navigator.credentials.create) and stores the passkey.
-func (s *Service) FinishPasskeyRegistration(ctx context.Context, userID, challengeID uuid.UUID, body []byte, name string) (Passkey, error) {
+// JSON body from navigator.credentials.create) and stores the passkey, once
+// checkEnrolment's rule still holds under the user's row lock.
+func (s *Service) FinishPasskeyRegistration(ctx context.Context, userID uuid.UUID, mfa bool, challengeID uuid.UUID, body []byte, name string) (Passkey, error) {
 	if s.waErr != nil {
 		return Passkey{}, s.waErr
 	}
@@ -158,9 +196,14 @@ func (s *Service) FinishPasskeyRegistration(ctx context.Context, userID, challen
 		return Passkey{}, ErrBadPasskey
 	}
 	pk := Passkey{}
-	err = s.pool.QueryRow(ctx,
-		`INSERT INTO passkeys (user_id, credential_id, credential, name) VALUES ($1, $2, $3, $4)
-		 RETURNING id, name, created_at`, userID, cred.ID, cred, name).Scan(&pk.ID, &pk.Name, &pk.CreatedAt)
+	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := lockEnrolment(ctx, tx, userID, mfa); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx,
+			`INSERT INTO passkeys (user_id, credential_id, credential, name) VALUES ($1, $2, $3, $4)
+			 RETURNING id, name, created_at`, userID, cred.ID, cred, name).Scan(&pk.ID, &pk.Name, &pk.CreatedAt)
+	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return Passkey{}, ErrBadPasskey // already registered

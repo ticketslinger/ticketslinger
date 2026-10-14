@@ -256,6 +256,8 @@ func passkeyError(err error, badCreds string) error {
 		return &apiError{422, "invalid_name", "Give your passkey a name of 120 characters or fewer."}
 	case errors.Is(err, auth.ErrPasswordRequired):
 		return &apiError{401, "password_required", "Enter your password to add a passkey."}
+	case errors.Is(err, auth.ErrMFARequired):
+		return errEnrolNeedsMFA
 	case errors.Is(err, auth.ErrBadCredentials):
 		return &apiError{401, "bad_credentials", badCreds}
 	case errors.Is(err, auth.ErrLocked):
@@ -297,7 +299,7 @@ func (s *server) BeginPasskeyRegistration(ctx context.Context, req BeginPasskeyR
 }
 
 func (s *server) FinishPasskeyRegistration(ctx context.Context, req FinishPasskeyRegistrationRequestObject) (FinishPasskeyRegistrationResponseObject, error) {
-	u, _, ok := userFrom(ctx)
+	u, sess, ok := userFrom(ctx)
 	if !ok {
 		return nil, unauthorized()
 	}
@@ -309,7 +311,7 @@ func (s *server) FinishPasskeyRegistration(ctx context.Context, req FinishPasske
 	if req.Params.Name != nil {
 		name = *req.Params.Name
 	}
-	pk, err := s.Auth.FinishPasskeyRegistration(ctx, u.ID, req.ChallengeId, body, name)
+	pk, err := s.Auth.FinishPasskeyRegistration(ctx, u.ID, sess.MFA, req.ChallengeId, body, name)
 	if err != nil {
 		return nil, passkeyError(err, "That password doesn't match.")
 	}
@@ -341,12 +343,20 @@ func (s *server) FinishPasskeyLogin(ctx context.Context, req FinishPasskeyLoginR
 	return FinishPasskeyLogin200JSONResponse{SessionToken: sess.Token, User: me(u, sess)}, nil
 }
 
+// errEnrolNeedsMFA refuses a new second factor from a session that hasn't
+// passed the one the account already has.
+var errEnrolNeedsMFA = &apiError{403, "mfa_required", "Sign in with your passkey or authenticator code first, then try again."}
+
 func totpError(err error) error {
 	switch {
 	case errors.Is(err, auth.ErrTOTPAlreadyEnabled):
 		return &apiError{409, "totp_already_enabled", "Two-factor sign-in is already switched on for your account."}
+	case errors.Is(err, auth.ErrMFARequired):
+		return errEnrolNeedsMFA
+	case errors.Is(err, auth.ErrPasswordRequired):
+		return &apiError{401, "password_required", "Enter your password to set up an authenticator app."}
 	case errors.Is(err, auth.ErrTOTPNotStarted):
-		return &apiError{400, "totp_not_started", "Start setting up your authenticator app first."}
+		return &apiError{400, "totp_not_started", "That setup has expired or wasn't started. Set up your authenticator app again."}
 	case errors.Is(err, auth.ErrBadCredentials):
 		return &apiError{401, "bad_credentials", "That password doesn't match."}
 	case errors.Is(err, auth.ErrLocked):
@@ -360,11 +370,15 @@ func totpError(err error) error {
 }
 
 func (s *server) StartTotp(ctx context.Context, req StartTotpRequestObject) (StartTotpResponseObject, error) {
-	u, _, ok := userFrom(ctx)
+	u, sess, ok := userFrom(ctx)
 	if !ok {
 		return nil, unauthorized()
 	}
-	secret, url, err := s.Auth.StartTOTP(ctx, u.ID, req.Body.Password)
+	password := ""
+	if req.Body != nil && req.Body.Password != nil {
+		password = *req.Body.Password
+	}
+	secret, url, err := s.Auth.StartTOTP(ctx, u.ID, sess.MFA, password)
 	if err != nil {
 		return nil, totpError(err)
 	}
@@ -372,11 +386,11 @@ func (s *server) StartTotp(ctx context.Context, req StartTotpRequestObject) (Sta
 }
 
 func (s *server) ConfirmTotp(ctx context.Context, req ConfirmTotpRequestObject) (ConfirmTotpResponseObject, error) {
-	u, _, ok := userFrom(ctx)
+	u, sess, ok := userFrom(ctx)
 	if !ok {
 		return nil, unauthorized()
 	}
-	if err := s.Auth.ConfirmTOTP(ctx, u.ID, req.Body.Code); err != nil {
+	if err := s.Auth.ConfirmTOTP(ctx, u.ID, sess.MFA, req.Body.Code); err != nil {
 		return nil, totpError(err)
 	}
 	return ConfirmTotp204Response{}, nil

@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/descope/virtualwebauthn"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pquerna/otp/totp"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
@@ -73,7 +76,7 @@ func register(t *testing.T, s *auth.Service, u auth.User, d *device) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.FinishPasskeyRegistration(ctx, u.ID, id, d.attest(t, opts), "Laptop"); err != nil {
+	if _, err := s.FinishPasskeyRegistration(ctx, u.ID, false, id, d.attest(t, opts), "Laptop"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -88,7 +91,7 @@ func TestPasskeyRegisterThenLogin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pk, err := s.FinishPasskeyRegistration(ctx, u.ID, id, d.attest(t, opts), "  Laptop ")
+	pk, err := s.FinishPasskeyRegistration(ctx, u.ID, false, id, d.attest(t, opts), "  Laptop ")
 	if err != nil || pk.Name != "Laptop" || pk.ID == uuid.Nil {
 		t.Fatalf("register: %+v %v", pk, err)
 	}
@@ -116,12 +119,12 @@ func TestPasskeyNameDefaultsAndIsBounded(t *testing.T) {
 	u := signup(t, s, "a@example.com")
 	d := newDevice(u.ID)
 	id, opts, _ := s.BeginPasskeyRegistration(ctx, u.ID, true, "")
-	if pk, err := s.FinishPasskeyRegistration(ctx, u.ID, id, d.attest(t, opts), ""); err != nil || pk.Name != "Passkey" {
+	if pk, err := s.FinishPasskeyRegistration(ctx, u.ID, true, id, d.attest(t, opts), ""); err != nil || pk.Name != "Passkey" {
 		t.Fatalf("default name: %+v %v", pk, err)
 	}
 	id, opts, _ = s.BeginPasskeyRegistration(ctx, u.ID, true, "")
 	long := string(make([]rune, 121))
-	if _, err := s.FinishPasskeyRegistration(ctx, u.ID, id, newDevice(u.ID).attest(t, opts), long); !errors.Is(err, auth.ErrInvalidName) {
+	if _, err := s.FinishPasskeyRegistration(ctx, u.ID, true, id, newDevice(u.ID).attest(t, opts), long); !errors.Is(err, auth.ErrInvalidName) {
 		t.Fatalf("long name: got %v, want ErrInvalidName", err)
 	}
 }
@@ -157,7 +160,7 @@ func TestPasskeyChallengeKindOwnerAndExpiry(t *testing.T) {
 
 	// A login challenge can't finish a registration, nor the reverse.
 	lid, _, _ := s.BeginPasskeyLogin(ctx, "")
-	if _, err := s.FinishPasskeyRegistration(ctx, a.ID, lid, []byte("{}"), ""); !errors.Is(err, auth.ErrBadToken) {
+	if _, err := s.FinishPasskeyRegistration(ctx, a.ID, true, lid, []byte("{}"), ""); !errors.Is(err, auth.ErrBadToken) {
 		t.Fatalf("login challenge used to register: %v", err)
 	}
 	rid, _, _ := s.BeginPasskeyRegistration(ctx, a.ID, true, "")
@@ -167,7 +170,7 @@ func TestPasskeyChallengeKindOwnerAndExpiry(t *testing.T) {
 
 	// B can't finish A's registration.
 	rid, opts, _ := s.BeginPasskeyRegistration(ctx, a.ID, true, "")
-	if _, err := s.FinishPasskeyRegistration(ctx, b.ID, rid, newDevice(b.ID).attest(t, opts), ""); !errors.Is(err, auth.ErrBadToken) {
+	if _, err := s.FinishPasskeyRegistration(ctx, b.ID, true, rid, newDevice(b.ID).attest(t, opts), ""); !errors.Is(err, auth.ErrBadToken) {
 		t.Fatalf("other user's challenge: %v", err)
 	}
 
@@ -176,7 +179,7 @@ func TestPasskeyChallengeKindOwnerAndExpiry(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE webauthn_challenges SET expires_at = now() - interval '1 second' WHERE id = $1`, rid); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.FinishPasskeyRegistration(ctx, a.ID, rid, newDevice(a.ID).attest(t, opts), ""); !errors.Is(err, auth.ErrBadToken) {
+	if _, err := s.FinishPasskeyRegistration(ctx, a.ID, true, rid, newDevice(a.ID).attest(t, opts), ""); !errors.Is(err, auth.ErrBadToken) {
 		t.Fatalf("expired challenge: %v", err)
 	}
 	var exp time.Time
@@ -302,7 +305,7 @@ func TestPasskeyWithoutUserVerificationIsRefused(t *testing.T) {
 	noUV := newDevice(u.ID)
 	noUV.authr.Options.UserNotVerified = true
 	id, opts, _ := s.BeginPasskeyRegistration(ctx, u.ID, true, "")
-	if _, err := s.FinishPasskeyRegistration(ctx, u.ID, id, noUV.attest(t, opts), ""); !errors.Is(err, auth.ErrBadPasskey) {
+	if _, err := s.FinishPasskeyRegistration(ctx, u.ID, true, id, noUV.attest(t, opts), ""); !errors.Is(err, auth.ErrBadPasskey) {
 		t.Fatalf("registration without UV: got %v, want ErrBadPasskey", err)
 	}
 
@@ -332,5 +335,168 @@ func TestPasskeyLoginFromAnotherOriginIsRefused(t *testing.T) {
 	asr := virtualwebauthn.CreateAssertionResponse(evil, d.authr, d.cred, *o)
 	if _, _, err := s.FinishPasskeyLogin(ctx, lid, []byte(asr), "", ""); !errors.Is(err, auth.ErrBadCredentials) {
 		t.Fatalf("assertion from another origin: got %v, want ErrBadCredentials", err)
+	}
+}
+
+// Once an account has a second factor, adding another one needs a session
+// that passed it: a password alone must not plant an attacker's passkey or
+// authenticator.
+func TestSecondFactorEnrolmentNeedsMFAOnceOneExists(t *testing.T) {
+	ctx := context.Background()
+	refused := func(t *testing.T, s *auth.Service, u auth.User) {
+		t.Helper()
+		if _, _, err := s.BeginPasskeyRegistration(ctx, u.ID, false, "a long passphrase"); !errors.Is(err, auth.ErrMFARequired) {
+			t.Errorf("passkey with password-only session: got %v, want ErrMFARequired", err)
+		}
+		if _, _, err := s.StartTOTP(ctx, u.ID, false, "a long passphrase"); !errors.Is(err, auth.ErrMFARequired) {
+			t.Errorf("totp with password-only session: got %v, want ErrMFARequired", err)
+		}
+		if _, _, err := s.BeginPasskeyRegistration(ctx, u.ID, true, ""); err != nil {
+			t.Errorf("passkey with mfa session: %v", err)
+		}
+	}
+
+	t.Run("has a passkey", func(t *testing.T) {
+		s, _ := newSvcPool(t)
+		u := signup(t, s, "a@example.com")
+		register(t, s, u, newDevice(u.ID)) // the first factor may use the password
+		refused(t, s, u)
+		if secret, _, err := s.StartTOTP(ctx, u.ID, true, ""); err != nil || secret == "" { // an mfa session needs no password
+			t.Errorf("totp with mfa session: %q %v", secret, err)
+		}
+	})
+	t.Run("has totp", func(t *testing.T) {
+		s, _ := newSvcPool(t)
+		u := signup(t, s, "a@example.com")
+		secret, _, err := s.StartTOTP(ctx, u.ID, false, "a long passphrase") // first factor
+		if err != nil {
+			t.Fatal(err)
+		}
+		code, _ := totp.GenerateCode(secret, time.Now())
+		if err := s.ConfirmTOTP(ctx, u.ID, false, code); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, s, u)
+	})
+}
+
+// The rule is enforced again where the factor is saved, not just where
+// enrolment starts: a ceremony begun while the account had no factor can't
+// finish from a password session once it has one.
+func TestSecondFactorRuleHoldsAtCommit(t *testing.T) {
+	ctx := context.Background()
+	t.Run("stale totp confirmed after a passkey was added", func(t *testing.T) {
+		s, _ := newSvcPool(t)
+		u := signup(t, s, "a@example.com")
+		secret, _, err := s.StartTOTP(ctx, u.ID, false, "a long passphrase") // attacker, left pending
+		if err != nil {
+			t.Fatal(err)
+		}
+		register(t, s, u, newDevice(u.ID)) // the owner's first factor
+		code, _ := totp.GenerateCode(secret, time.Now())
+		if err := s.ConfirmTOTP(ctx, u.ID, false, code); !errors.Is(err, auth.ErrMFARequired) {
+			t.Fatalf("password session confirming totp: got %v, want ErrMFARequired", err)
+		}
+	})
+	t.Run("passkey finished after totp was enabled", func(t *testing.T) {
+		s, _ := newSvcPool(t)
+		u := signup(t, s, "a@example.com")
+		id, opts, err := s.BeginPasskeyRegistration(ctx, u.ID, false, "a long passphrase") // attacker
+		if err != nil {
+			t.Fatal(err)
+		}
+		secret, _, _ := s.StartTOTP(ctx, u.ID, false, "a long passphrase") // the owner's first factor
+		code, _ := totp.GenerateCode(secret, time.Now())
+		if err := s.ConfirmTOTP(ctx, u.ID, false, code); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.FinishPasskeyRegistration(ctx, u.ID, false, id, newDevice(u.ID).attest(t, opts), ""); !errors.Is(err, auth.ErrMFARequired) {
+			t.Fatalf("password session finishing a passkey: got %v, want ErrMFARequired", err)
+		}
+	})
+}
+
+func TestPendingTOTPExpiresAfterTenMinutes(t *testing.T) {
+	s, pool := newSvcPool(t)
+	ctx := context.Background()
+	u := signup(t, s, "a@example.com")
+	secret, _, err := s.StartTOTP(ctx, u.ID, false, "a long passphrase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE users SET totp_pending_at = now() - interval '11 minutes' WHERE id = $1`, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	code, _ := totp.GenerateCode(secret, time.Now())
+	if err := s.ConfirmTOTP(ctx, u.ID, false, code); !errors.Is(err, auth.ErrTOTPNotStarted) {
+		t.Fatalf("confirm 11 minutes after start: got %v, want ErrTOTPNotStarted", err)
+	}
+	// Starting again replaces the stale secret, and confirming clears the pending mark.
+	secret, _, err = s.StartTOTP(ctx, u.ID, false, "a long passphrase")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _ = totp.GenerateCode(secret, time.Now())
+	if err := s.ConfirmTOTP(ctx, u.ID, false, code); err != nil {
+		t.Fatalf("fresh start: %v", err)
+	}
+	var pending bool
+	if err := pool.QueryRow(ctx, `SELECT totp_pending_at IS NOT NULL FROM users WHERE id = $1`, u.ID).Scan(&pending); err != nil || pending {
+		t.Fatalf("totp_pending_at still set after confirm: %v %v", pending, err)
+	}
+}
+
+// Two first-factor enrolments racing from password sessions: at most one
+// lands, because both commit points lock the user row and recheck.
+func TestConcurrentFirstFactorEnrolmentsAddAtMostOne(t *testing.T) {
+	s, pool := newSvcPool(t)
+	ctx := context.Background()
+	for i := range 6 {
+		u := signup(t, s, fmt.Sprintf("u%d@example.com", i))
+		var finishes []func() error
+		// Two passkeys, or a passkey and an authenticator, alternately.
+		for j := range 2 {
+			if i%2 == 1 && j == 1 {
+				secret, _, err := s.StartTOTP(ctx, u.ID, false, "a long passphrase")
+				if err != nil {
+					t.Fatal(err)
+				}
+				code, _ := totp.GenerateCode(secret, time.Now())
+				finishes = append(finishes, func() error { return s.ConfirmTOTP(ctx, u.ID, false, code) })
+				continue
+			}
+			id, opts, err := s.BeginPasskeyRegistration(ctx, u.ID, false, "a long passphrase")
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := newDevice(u.ID).attest(t, opts)
+			finishes = append(finishes, func() error {
+				_, err := s.FinishPasskeyRegistration(ctx, u.ID, false, id, body, "")
+				return err
+			})
+		}
+		var wg sync.WaitGroup
+		errs := make([]error, len(finishes))
+		start := make(chan struct{})
+		for k, f := range finishes {
+			wg.Add(1)
+			go func() { defer wg.Done(); <-start; errs[k] = f() }()
+		}
+		close(start)
+		wg.Wait()
+		var factors int
+		if err := pool.QueryRow(ctx,
+			`SELECT (SELECT count(*) FROM passkeys WHERE user_id = $1) + (totp_enabled_at IS NOT NULL)::int FROM users WHERE id = $1`,
+			u.ID).Scan(&factors); err != nil {
+			t.Fatal(err)
+		}
+		if factors != 1 {
+			t.Fatalf("round %d: %d factors added (errors %v), want exactly 1", i, factors, errs)
+		}
+		for _, err := range errs {
+			if err != nil && !errors.Is(err, auth.ErrMFARequired) {
+				t.Fatalf("round %d: unexpected error %v", i, err)
+			}
+		}
 	}
 }

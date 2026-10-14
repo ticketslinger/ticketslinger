@@ -40,17 +40,24 @@ export function Security({
   const totpAction = useAction();
   const passkeyAction = useAction();
   const signInAgain = useAction();
-  // A session that already passed a second factor can add a passkey without the password.
+  // A session that already passed a second factor needs no password. Once the
+  // account has one, a password session is refused and the API says why.
   const needPassword = !me.mfa;
 
   const startTotp = () =>
     totpAction.run(async () => {
-      setTotp(must(await api.POST("/auth/totp", { body: { password } })));
+      setTotp(must(await api.POST("/auth/totp", { body: needPassword ? { password } : {} })));
     });
 
   const confirmTotp = (code: string) =>
     totpAction.run(async () => {
-      must(await api.POST("/auth/totp/confirm", { body: { code } }));
+      try {
+        must(await api.POST("/auth/totp/confirm", { body: { code } }));
+      } catch (e) {
+        // An expired setup: put the start button back so they can begin again.
+        if (e instanceof ApiFailure && e.code === "totp_not_started") setTotp(null);
+        throw e;
+      }
       setTotp(null);
       setTotpOn(true);
       onChanged();
