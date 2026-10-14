@@ -431,7 +431,7 @@ function TicketDialog({
             className="choices"
             id="tt-choices"
             tabIndex={-1}
-            aria-invalid={p.bad("choices")}
+            aria-describedby={p.describe("choices")}
           >
             <legend>Capacity</legend>
             <p className="hint">

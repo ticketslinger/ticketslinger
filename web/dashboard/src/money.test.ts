@@ -28,6 +28,12 @@ test("anything else is rejected", () => {
     "1e3",
     "$",
     "12 50",
+    "-0",
+    "1,2,3",
+    "$$5",
+    "１２",
+    "١٢",
+    "99999999999999999",
   ]) {
     expect(parseDollars(bad)).toBeNull();
   }
