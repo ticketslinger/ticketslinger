@@ -62,11 +62,12 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 
 const webhookTolerance = 5 * time.Minute
 
-// privateAnswers keeps a buyer's order page out of caches and referrers: it
-// carries the tickets' QR values.
+// privateAnswers keeps a buyer's order page and checkout out of caches and
+// referrers: one carries the tickets' QR values, the other (once paid)
+// order_url, the link to them.
 func privateAnswers(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Pattern == "GET /v1/orders/{code}" {
+		if r.Pattern == "GET /v1/orders/{code}" || r.Pattern == "GET /v1/checkouts/{token}" {
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Referrer-Policy", "no-referrer")
 		}

@@ -28,6 +28,11 @@ test("an organizer connects Stripe, a buyer pays on a phone, and the order shows
   // The buyer has no account, and is on a phone (the config's Pixel 7).
   const buyer = await browser.newContext({ ...devices["Pixel 7"] });
   const shop = await buyer.newPage();
+  // Every request to the shop, with the page it came from: token pages must send no Referer.
+  const sent: Promise<[string, string | null]>[] = [];
+  shop.on("request", (r) => {
+    if (r.url().startsWith(SHOP)) sent.push(r.headerValue("referer").then((v) => [r.url(), v]));
+  });
   await shop.goto(`${SHOP}/${slug}/spring-social?code=FRIENDS`);
   await shop.getByLabel("General").selectOption("2");
   await expect(shop.locator('input[name="cf-turnstile-response"]')).not.toHaveValue("", {
@@ -50,6 +55,11 @@ test("an organizer connects Stripe, a buyer pays on a phone, and the order shows
   await expect(shop).toHaveURL(/\/orders\/TS-[0-9A-Z]{5}\?t=/, { timeout: 15_000 });
   await expect(shop.getByText("Ada", { exact: true })).toBeVisible();
   await expect(shop.getByText("Grace", { exact: true })).toBeVisible();
+  // The checkout and order pages loaded our own script and stylesheet, and polled the
+  // checkout, without the token riding along in a Referer.
+  const requests = await Promise.all(sent);
+  expect(requests.some(([url]) => url.endsWith("/assets/storefront.css"))).toBe(true);
+  expect(requests.filter(([, ref]) => ref && /\/checkout\/|\/orders\//.test(ref))).toEqual([]);
 
   // The same link arrives by email, once the worker has sent it.
   const buyerMail = `${API}/__test/last-email?to=${encodeURIComponent(`buyer-${stamp}@example.com`)}`;

@@ -3,6 +3,7 @@ package db_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -141,6 +142,42 @@ func TestSaleRolesStayNarrow(t *testing.T) {
 	}
 	if rows.Err() != nil || exceptions == 0 || organizers == 0 {
 		t.Fatalf("policies outside app_organizer(): %d, on organizers: %d, %v", exceptions, organizers, rows.Err())
+	}
+
+	// ts_public runs one query (resolveLive: a live event by its slugs), so
+	// it reads exactly those columns, plus memberships for org_reads below,
+	// has its two policies, and runs one SECURITY DEFINER function:
+	// app_organizer(), which the TO PUBLIC tenant policies call (NULL here).
+	var cols, pols, funcs []string
+	if err := owner.QueryRow(ctx, `select
+		array(select c.relname || '.' || a.attname from pg_class c join pg_attribute a on a.attrelid = c.oid
+		       where c.relnamespace = 'public'::regnamespace and c.relkind = 'r' and c.relname <> 'memberships'
+		         and a.attnum > 0 and not a.attisdropped and has_column_privilege('ts_public', c.oid, a.attnum, 'SELECT')
+		       order by 1),
+		array(select c.relname || '.' || p.polname from pg_policy p join pg_class c on c.oid = p.polrelid
+		       where 'ts_public'::regrole = any(p.polroles) order by 1),
+		array(select p.oid::regprocedure::text from pg_proc p
+		       where p.pronamespace = 'public'::regnamespace and p.prosecdef and has_function_privilege('ts_public', p.oid, 'EXECUTE')
+		       order by 1)`).Scan(&cols, &pols, &funcs); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"events.id", "events.organizer_id", "events.slug", "organizers.id", "organizers.slug"}; !slices.Equal(cols, want) {
+		t.Errorf("ts_public reads %v, want only %v", cols, want)
+	}
+	if want := []string{"events.events_public", "organizers.organizers_public"}; !slices.Equal(pols, want) {
+		t.Errorf("ts_public policies %v, want only %v", pols, want)
+	}
+	if want := []string{"app_organizer()"}; !slices.Equal(funcs, want) {
+		t.Errorf("ts_public runs SECURITY DEFINER functions %v, want only %v", funcs, want)
+	}
+	for _, priv := range []string{"INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"} {
+		var tables []string
+		if err := owner.QueryRow(ctx, `select array(select c.relname::text from pg_class c
+			where c.relnamespace = 'public'::regnamespace and c.relkind = 'r'
+			  and (has_table_privilege('ts_public', c.oid, $1) or $1 in ('INSERT', 'UPDATE', 'REFERENCES') and has_any_column_privilege('ts_public', c.oid, $1)))`,
+			priv).Scan(&tables); err != nil || len(tables) != 0 {
+			t.Errorf("ts_public has %s on %v (%v)", priv, tables, err)
+		}
 	}
 
 	// memberships stays readable: org_reads (00002) subqueries it with the

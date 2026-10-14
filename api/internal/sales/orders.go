@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
 	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
@@ -87,63 +89,100 @@ func (s *Service) Order(ctx context.Context, code, token string) (OrderView, err
 
 // RefundPayment handles RefundPaymentJob: a full refund, the platform's fee
 // included, of a cancelled order's payment, then the order marked refunded
-// and the buyer told. Stripe's idempotency key is the order's, so a crash
-// between the refund and our write can't refund twice, and an order that is
-// already refunded is left alone.
+// and the buyer told. Stripe's idempotency key is the order's
+// (refund-<order>-<attempt>), so a crash between the refund and our write
+// can't refund twice, and an order that is already refunded is left alone.
+// Only a definite refusal moves the order to its next key (Stripe replays a
+// refusal under one key for 24 hours). A failure on the job's last try is
+// raised: an ERROR, and a system row in the organizer's audit log.
 func RefundPayment(s *Service) jobs.Handler {
 	return func(ctx context.Context, payload []byte) error {
 		var j refundJob
 		if err := json.Unmarshal(payload, &j); err != nil {
 			return err
 		}
-		var status, intent, account string
-		var payment uuid.UUID
-		var amount int64
-		err := system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx, `select o.status, p.id, p.payment_intent_id, p.stripe_account_id, p.amount_cents
-				from orders o join payments p on p.order_id = o.id where o.id = $1`, j.Order).Scan(&status, &payment, &intent, &account, &amount)
-		})
-		if errors.Is(err, pgx.ErrNoRows) || err == nil && status != "cancelled" {
-			return nil // nothing paid, or refunded already
+		err := s.refund(ctx, j)
+		if err != nil && jobs.Attempt(ctx) >= jobs.MaxAttempts {
+			s.refundStuck(ctx, j, err)
 		}
-		if err != nil {
-			return err
-		}
-		if s.Payments == nil {
-			return errors.New("sales: a refund is due but there's no payment provider")
-		}
-		refund, err := s.Payments.Refund(ctx, plugin.RefundInput{Account: account, PaymentIntentID: intent, RefundApplicationFee: true,
-			IdempotencyKey: "refund-" + j.Order.String()})
-		var refundID *string // unknown when Stripe says it's already refunded
-		switch {
-		case errors.Is(err, plugin.ErrAlreadyRefunded):
-		case err != nil:
-			return err
-		default:
-			refundID = &refund
-		}
-		return system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) error {
-			var email, event string
-			if err := tx.QueryRow(ctx, `select o.status, o.email, e.name from orders o join events e on e.id = o.event_id
-				where o.id = $1 for update of o`, j.Order).Scan(&status, &email, &event); err != nil {
-				return err
-			}
-			if status != "cancelled" {
-				return nil // another run got here first
-			}
-			if _, err := tx.Exec(ctx, `insert into refunds (organizer_id, payment_id, amount_cents, fee_refunded, stripe_refund_id, status, reason)
-				values ($1, $2, $3, true, $4, 'requested', 'late_payment')`, j.Organizer, payment, amount, refundID); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(ctx, `update orders set status = 'refunded' where id = $1`, j.Order); err != nil {
-				return err
-			}
-			// No link in it: nothing in this job's payload is a key to anything.
-			return jobs.Enqueue(ctx, tx, "send_email", map[string]string{"to": email, "subject": "Your refund for " + event,
-				"text": "Sorry, we couldn't keep your tickets for " + event + ". By the time your payment reached us, they weren't available any more, " +
-					"so we've refunded you in full: " + dollars(amount) + " back to your card. It usually shows up in 5 to 10 days."})
-		})
+		return err
 	}
+}
+
+// refundStuck raises a refund the queue is about to park. The buyer was
+// charged and their order cancelled, so someone has to look. Nothing here
+// names the buyer or carries a secret: the provider's error is code, type
+// and request id only.
+func (s *Service) refundStuck(ctx context.Context, j refundJob, cause error) {
+	slog.ErrorContext(ctx, "refund stuck: the buyer was charged and nothing will retry it", "organizer", j.Organizer, "order", j.Order, "err", cause)
+	ctx = context.WithoutCancel(ctx)
+	err := system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) error {
+		return audit.Write(ctx, tx, audit.Entry{Organizer: j.Organizer, Actor: audit.Actor{System: true}, Action: "order.refund_stuck",
+			EntityType: "order", EntityID: j.Order, After: map[string]string{"error": cause.Error()}})
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "refund stuck: audit row not written", "order", j.Order, "err", err)
+	}
+}
+
+func (s *Service) refund(ctx context.Context, j refundJob) error {
+	var status, intent, account string
+	var payment uuid.UUID
+	var amount int64
+	var attempt int
+	err := system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `select o.status, o.refund_attempt, p.id, p.payment_intent_id, p.stripe_account_id, p.amount_cents
+			from orders o join payments p on p.order_id = o.id where o.id = $1`, j.Order).Scan(&status, &attempt, &payment, &intent, &account, &amount)
+	})
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && status != "cancelled" {
+		return nil // nothing paid, or refunded already
+	}
+	if err != nil {
+		return err
+	}
+	if s.Payments == nil {
+		return errors.New("sales: a refund is due but there's no payment provider")
+	}
+	refund, err := s.Payments.Refund(ctx, plugin.RefundInput{Account: account, PaymentIntentID: intent, RefundApplicationFee: true,
+		IdempotencyKey: fmt.Sprintf("refund-%s-%d", j.Order, attempt)})
+	var refundID *string // unknown when Stripe says it's already refunded
+	switch {
+	case errors.Is(err, plugin.ErrAlreadyRefunded):
+	case errors.Is(err, plugin.ErrRefused):
+		// Stripe said no and will say it again under this key: the next try uses the next one.
+		if berr := system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `update orders set refund_attempt = refund_attempt + 1 where id = $1 and refund_attempt = $2`, j.Order, attempt)
+			return err
+		}); berr != nil {
+			return errors.Join(err, berr)
+		}
+		return err
+	case err != nil:
+		return err
+	default:
+		refundID = &refund
+	}
+	return system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) error {
+		var email, event string
+		if err := tx.QueryRow(ctx, `select o.status, o.email, e.name from orders o join events e on e.id = o.event_id
+			where o.id = $1 for update of o`, j.Order).Scan(&status, &email, &event); err != nil {
+			return err
+		}
+		if status != "cancelled" {
+			return nil // another run got here first
+		}
+		if _, err := tx.Exec(ctx, `insert into refunds (organizer_id, payment_id, amount_cents, fee_refunded, stripe_refund_id, status, reason)
+			values ($1, $2, $3, true, $4, 'requested', 'late_payment')`, j.Organizer, payment, amount, refundID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `update orders set status = 'refunded' where id = $1`, j.Order); err != nil {
+			return err
+		}
+		// No link in it: nothing in this job's payload is a key to anything.
+		return jobs.Enqueue(ctx, tx, "send_email", map[string]string{"to": email, "subject": "Your refund for " + event,
+			"text": "Sorry, we couldn't keep your tickets for " + event + ". By the time your payment reached us, they weren't available any more, " +
+				"so we've refunded you in full: " + dollars(amount) + " back to your card. It usually shows up in 5 to 10 days."})
+	})
 }
 
 // dollars formats cents as $26.00.

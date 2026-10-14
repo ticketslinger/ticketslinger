@@ -117,7 +117,14 @@ export function EventPage(p: EventPageProps) {
       ))}
 
       {ended ? (
-        <p class="ended">This event has ended.</p>
+        <>
+          <p class="ended">This event has ended.</p>
+          {p.message && (
+            <p class="notice" role="alert">
+              {p.message}
+            </p>
+          )}
+        </>
       ) : (
         <>
           <form class="buy" method="post" action={`${home}/checkout`}>

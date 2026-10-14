@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { answersFor, type CheckoutData, fieldErrors, payload } from "./checkout";
+import { answersFor, type CheckoutData, fieldErrors, PENDING, payload, waitStep } from "./checkout";
 import { eventPath, orderPath } from "./links";
 
 type Question = CheckoutData["questions"][number];
@@ -106,4 +106,23 @@ test("an order link is rebuilt from its code and token, never its path", () => {
   expect(orderPath(`/orders/TS-ILOU0?t=${T}`)).toBeUndefined();
   expect(orderPath(`/orders/TS-7K2QF?t=${T}`, "TS-ABCDE")).toBeUndefined();
   expect(orderPath("not a url at all")).toBeUndefined();
+});
+
+test("while a payment may be going through, a lapsed hold never reads as back on sale", () => {
+  const now = Date.parse("2027-05-02T01:20:00Z");
+  const past = "2027-05-02T01:15:00Z";
+  const ahead = "2027-05-02T01:25:00Z";
+  expect(waitStep({ status: "completed", expires_at: past }, true, now)).toBe("done");
+  expect(waitStep({ status: "paying", expires_at: ahead }, true, now)).toBe("wait");
+  // The hold ran out after the card went in: keep waiting, with the pending words.
+  expect(waitStep({ status: "paying", expires_at: past }, true, now)).toBe("late");
+  expect(waitStep({ status: "paying", expires_at: past }, false, now)).toBe("late");
+  // We started a payment on this page: even "expired" can't mean back on sale.
+  expect(waitStep({ status: "expired", expires_at: past }, true, now)).toBe("late");
+  // Nothing started here, and the API says no payment exists: the hold really is over.
+  expect(waitStep({ status: "expired", expires_at: past }, false, now)).toBe("over");
+  expect(PENDING).toBe(
+    "Your payment may still be going through. We'll email you the moment it does. Check your inbox before you try again.",
+  );
+  expect(PENDING).not.toContain("back on sale");
 });

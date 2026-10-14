@@ -31,6 +31,19 @@ func Enqueue(ctx context.Context, tx pgx.Tx, kind string, payload any) error {
 	return err
 }
 
+// MaxAttempts is how often a job runs before it's parked (claim and fail
+// say the same in SQL).
+const MaxAttempts = 10
+
+type attemptKey struct{}
+
+// Attempt is which run of its job this is, from 1, inside a Handler; 0
+// outside one. At MaxAttempts a failure parks the job.
+func Attempt(ctx context.Context) int {
+	n, _ := ctx.Value(attemptKey{}).(int)
+	return n
+}
+
 type Worker struct {
 	Pool     *pgxpool.Pool
 	Handlers map[string]Handler
@@ -106,14 +119,18 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	herr := w.handle(ctx, kind, payload)
+	herr := w.handle(context.WithValue(ctx, attemptKey{}, attempts), kind, payload)
 	// A shutdown mid-job must still record the outcome.
 	rec := context.WithoutCancel(ctx)
 	if herr != nil && ctx.Err() != nil {
 		// Cancelled, not broken: hand the job back as if never claimed.
 		_, err = w.Pool.Exec(rec, `update jobs set attempts = attempts - 1, run_at = now(), locked_until = null where id = $1`, id)
 	} else if herr != nil {
-		slog.WarnContext(ctx, "jobs: failed", "kind", kind, "attempt", attempts, "err", herr)
+		log := slog.WarnContext
+		if attempts >= MaxAttempts {
+			log = slog.ErrorContext // parked: nothing runs it again
+		}
+		log(ctx, "jobs: failed", "kind", kind, "id", id, "attempt", attempts, "parked", attempts >= MaxAttempts, "err", herr)
 		_, err = w.Pool.Exec(rec, fail, id, herr.Error())
 	} else {
 		_, err = w.Pool.Exec(rec, `delete from jobs where id = $1`, id)

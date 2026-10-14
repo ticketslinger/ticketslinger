@@ -40,7 +40,14 @@ var (
 	ErrMFARequired      = errors.New("auth: mfa required")
 	// ErrTurnstileRequired: this sign-in needs a Turnstile token first.
 	ErrTurnstileRequired = errors.New("auth: turnstile required")
+	// ErrThrottled: with Turnstile off, an account past accountBrake takes
+	// one sign-in attempt per ThrottleEvery. Try again after it.
+	ErrThrottled = errors.New("auth: throttled")
 )
+
+// ThrottleEvery is how often an account past accountBrake may try to sign
+// in when Turnstile is off: from all addresses together, and never a lock.
+const ThrottleEvery = 10 * time.Second
 
 const (
 	minPassword     = 12
@@ -96,11 +103,22 @@ type Service struct {
 	wa         *webauthn.WebAuthn // nil when RPID or Origin is unusable; passkey calls then return waErr
 	waErr      error
 	failKey    []byte // HMAC key that names an email in login_failures
+	// throttle spaces attempts on a braked account when Turnstile is off.
+	throttle *ratelimit.Limiter
+	now      func() time.Time // test hook, nil in production
+}
+
+func (s *Service) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 func NewService(pool *pgxpool.Pool, m mailer.Mailer, o Options) *Service {
 	s := &Service{pool: pool, mail: m, opts: o}
 	s.ipLimit, s.emLimit, s.recLimit = newLimits()
+	s.throttle = ratelimit.New(1, ThrottleEvery)
 	s.failKey = DeriveKey(o.SecretKey, "login-failures")
 	s.wa, s.waErr = newWebAuthn(o)
 	return s
@@ -217,14 +235,26 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, recovery
 		return Session{}, User{}, ErrOneSecondStep
 	}
 	email = normEmail(email)
-	now := time.Now()
+	now := s.clock()
 	// Per email and address: a stranger hammering one address mustn't
 	// rate-limit the owner everywhere. Spread-out guessing meets accountBrake.
 	if !s.ipLimit.Allow("login:"+ratelimit.AddrKey(ip), now) || !s.emLimit.Allow(email+"|"+ratelimit.AddrKey(ip), now) {
 		return Session{}, User{}, ErrRateLimited
 	}
-	// Counted before anything is checked, whether or not the account exists.
 	account := s.accountKey(email)
+	// Turnstile off: past the brake, the account takes one attempt per
+	// ThrottleEvery from everywhere. Checked before counting, so a refused
+	// attempt never moves anyone toward a lock. Same query for any email.
+	if !s.opts.Turnstile.Enabled() {
+		braked, err := s.braked(ctx, account)
+		if err != nil {
+			return Session{}, User{}, err
+		}
+		if braked && !s.throttle.Allow(string(account), now) {
+			return Session{}, User{}, ErrThrottled
+		}
+	}
+	// Counted before anything is checked, whether or not the account exists.
 	here, total, err := s.reserve(ctx, account, ip)
 	if err != nil {
 		return Session{}, User{}, err
@@ -333,6 +363,15 @@ func (s *Service) accountKey(email string) []byte {
 	mac := hmac.New(sha256.New, s.failKey)
 	mac.Write([]byte(normEmail(email)))
 	return mac.Sum(nil)
+}
+
+// braked reports whether the account has accountBrake failures in the
+// window, over all addresses.
+func (s *Service) braked(ctx context.Context, account []byte) (bool, error) {
+	var total int
+	err := s.pool.QueryRow(ctx, `SELECT coalesce(sum(failures), 0) FROM login_failures
+		WHERE account = $1 AND updated_at > now() - $2::interval`, account, lockout.String()).Scan(&total)
+	return total >= accountBrake, err
 }
 
 // reserve counts this attempt from ip before any check runs, so parallel

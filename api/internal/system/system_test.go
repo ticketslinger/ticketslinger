@@ -148,7 +148,7 @@ func seedOrganizer(t *testing.T, pool *pgxpool.Pool, slug string) (org, live, dr
 	return org, live, draft
 }
 
-func TestPublicSeesOnlyLiveEventsAndVisibleTickets(t *testing.T) {
+func TestPublicSeesOnlyLiveEventSlugs(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
 	seedOrganizer(t, pool, "acme")
@@ -159,14 +159,12 @@ func TestPublicSeesOnlyLiveEventsAndVisibleTickets(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := system.Public(ctx, pool, func(tx pgx.Tx) error {
-		var events, tts, questions, applies int
-		if err := tx.QueryRow(ctx, `select (select count(*) from events), (select count(*) from ticket_types),
-			(select count(*) from questions), (select count(*) from question_applies_to)`).Scan(&events, &tts, &questions, &applies); err != nil {
+		var events int
+		if err := tx.QueryRow(ctx, `select count(*) from events`).Scan(&events); err != nil {
 			return err
 		}
-		if events != 1 || tts != 1 || questions != 1 || applies != 0 {
-			t.Errorf("public sees %d events, %d ticket types, %d questions, %d question links; want the live one, its visible type, its open question, no links to the hidden type",
-				events, tts, questions, applies)
+		if events != 1 {
+			t.Errorf("public sees %d events, want the live one", events)
 		}
 		var slugs []string
 		if err := tx.QueryRow(ctx, `select array_agg(slug::text order by slug) from organizers`).Scan(&slugs); err != nil || len(slugs) != 1 || slugs[0] != "acme" {
@@ -184,6 +182,12 @@ func TestPublicSeesOnlyLiveEventsAndVisibleTickets(t *testing.T) {
 	// Each refusal aborts its transaction, so each gets its own.
 	for _, q := range []string{
 		`select stripe_account_id from organizers limit 1`,
+		`select name from organizers limit 1`,
+		`select name from events limit 1`,
+		`select count(*) from ticket_types`,
+		`select count(*) from questions`,
+		`select count(*) from question_applies_to`,
+		`select * from event_availability('00000000-0000-0000-0000-000000000000')`,
 		`select count(*) from quotas`,
 		`select count(*) from promo_codes`,
 		`select count(*) from api_keys`,

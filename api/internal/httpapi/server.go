@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -352,6 +353,11 @@ func (s *server) Login(ctx context.Context, req LoginRequestObject) (LoginRespon
 		return nil, locked()
 	case errors.Is(err, auth.ErrRateLimited):
 		return nil, tooManyAttempts()
+	case errors.Is(err, auth.ErrThrottled):
+		// The same words for an email with no account: they mustn't say which it is.
+		return nil, retryError{&apiError{429, "rate_limited",
+			"There have been a lot of wrong passwords for this email lately, so it takes one try every 10 seconds for now. Wait a few seconds, then sign in again."},
+			strconv.Itoa(int(auth.ThrottleEvery.Seconds()))}
 	case err != nil:
 		return nil, err
 	}

@@ -42,6 +42,9 @@ const RESERVED = new Set(["checkout", "orders", "assets", "api", "healthz"]);
 // (content-type, caching, idempotency-key) describe a request we now make ourselves.
 const FORWARD = ["accept-language", "user-agent"];
 
+// Paths that carry a checkout or order token.
+const TOKEN_PATH = /^\/(checkout|orders|api\/checkouts)\//;
+
 // What the API takes from callers who aren't signed in (a UUID fits).
 const IDEM = /^[A-Za-z0-9_-]{22,255}$/;
 // What the picker can send: 0 to 100, no padding.
@@ -61,8 +64,30 @@ const CHECKOUT_MESSAGES: Record<string, string> = {
   try_again: BUSY,
   turnstile_unavailable: BUSY,
   rate_limited: SLOW_DOWN,
-  promo_not_applicable: "That code doesn't apply to these tickets.",
   turnstile_failed: "Finish the quick check above Get tickets, then try again.",
+  // Races a buyer can lose while the page sits open: the list they get back is fresh.
+  sales_closed:
+    "Sales closed on one of those tickets while you were choosing. The list below is up to date, so pick again from what's still on sale.",
+  sales_not_open:
+    "One of those tickets isn't on sale yet. The list below shows when it opens, so pick from what's on sale now or come back then.",
+  unknown_ticket_type:
+    "One of those tickets isn't on sale any more. We've refreshed the list, so pick again from what's here.",
+  quantity_out_of_range:
+    "The per-order limit on one of those tickets changed. Pick again from the list below, which shows the new limits.",
+  too_many_tickets:
+    "One order holds up to 100 tickets. Pick fewer, or split them across two orders.",
+  no_items: "Pick at least one ticket.",
+  event_over:
+    "This event finished while you were choosing, so its tickets are off sale. You haven't been charged, and there's nothing more to do.",
+};
+// The promo refusals go next to the code box, where the buyer can fix them.
+const CODE_MESSAGES: Record<string, string> = {
+  promo_used_up:
+    "Every use of that code has gone. Clear it to buy at the regular price, or try another.",
+  promo_invalid:
+    "That code isn't working for this event. Check the spelling, or clear it to buy at the regular price.",
+  promo_not_applicable:
+    "That code doesn't take anything off these tickets. Pick the ones it's for, or clear it.",
 };
 const IN_PROGRESS = CHECKOUT_MESSAGES.idempotency_in_progress;
 
@@ -71,7 +96,13 @@ type Status = 200 | 400 | 404 | 409 | 410 | 413 | 422 | 429 | 500 | 502 | 503;
 // How a checkout request ended: its checkout, or the page we showed for it.
 type Outcome =
   | { kind: "made"; token: string }
-  | { kind: "failed"; status: Status; message?: string; left?: Record<string, number> };
+  | {
+      kind: "failed";
+      status: Status;
+      message?: string;
+      codeMessage?: string;
+      left?: Record<string, number>;
+    };
 
 const isLoopback = (ip: string) => /^127\./.test(ip) || ip === "::1" || /^::ffff:127\./i.test(ip);
 
@@ -110,6 +141,8 @@ function outcomeOf(
     };
   }
   const shown = ([404, 409, 422, 429, 503] as const).find((s) => s === status) ?? 502;
+  const codeMessage = CODE_MESSAGES[err.code ?? ""];
+  if (codeMessage) return { kind: "failed", status: shown, codeMessage };
   return { kind: "failed", status: shown, message: CHECKOUT_MESSAGES[err.code ?? ""] ?? GENERIC };
 }
 
@@ -218,7 +251,14 @@ export function createApp(opts: StorefrontOptions): Hono {
     await next();
     const h = c.res.headers;
     h.set("X-Content-Type-Options", "nosniff");
-    h.set("Referrer-Policy", "strict-origin-when-cross-origin");
+    // A page that set its own policy keeps it. Token paths never send a Referer at all,
+    // not even to our own stylesheet: the token would land in the access log.
+    if (!h.has("Referrer-Policy")) {
+      h.set(
+        "Referrer-Policy",
+        TOKEN_PATH.test(c.req.path) ? "no-referrer" : "strict-origin-when-cross-origin",
+      );
+    }
     h.set("X-Frame-Options", "DENY");
     if (!h.has("Content-Security-Policy")) h.set("Content-Security-Policy", csp("plain"));
   });
@@ -397,6 +437,7 @@ export function createApp(opts: StorefrontOptions): Hono {
       message?: string,
       left?: Record<string, number>,
       keep?: string,
+      codeMessage?: string,
     ) => {
       const r = await load(c, organizer, event, code);
       if (r.status === 404) return notFound(c, "event");
@@ -406,6 +447,7 @@ export function createApp(opts: StorefrontOptions): Hono {
         code: r.limited ? "" : code,
         chosen,
         message,
+        codeMessage,
         left,
         idem: keep,
       });
@@ -423,7 +465,7 @@ export function createApp(opts: StorefrontOptions): Hono {
     const show = (o: Outcome) =>
       o.kind === "made"
         ? c.redirect(`/checkout/${o.token}`, 303)
-        : again(o.status, o.message, o.left);
+        : again(o.status, o.message, o.left, undefined, o.codeMessage);
     // This exact request already made a checkout: go back to it rather than holding a second.
     const before = recent.get(key);
     if (before?.kind === "made") return show(before);
