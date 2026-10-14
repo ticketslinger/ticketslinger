@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pquerna/otp/totp"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
@@ -20,12 +21,17 @@ import (
 )
 
 func newAuthServer(t *testing.T) (*httptest.Server, *mailer.Memory) {
+	srv, m, _ := newAuthServerPool(t)
+	return srv, m
+}
+
+func newAuthServerPool(t *testing.T) (*httptest.Server, *mailer.Memory, *pgxpool.Pool) {
 	pool := testdb.New(t)
 	m := &mailer.Memory{}
 	svc := auth.NewService(pool, m, auth.Options{RPID: "localhost", Origin: "http://localhost:5173", SecretKey: []byte("0123456789abcdef0123456789abcdef")})
 	srv := httptest.NewServer(httpapi.New(httpapi.Deps{Pool: pool, Auth: svc}))
 	t.Cleanup(srv.Close)
-	return srv, m
+	return srv, m, pool
 }
 
 func do(t *testing.T, method, url, token, body string) (int, map[string]any) {

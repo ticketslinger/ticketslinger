@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pquerna/otp/totp"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
@@ -20,11 +21,12 @@ type harness struct {
 	t    *testing.T
 	srv  *httptest.Server
 	mail *mailer.Memory
+	pool *pgxpool.Pool // ts_app
 }
 
 func newHarness(t *testing.T) *harness {
-	srv, m := newAuthServer(t)
-	return &harness{t, srv, m}
+	srv, m, pool := newAuthServerPool(t)
+	return &harness{t, srv, m, pool}
 }
 
 // do sends a request with the session token (empty for none).

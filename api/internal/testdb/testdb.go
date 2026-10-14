@@ -55,6 +55,22 @@ func New(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
+// Owner opens a ts_owner pool on the same database as app (a pool from New),
+// for fixtures the app role may not write itself. It bypasses RLS.
+func Owner(t *testing.T, app *pgxpool.Pool) *pgxpool.Pool {
+	t.Helper()
+	ownerURL, _, _, err := requireURLs(os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := db.Open(context.Background(), withDB(t, ownerURL, app.Config().ConnConfig.Database))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
 // requireURLs reads the test database URLs. When they are missing, it asks
 // for a skip locally but returns an error under CI so tests cannot pass vacuously.
 func requireURLs(getenv func(string) string) (owner, app string, skip bool, err error) {

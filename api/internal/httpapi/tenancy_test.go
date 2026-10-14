@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/httpapi"
+	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
 )
 
 // userScoped lists the secured operations that act on the caller's own
@@ -94,6 +96,27 @@ func TestAdminRoutesNeedMFA(t *testing.T) {
 	res := h.do(plain, "GET", "/v1/organizers/acme/audit", "")
 	if res.StatusCode != http.StatusForbidden || h.errorCode(res) != "mfa_required" {
 		t.Fatalf("got %d %q, want 403 mfa_required", res.StatusCode, h.errorCode(res))
+	}
+}
+
+// A member whose role isn't allowed gets 403 forbidden_role, not 404: they
+// already know the organizer exists.
+func TestCheckinMemberCannotReadAudit(t *testing.T) {
+	h := newHarness(t)
+	owner := h.signupWithMFA("owner@example.com")
+	h.createOrganizer(owner, "acme")
+	staff := h.signupWithMFA("staff@example.com")
+	_, err := testdb.Owner(t, h.pool).Exec(context.Background(),
+		`INSERT INTO memberships (organizer_id, user_id, role)
+		 SELECT o.id, u.id, 'checkin' FROM organizers o, users u
+		  WHERE o.slug = 'acme' AND u.email = 'staff@example.com'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.must(h.do(staff, "GET", "/v1/organizers/acme", ""), 200)
+	res := h.do(staff, "GET", "/v1/organizers/acme/audit", "")
+	if res.StatusCode != http.StatusForbidden || h.errorCode(res) != "forbidden_role" {
+		t.Fatalf("checkin reading audit: got %d %q, want 403 forbidden_role", res.StatusCode, h.errorCode(res))
 	}
 }
 
