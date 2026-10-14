@@ -1,4 +1,5 @@
 /** @jsxImportSource preact */
+import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { type components, createApi } from "@ticketslinger/api-client";
 import { type Context, Hono } from "hono";
@@ -64,6 +65,11 @@ const IN_PROGRESS = CHECKOUT_MESSAGES.idempotency_in_progress;
 
 type Status = 200 | 400 | 404 | 409 | 413 | 422 | 429 | 500 | 502 | 503;
 
+// How a checkout request ended: its checkout, or the page we showed for it.
+type Outcome =
+  | { kind: "made"; token: string }
+  | { kind: "failed"; status: Status; message?: string; left?: Record<string, number> };
+
 const isLoopback = (ip: string) => /^127\./.test(ip) || ip === "::1" || /^::ffff:127\./i.test(ip);
 
 function hasDotSegment(path: string): boolean {
@@ -76,11 +82,39 @@ function hasDotSegment(path: string): boolean {
   return decoded.split(/[/\\]/).some((s) => s.startsWith("."));
 }
 
+function outcomeOf(
+  status: number,
+  token: string | undefined,
+  err: Partial<ApiError>,
+  chosen: Record<string, number>,
+): Outcome {
+  if (status === 201) {
+    return token && TOKEN.test(token)
+      ? { kind: "made", token }
+      : { kind: "failed", status: 502, message: GENERIC };
+  }
+  if (err.code === "sold_out") {
+    const left: Record<string, number> = {};
+    for (const a of err.available ?? []) {
+      if ((chosen[a.ticket_type_id] ?? 0) > a.remaining) left[a.ticket_type_id] = a.remaining;
+    }
+    const someLeft = Object.values(left).some((n) => n > 0);
+    return {
+      kind: "failed",
+      status: 409,
+      message: someLeft ? undefined : "Those tickets just sold out.",
+      left,
+    };
+  }
+  const shown = ([404, 409, 422, 429, 503] as const).find((s) => s === status) ?? 502;
+  return { kind: "failed", status: shown, message: CHECKOUT_MESSAGES[err.code ?? ""] ?? GENERIC };
+}
+
 export function createApp(opts: StorefrontOptions): Hono {
   const app = new Hono();
   const api = createApi(opts.apiUrl.replace(/\/+$/, ""), opts.fetch ?? ((r) => fetch(r)));
   const siteKey = opts.turnstileSiteKey;
-  const recent = new Recent();
+  const recent = new Recent<Outcome>();
   const waitMs = opts.inProgressWaitMs ?? 3000;
   const peerIp =
     opts.peerIp ??
@@ -133,13 +167,13 @@ export function createApp(opts: StorefrontOptions): Hono {
   }
 
   // The first tap of a double tap is still running: give it a moment to finish.
-  async function firstTap(idem: string): Promise<string | undefined> {
+  async function firstTap(key: string): Promise<Outcome | undefined> {
     for (let waited = 0; waited < waitMs; waited += 50) {
-      const token = recent.get(idem);
-      if (token) return token;
+      const outcome = recent.get(key);
+      if (outcome) return outcome;
       await Bun.sleep(50);
     }
-    return recent.get(idem);
+    return recent.get(key);
   }
 
   // Too many code tries from this address still shows the event, just without the code.
@@ -226,9 +260,6 @@ export function createApp(opts: StorefrontOptions): Hono {
     };
 
     const idem = IDEM.test(field("idem")) ? field("idem") : crypto.randomUUID();
-    // This form already made a checkout: go back to it rather than holding a second one.
-    const made = recent.get(idem);
-    if (made) return c.redirect(`/checkout/${made}`, 303);
 
     // qty_<id> fields hold what the picker offers, 0 to 100. Anything else wasn't our form.
     const chosen: Record<string, number> = {};
@@ -268,6 +299,22 @@ export function createApp(opts: StorefrontOptions): Hono {
     if (tampered) return again(422, "Pick your tickets from the lists, then try again.");
     if (items.length === 0) return again(422, "Pick at least one ticket.");
 
+    // The whole request, not just its key: a changed form, another event or another buyer
+    // with the same idem is a new attempt.
+    items.sort((x, y) => (x.ticket_type_id < y.ticket_type_id ? -1 : 1));
+    const key = createHash("sha256")
+      .update(JSON.stringify([idem, clientIp(c) ?? "", organizer, event, items, code]))
+      .digest("base64url");
+    const show = (o: Outcome) =>
+      o.kind === "made"
+        ? c.redirect(`/checkout/${o.token}`, 303)
+        : again(o.status, o.message, o.left);
+    // This exact request already made a checkout: go back to it rather than holding a second.
+    const before = recent.get(key);
+    if (before?.kind === "made") return show(before);
+    // A double tap waits for this attempt, not an earlier one that failed.
+    recent.delete(key);
+
     const body: components["schemas"]["CreateCheckout"] = { organizer, event, items };
     if (code) body.promo_code = code;
     const turnstile = field("cf-turnstile-response");
@@ -277,31 +324,16 @@ export function createApp(opts: StorefrontOptions): Hono {
       .POST("/checkouts", { body, headers: { ...apiHeaders(c), "Idempotency-Key": idem } })
       .catch(() => null);
     if (!res) return again(502, GENERIC);
-    if (res.response.status === 201) {
-      const token = res.data?.token ?? "";
-      if (!TOKEN.test(token)) return again(502, GENERIC);
-      recent.set(idem, token);
-      return c.redirect(`/checkout/${token}`, 303);
-    }
-
-    const status = res.response.status;
     const err: Partial<ApiError> = res.error?.error ?? {};
-    const shown: Status = ([404, 409, 422, 429, 503] as const).find((s) => s === status) ?? 502;
-    if (err.code === "sold_out") {
-      const left: Record<string, number> = {};
-      for (const a of err.available ?? []) {
-        if ((chosen[a.ticket_type_id] ?? 0) > a.remaining) left[a.ticket_type_id] = a.remaining;
-      }
-      const someLeft = Object.values(left).some((n) => n > 0);
-      return again(409, someLeft ? undefined : "Those tickets just sold out.", left);
-    }
     if (err.code === "idempotency_in_progress") {
-      const token = await firstTap(idem);
-      if (token) return c.redirect(`/checkout/${token}`, 303);
+      const first = await firstTap(key);
+      if (first) return show(first);
       // Same key in the new form, so the next tap also finds the first tap's checkout.
       return again(409, IN_PROGRESS, undefined, idem);
     }
-    return again(shown, CHECKOUT_MESSAGES[err.code ?? ""] ?? GENERIC);
+    const outcome = outcomeOf(res.response.status, res.data?.token, err, chosen);
+    recent.set(key, outcome);
+    return show(outcome);
   });
 
   app.notFound((c) => notFound(c));

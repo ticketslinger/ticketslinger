@@ -329,6 +329,50 @@ test("a later tap of the same form goes to the same checkout without asking agai
   expect(checkoutCalls(calls)).toBe(1);
 });
 
+test("the same key with a different request is a new attempt", async () => {
+  const other = "Zz9_Yy8-Xx7_Ww6-Vv5_Uu4-Tt3_Ss2-Rr1_Qq0-Pp9";
+  let n = 0;
+  const { a, calls } = app(
+    routes(() => Response.json({ token: n++ ? other : TOK, status: "open" }, { status: 201 })),
+  );
+  const first = await a.request("/acme/gala/checkout", form({ qty_t1: "2", idem: KEY }));
+  expect(first.headers.get("location")).toBe(`/checkout/${TOK}`);
+  const variants: [string, Record<string, string>, string?][] = [
+    ["/acme/gala/checkout", { qty_t1: "3", idem: KEY }],
+    ["/acme/gala/checkout", { qty_t1: "2", code: "FRIENDS", idem: KEY }],
+    ["/acme/other/checkout", { qty_t1: "2", idem: KEY }],
+    ["/acme/gala/checkout", { qty_t1: "2", idem: KEY }, "198.51.100.20"],
+  ];
+  for (const [path, fields, ip] of variants) {
+    const before = checkoutCalls(calls);
+    const res = await a.request(path, form(fields, ip));
+    expect(checkoutCalls(calls)).toBe(before + 1);
+    expect(res.headers.get("location")).toBe(`/checkout/${other}`);
+  }
+});
+
+test("a double tap whose first tap failed shows that failure", async () => {
+  let running = false;
+  const { a } = app(
+    routes(async () => {
+      if (running) return apiError(409, "idempotency_in_progress");
+      running = true;
+      await Bun.sleep(100);
+      return apiError(409, "sold_out", { available: [{ ticket_type_id: "t1", remaining: 0 }] });
+    }),
+  );
+  const tap = () => a.request("/acme/gala/checkout", form({ qty_t1: "2", idem: KEY }));
+  const first = tap();
+  await Bun.sleep(10);
+  const [r1, r2] = await Promise.all([first, tap()]);
+  for (const r of [r1, r2]) {
+    expect(r.status).toBe(409);
+    const html = await r.text();
+    expect(html).toContain("Those tickets just sold out.");
+    expect(html).not.toContain("already holding");
+  }
+});
+
 test("still in progress after the wait: the page keeps the same key", async () => {
   const { a } = app(routes(() => apiError(409, "idempotency_in_progress")));
   const res = await a.request("/acme/gala/checkout", form({ qty_t1: "2", idem: KEY }));

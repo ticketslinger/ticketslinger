@@ -3,7 +3,7 @@ import { Recent } from "./recent";
 
 test("entries expire after the TTL", () => {
   let now = 0;
-  const r = new Recent(60_000, 10, () => now);
+  const r = new Recent<string>(60_000, 10, () => now);
   r.set("k", "tok");
   now = 59_999;
   expect(r.get("k")).toBe("tok");
@@ -12,7 +12,7 @@ test("entries expire after the TTL", () => {
 });
 
 test("the oldest entry goes first when full", () => {
-  const r = new Recent(60_000, 2);
+  const r = new Recent<string>(60_000, 2);
   r.set("a", "1");
   r.set("b", "2");
   r.set("c", "3");

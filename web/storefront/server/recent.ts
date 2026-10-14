@@ -1,11 +1,12 @@
 /**
- * Checkouts made in the last minute, by idempotency key. createCheckout never replays a
- * stored answer, so this is how a second tap of the same form finds the first tap's cart.
+ * What happened to checkout requests in the last minute, by request key. createCheckout
+ * never replays a stored answer, so this is how a second tap of the same form finds out
+ * what the first tap got.
  */
 // ponytail: one process's memory. A double tap that lands on two storefront processes still
 // makes two carts; move this to a shared store (the API) if we ever run more than one.
-export class Recent {
-  readonly #m = new Map<string, { token: string; at: number }>();
+export class Recent<V> {
+  readonly #m = new Map<string, { value: V; at: number }>();
   readonly #ttl: number;
   readonly #max: number;
   readonly #now: () => number;
@@ -16,19 +17,23 @@ export class Recent {
     this.#now = now;
   }
 
-  get(key: string): string | undefined {
+  get(key: string): V | undefined {
     const e = this.#m.get(key);
     if (!e) return undefined;
     if (this.#now() - e.at >= this.#ttl) {
       this.#m.delete(key);
       return undefined;
     }
-    return e.token;
+    return e.value;
   }
 
-  set(key: string, token: string) {
+  delete(key: string) {
     this.#m.delete(key);
-    this.#m.set(key, { token, at: this.#now() });
+  }
+
+  set(key: string, value: V) {
+    this.#m.delete(key);
+    this.#m.set(key, { value, at: this.#now() });
     // Map keeps insertion order, so the first key is the oldest.
     for (const k of this.#m.keys()) {
       if (this.#m.size <= this.#max) break;
