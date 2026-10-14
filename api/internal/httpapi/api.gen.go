@@ -308,6 +308,15 @@ type CreateOrganizer struct {
 	Slug string `json:"slug"`
 }
 
+// CreateQuota defines model for CreateQuota.
+type CreateQuota struct {
+	Name string `json:"name"`
+	Size *int   `json:"size"`
+
+	// TicketTypeIds The ticket types that draw on this capacity. On a patch the list replaces the current one; leave it out to keep it.
+	TicketTypeIds *[]openapi_types.UUID `json:"ticket_type_ids,omitempty"`
+}
+
 // CreateTicketType defines model for CreateTicketType.
 type CreateTicketType struct {
 	Description *string `json:"description,omitempty"`
@@ -319,12 +328,13 @@ type CreateTicketType struct {
 	// MinPerOrder Defaults to 1.
 	MinPerOrder *int   `json:"min_per_order,omitempty"`
 	Name        string `json:"name"`
-
-	// PriceCents In cents: 2500 is $25. Up to $100,000.
-	PriceCents int64 `json:"price_cents"`
+	PriceCents  *int64 `json:"price_cents"`
 
 	// PricesIncludeTax Overrides the event's setting. Send null to go back to the event's. Leave it out to keep it as it is.
 	PricesIncludeTax nullable.Nullable[bool] `json:"prices_include_tax,omitempty"`
+
+	// QuotaIds Quotas of this event to join. Optional on a draft; a live event needs at least one (409 live_needs_capacity). An id from another event is 422 unknown_quota.
+	QuotaIds *[]openapi_types.UUID `json:"quota_ids,omitempty"`
 
 	// SalesEnd Must be after sales_start.
 	SalesEnd   nullable.Nullable[time.Time] `json:"sales_end,omitempty"`
@@ -447,6 +457,28 @@ type Passkey struct {
 	Name      string             `json:"name"`
 }
 
+// Quota defines model for Quota.
+type Quota struct {
+	CreatedAt     time.Time            `json:"created_at"`
+	EventId       openapi_types.UUID   `json:"event_id"`
+	Id            openapi_types.UUID   `json:"id"`
+	Name          string               `json:"name"`
+	Size          int                  `json:"size"`
+	TicketTypeIds []openapi_types.UUID `json:"ticket_type_ids"`
+	UpdatedAt     time.Time            `json:"updated_at"`
+}
+
+// QuotaFields defines model for QuotaFields.
+type QuotaFields struct {
+	Name *string `json:"name,omitempty"`
+
+	// Size How many tickets this capacity holds across all its ticket types.
+	Size *int `json:"size,omitempty"`
+
+	// TicketTypeIds The ticket types that draw on this capacity. On a patch the list replaces the current one; leave it out to keep it.
+	TicketTypeIds *[]openapi_types.UUID `json:"ticket_type_ids,omitempty"`
+}
+
 // SessionCreated defines model for SessionCreated.
 type SessionCreated struct {
 	SessionToken string `json:"session_token"`
@@ -559,6 +591,9 @@ type EventPath = openapi_types.UUID
 // OrganizerPath defines model for OrganizerPath.
 type OrganizerPath = string
 
+// QuotaPath defines model for QuotaPath.
+type QuotaPath = openapi_types.UUID
+
 // TicketTypePath defines model for TicketTypePath.
 type TicketTypePath = openapi_types.UUID
 
@@ -628,6 +663,12 @@ type CreateEventJSONRequestBody = CreateEvent
 
 // UpdateEventJSONRequestBody defines body for UpdateEvent for application/json ContentType.
 type UpdateEventJSONRequestBody = UpdateEvent
+
+// CreateQuotaJSONRequestBody defines body for CreateQuota for application/json ContentType.
+type CreateQuotaJSONRequestBody = CreateQuota
+
+// UpdateQuotaJSONRequestBody defines body for UpdateQuota for application/json ContentType.
+type UpdateQuotaJSONRequestBody = QuotaFields
 
 // CreateTicketTypeJSONRequestBody defines body for CreateTicketType for application/json ContentType.
 type CreateTicketTypeJSONRequestBody = CreateTicketType
@@ -712,6 +753,21 @@ type ServerInterface interface {
 
 	// (PATCH /organizers/{organizer}/events/{event})
 	UpdateEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+
+	// (GET /organizers/{organizer}/events/{event}/quotas)
+	ListQuotas(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+
+	// (POST /organizers/{organizer}/events/{event}/quotas)
+	CreateQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+
+	// (DELETE /organizers/{organizer}/events/{event}/quotas/{quota})
+	DeleteQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, quota QuotaPath)
+
+	// (GET /organizers/{organizer}/events/{event}/quotas/{quota})
+	GetQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, quota QuotaPath)
+
+	// (PATCH /organizers/{organizer}/events/{event}/quotas/{quota})
+	UpdateQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, quota QuotaPath)
 
 	// (GET /organizers/{organizer}/events/{event}/ticket-types)
 	ListTicketTypes(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
@@ -1284,6 +1340,208 @@ func (siw *ServerInterfaceWrapper) UpdateEvent(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// ListQuotas operation middleware
+func (siw *ServerInterfaceWrapper) ListQuotas(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListQuotas(w, r, organizer, event)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateQuota operation middleware
+func (siw *ServerInterfaceWrapper) CreateQuota(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateQuota(w, r, organizer, event)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteQuota operation middleware
+func (siw *ServerInterfaceWrapper) DeleteQuota(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "quota" -------------
+	var quota QuotaPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "quota", r.PathValue("quota"), &quota, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "quota", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteQuota(w, r, organizer, event, quota)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetQuota operation middleware
+func (siw *ServerInterfaceWrapper) GetQuota(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "quota" -------------
+	var quota QuotaPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "quota", r.PathValue("quota"), &quota, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "quota", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetQuota(w, r, organizer, event, quota)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateQuota operation middleware
+func (siw *ServerInterfaceWrapper) UpdateQuota(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "quota" -------------
+	var quota QuotaPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "quota", r.PathValue("quota"), &quota, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "quota", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateQuota(w, r, organizer, event, quota)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListTicketTypes operation middleware
 func (siw *ServerInterfaceWrapper) ListTicketTypes(w http.ResponseWriter, r *http.Request) {
 
@@ -1636,6 +1894,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/ticket-types/{ticketType}", wrapper.DeleteTicketType)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/ticket-types/{ticketType}", wrapper.GetTicketType)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/ticket-types/{ticketType}", wrapper.UpdateTicketType)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/quotas", wrapper.ListQuotas)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/quotas", wrapper.CreateQuota)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/quotas/{quota}", wrapper.DeleteQuota)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/quotas/{quota}", wrapper.GetQuota)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/quotas/{quota}", wrapper.UpdateQuota)
 
 	return m
 }
@@ -2924,6 +3187,288 @@ func (response UpdateEvent422JSONResponse) VisitUpdateEventResponse(w http.Respo
 	return err
 }
 
+type ListQuotasRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+}
+
+type ListQuotasResponseObject interface {
+	VisitListQuotasResponse(w http.ResponseWriter) error
+}
+
+type ListQuotas200JSONResponse []Quota
+
+func (response ListQuotas200JSONResponse) VisitListQuotasResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListQuotas404JSONResponse struct{ ErrorJSONResponse }
+
+func (response ListQuotas404JSONResponse) VisitListQuotasResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateQuotaRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+	Body      *CreateQuotaJSONRequestBody
+}
+
+type CreateQuotaResponseObject interface {
+	VisitCreateQuotaResponse(w http.ResponseWriter) error
+}
+
+type CreateQuota201JSONResponse Quota
+
+func (response CreateQuota201JSONResponse) VisitCreateQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateQuota403JSONResponse struct{ ErrorJSONResponse }
+
+func (response CreateQuota403JSONResponse) VisitCreateQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateQuota404JSONResponse Error
+
+func (response CreateQuota404JSONResponse) VisitCreateQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateQuota422JSONResponse Error
+
+func (response CreateQuota422JSONResponse) VisitCreateQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteQuotaRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+	Quota     QuotaPath     `json:"quota"`
+}
+
+type DeleteQuotaResponseObject interface {
+	VisitDeleteQuotaResponse(w http.ResponseWriter) error
+}
+
+type DeleteQuota204Response struct {
+}
+
+func (response DeleteQuota204Response) VisitDeleteQuotaResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteQuota403JSONResponse struct{ ErrorJSONResponse }
+
+func (response DeleteQuota403JSONResponse) VisitDeleteQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteQuota404JSONResponse Error
+
+func (response DeleteQuota404JSONResponse) VisitDeleteQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteQuota409JSONResponse Error
+
+func (response DeleteQuota409JSONResponse) VisitDeleteQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetQuotaRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+	Quota     QuotaPath     `json:"quota"`
+}
+
+type GetQuotaResponseObject interface {
+	VisitGetQuotaResponse(w http.ResponseWriter) error
+}
+
+type GetQuota200JSONResponse Quota
+
+func (response GetQuota200JSONResponse) VisitGetQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetQuota404JSONResponse struct{ ErrorJSONResponse }
+
+func (response GetQuota404JSONResponse) VisitGetQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateQuotaRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+	Quota     QuotaPath     `json:"quota"`
+	Body      *UpdateQuotaJSONRequestBody
+}
+
+type UpdateQuotaResponseObject interface {
+	VisitUpdateQuotaResponse(w http.ResponseWriter) error
+}
+
+type UpdateQuota200JSONResponse Quota
+
+func (response UpdateQuota200JSONResponse) VisitUpdateQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateQuota403JSONResponse struct{ ErrorJSONResponse }
+
+func (response UpdateQuota403JSONResponse) VisitUpdateQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateQuota404JSONResponse Error
+
+func (response UpdateQuota404JSONResponse) VisitUpdateQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateQuota409JSONResponse Error
+
+func (response UpdateQuota409JSONResponse) VisitUpdateQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateQuota422JSONResponse Error
+
+func (response UpdateQuota422JSONResponse) VisitUpdateQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListTicketTypesRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
@@ -3009,6 +3554,20 @@ func (response CreateTicketType404JSONResponse) VisitCreateTicketTypeResponse(w 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTicketType409JSONResponse Error
+
+func (response CreateTicketType409JSONResponse) VisitCreateTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3269,6 +3828,21 @@ type StrictServerInterface interface {
 
 	// (PATCH /organizers/{organizer}/events/{event})
 	UpdateEvent(ctx context.Context, request UpdateEventRequestObject) (UpdateEventResponseObject, error)
+
+	// (GET /organizers/{organizer}/events/{event}/quotas)
+	ListQuotas(ctx context.Context, request ListQuotasRequestObject) (ListQuotasResponseObject, error)
+
+	// (POST /organizers/{organizer}/events/{event}/quotas)
+	CreateQuota(ctx context.Context, request CreateQuotaRequestObject) (CreateQuotaResponseObject, error)
+
+	// (DELETE /organizers/{organizer}/events/{event}/quotas/{quota})
+	DeleteQuota(ctx context.Context, request DeleteQuotaRequestObject) (DeleteQuotaResponseObject, error)
+
+	// (GET /organizers/{organizer}/events/{event}/quotas/{quota})
+	GetQuota(ctx context.Context, request GetQuotaRequestObject) (GetQuotaResponseObject, error)
+
+	// (PATCH /organizers/{organizer}/events/{event}/quotas/{quota})
+	UpdateQuota(ctx context.Context, request UpdateQuotaRequestObject) (UpdateQuotaResponseObject, error)
 
 	// (GET /organizers/{organizer}/events/{event}/ticket-types)
 	ListTicketTypes(ctx context.Context, request ListTicketTypesRequestObject) (ListTicketTypesResponseObject, error)
@@ -4044,6 +4618,158 @@ func (sh *strictHandler) UpdateEvent(w http.ResponseWriter, r *http.Request, org
 	}
 }
 
+// ListQuotas operation middleware
+func (sh *strictHandler) ListQuotas(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+	var request ListQuotasRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListQuotas(ctx, request.(ListQuotasRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListQuotas")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListQuotasResponseObject); ok {
+		if err := validResponse.VisitListQuotasResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateQuota operation middleware
+func (sh *strictHandler) CreateQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+	var request CreateQuotaRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+
+	var body CreateQuotaJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateQuota(ctx, request.(CreateQuotaRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateQuota")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateQuotaResponseObject); ok {
+		if err := validResponse.VisitCreateQuotaResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteQuota operation middleware
+func (sh *strictHandler) DeleteQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, quota QuotaPath) {
+	var request DeleteQuotaRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+	request.Quota = quota
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteQuota(ctx, request.(DeleteQuotaRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteQuota")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteQuotaResponseObject); ok {
+		if err := validResponse.VisitDeleteQuotaResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetQuota operation middleware
+func (sh *strictHandler) GetQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, quota QuotaPath) {
+	var request GetQuotaRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+	request.Quota = quota
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetQuota(ctx, request.(GetQuotaRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetQuota")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetQuotaResponseObject); ok {
+		if err := validResponse.VisitGetQuotaResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateQuota operation middleware
+func (sh *strictHandler) UpdateQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, quota QuotaPath) {
+	var request UpdateQuotaRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+	request.Quota = quota
+
+	var body UpdateQuotaJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateQuota(ctx, request.(UpdateQuotaRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateQuota")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateQuotaResponseObject); ok {
+		if err := validResponse.VisitUpdateQuotaResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListTicketTypes operation middleware
 func (sh *strictHandler) ListTicketTypes(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
 	var request ListTicketTypesRequestObject
@@ -4201,74 +4927,82 @@ func (sh *strictHandler) UpdateTicketType(w http.ResponseWriter, r *http.Request
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"/wMA",
+	"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",
+	"OtT3HsD6K1H6sZ4Pro7pjp7/HwA=",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

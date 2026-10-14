@@ -347,7 +347,7 @@ export interface paths {
         /** @description Any member, or any API key. In position order. */
         get: operations["listTicketTypes"];
         put?: never;
-        /** @description Owners and admins, or a write API key. It goes to the end of the list. */
+        /** @description Owners and admins, or a write API key. It goes to the end of the list. price_cents is required (422 missing_field). */
         post: operations["createTicketType"];
         delete?: never;
         options?: never;
@@ -372,6 +372,43 @@ export interface paths {
         head?: never;
         /** @description Owners and admins, or a write API key. Send only what changes. */
         patch: operations["updateTicketType"];
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/quotas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Any member, or any API key. Oldest first. */
+        get: operations["listQuotas"];
+        put?: never;
+        /** @description Owners and admins, or a write API key. size is required (422 missing_field). ticket_type_ids may be empty; every id must belong to this event (422 unknown_ticket_type). */
+        post: operations["createQuota"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/quotas/{quota}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Any member, or any API key. */
+        get: operations["getQuota"];
+        put?: never;
+        post?: never;
+        /** @description Owners and admins, or a write API key. On a live event, a delete that leaves a ticket type in no quota answers 409 live_needs_capacity. */
+        delete: operations["deleteQuota"];
+        options?: never;
+        head?: never;
+        /** @description Owners and admins, or a write API key. Send only what changes. A ticket_type_ids list replaces the whole set. On a live event, leaving a ticket type in no quota answers 409 live_needs_capacity. */
+        patch: operations["updateQuota"];
         trace?: never;
     };
 }
@@ -558,6 +595,29 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        QuotaFields: {
+            name?: string;
+            /** @description How many tickets this capacity holds across all its ticket types. */
+            size?: number;
+            /** @description The ticket types that draw on this capacity. On a patch the list replaces the current one; leave it out to keep it. */
+            ticket_type_ids?: string[];
+        };
+        CreateQuota: components["schemas"]["QuotaFields"] & {
+            size: number;
+        };
+        Quota: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            event_id: string;
+            name: string;
+            size: number;
+            ticket_type_ids: string[];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
         TicketTypeFields: {
             name?: string;
             description?: string;
@@ -583,7 +643,12 @@ export interface components {
             max_per_order?: number;
             hidden?: boolean;
         };
-        CreateTicketType: components["schemas"]["TicketTypeFields"] & Record<string, never>;
+        CreateTicketType: components["schemas"]["TicketTypeFields"] & {
+            /** Format: int64 */
+            price_cents: number;
+            /** @description Quotas of this event to join. Optional on a draft; a live event needs at least one (409 live_needs_capacity). An id from another event is 422 unknown_quota. */
+            quota_ids?: string[];
+        };
         TicketType: {
             /** Format: uuid */
             id: string;
@@ -624,6 +689,7 @@ export interface components {
     };
     parameters: {
         OrganizerPath: string;
+        QuotaPath: string;
         TicketTypePath: string;
         EventPath: string;
     };
@@ -1320,6 +1386,7 @@ export interface operations {
             };
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
@@ -1401,6 +1468,142 @@ export interface operations {
             };
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    listQuotas: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Quota"][];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    createQuota: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateQuota"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Quota"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    getQuota: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                quota: components["parameters"]["QuotaPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Quota"];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteQuota: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                quota: components["parameters"]["QuotaPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    updateQuota: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                quota: components["parameters"]["QuotaPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuotaFields"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Quota"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };

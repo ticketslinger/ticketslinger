@@ -23,4 +23,7 @@ func TestDBErrorBackstop(t *testing.T) {
 	if err := ttDBError(&pgconn.PgError{Code: "23505"}); !errors.As(err, &con) || con.Code != "ticket_type_exists" {
 		t.Errorf("ticket 23505: %v", err)
 	}
+	if err := quotaDBError(&pgconn.PgError{Code: "23514"}); !errors.As(err, &inv) || inv.Code != "invalid_quota" {
+		t.Errorf("quota 23514: %v", err)
+	}
 }

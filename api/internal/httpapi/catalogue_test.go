@@ -170,7 +170,9 @@ func TestTicketTypeRoundTrip(t *testing.T) {
 		t.Fatalf("list: %d %v", res.StatusCode, list)
 	}
 
-	// Live, then the last ticket type is protected.
+	// Live (every ticket type needs a quota first), then the last ticket type is protected.
+	h.must(h.do(owner, "POST", "/v1/organizers/acme/events/"+ev+"/quotas",
+		`{"name":"Hall","size":100,"ticket_type_ids":["`+list[0]["id"].(string)+`","`+list[1]["id"].(string)+`"]}`), 201)
 	h.must(h.do(owner, "PATCH", "/v1/organizers/acme/events/"+ev, `{"status":"live"}`), 200)
 	h.must(h.do(owner, "DELETE", base+"/"+id, ""), 204)
 	var other string
@@ -198,4 +200,67 @@ func TestTicketTypesUnderAnotherTenantsEvent(t *testing.T) {
 	h.must(h.do(owner, "PATCH", base+"/"+tk, `{"name":"Sneak"}`), 404)
 	h.must(h.do(owner, "GET", base, ""), 404)
 	h.must(h.do(owner, "DELETE", base+"/"+tk, ""), 404)
+}
+
+func TestQuotaOverHTTP(t *testing.T) {
+	h := newHarness(t)
+	owner := h.signupWithMFA("owner@example.com")
+	h.createOrganizer(owner, "acme")
+	h.createOrganizer(owner, "other")
+	ev := h.must(h.do(owner, "POST", "/v1/organizers/acme/events", eventBody), 201)["id"].(string)
+	tk := h.must(h.do(owner, "POST", "/v1/organizers/acme/events/"+ev+"/ticket-types", `{"name":"General","price_cents":2500}`), 201)["id"].(string)
+	oev := h.must(h.do(owner, "POST", "/v1/organizers/other/events", eventBody), 201)["id"].(string)
+	otk := h.must(h.do(owner, "POST", "/v1/organizers/other/events/"+oev+"/ticket-types", `{"name":"Theirs","price_cents":100}`), 201)["id"].(string)
+	oq := h.must(h.do(owner, "POST", "/v1/organizers/other/events/"+oev+"/quotas", `{"name":"Theirs","size":5}`), 201)["id"].(string)
+	base := "/v1/organizers/acme/events/" + ev + "/quotas"
+
+	if res := h.do(owner, "POST", base, `{"name":"Hall","size":10,"ticket_type_ids":["`+otk+`"]}`); res.StatusCode != 422 || h.errorCode(res) != "unknown_ticket_type" {
+		t.Fatalf("foreign ticket type: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	if res := h.do(owner, "POST", base, `{"name":"Hall"}`); res.StatusCode != 422 || h.errorCode(res) != "missing_field" {
+		t.Fatalf("missing size: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	if res := h.do(owner, "POST", "/v1/organizers/acme/events/"+ev+"/ticket-types", `{"name":"Free?"}`); res.StatusCode != 422 || h.errorCode(res) != "missing_field" {
+		t.Fatalf("missing price: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	comp := h.must(h.do(owner, "POST", "/v1/organizers/acme/events/"+ev+"/ticket-types", `{"name":"Comp","price_cents":0}`), 201)["id"].(string)
+	h.must(h.do(owner, "POST", base, `{"name":"Zero","size":0}`), 201)
+	if res := h.do(owner, "POST", base, `{"name":"Hall","size":-1}`); res.StatusCode != 422 || h.errorCode(res) != "bad_quota_size" {
+		t.Fatalf("size: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	if res := h.do(owner, "PATCH", "/v1/organizers/acme/events/"+ev, `{"status":"live"}`); res.StatusCode != 422 || h.errorCode(res) != "unquotaed_ticket_type" {
+		t.Fatalf("live without quota: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	q := h.must(h.do(owner, "POST", base, `{"name":"Hall","size":10,"ticket_type_ids":["`+tk+`"]}`), 201)
+	id := q["id"].(string)
+	if ids, _ := q["ticket_type_ids"].([]any); len(ids) != 1 || ids[0] != tk {
+		t.Fatalf("created: %v", q)
+	}
+	if c := h.must(h.do(owner, "PATCH", base+"/"+id, `{"size":20}`), 200); c["size"] != float64(20) || len(c["ticket_type_ids"].([]any)) != 1 {
+		t.Fatalf("patch size: %v", c)
+	}
+	// "Comp" and "Zero" above: cover Comp, then go live.
+	h.must(h.do(owner, "PATCH", base+"/"+id, `{"ticket_type_ids":["`+tk+`","`+comp+`"]}`), 200)
+	h.must(h.do(owner, "PATCH", "/v1/organizers/acme/events/"+ev, `{"status":"live"}`), 200)
+	tts := "/v1/organizers/acme/events/" + ev + "/ticket-types"
+	if res := h.do(owner, "POST", tts, `{"name":"Late","price_cents":1}`); res.StatusCode != 409 || h.errorCode(res) != "live_needs_capacity" {
+		t.Fatalf("live create without quotas: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	if res := h.do(owner, "POST", tts, `{"name":"Late","price_cents":1,"quota_ids":["`+oq+`"]}`); res.StatusCode != 422 || h.errorCode(res) != "unknown_quota" {
+		t.Fatalf("live create with foreign quota: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	h.must(h.do(owner, "POST", tts, `{"name":"Late","price_cents":1,"quota_ids":["`+id+`"]}`), 201)
+	if res := h.do(owner, "PATCH", base+"/"+id, `{"ticket_type_ids":[]}`); res.StatusCode != 409 || h.errorCode(res) != "live_needs_capacity" {
+		t.Fatalf("unlink on live: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	if res := h.do(owner, "DELETE", base+"/"+id, ""); res.StatusCode != 409 || h.errorCode(res) != "live_needs_capacity" {
+		t.Fatalf("delete on live: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	// Only the event's own tenant answers.
+	other := "/v1/organizers/other/events/" + ev + "/quotas"
+	h.must(h.do(owner, "GET", other, ""), 404)
+	h.must(h.do(owner, "GET", other+"/"+id, ""), 404)
+	h.must(h.do(owner, "DELETE", other+"/"+id, ""), 404)
+	h.must(h.do(owner, "PATCH", "/v1/organizers/acme/events/"+ev, `{"status":"draft"}`), 200)
+	h.must(h.do(owner, "DELETE", base+"/"+id, ""), 204)
 }
