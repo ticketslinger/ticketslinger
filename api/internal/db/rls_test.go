@@ -33,8 +33,13 @@ func seedOrg(t *testing.T, pool *pgxpool.Pool, email, slug string) (user, org uu
 
 func TestRLSUnscopedSeesNothing(t *testing.T) {
 	pool := testdb.New(t)
-	seedOrg(t, pool, "a@example.com", "org-a")
-	for _, table := range []string{"organizers", "memberships", "audit_log"} {
+	_, org := seedOrg(t, pool, "a@example.com", "org-a")
+	// A live event: the storefront role may read it, plain ts_app still may not.
+	if _, err := testdb.Owner(t, pool).Exec(context.Background(), `insert into events(organizer_id, slug, name, timezone, starts_at, ends_at, status)
+		values ($1, 'live-show', 'Show', 'UTC', now(), now() + interval '1 hour', 'live')`, org); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"organizers", "memberships", "audit_log", "events"} {
 		var n int
 		if err := pool.QueryRow(context.Background(), `select count(*) from `+table).Scan(&n); err != nil {
 			t.Fatal(err)
