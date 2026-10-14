@@ -1,16 +1,16 @@
 package httpapi_test
 
 import (
-	"time"
-
 	"context"
 	"encoding/json"
-	"github.com/pquerna/otp/totp"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/pquerna/otp/totp"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
 	"github.com/ticketslinger/ticketslinger/api/internal/config"
