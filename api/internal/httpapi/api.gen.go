@@ -11,7 +11,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -141,8 +143,18 @@ type OrganizerPath = string
 // FinishPasskeyLoginJSONBody defines parameters for FinishPasskeyLogin.
 type FinishPasskeyLoginJSONBody map[string]interface{}
 
+// BeginPasskeyRegistrationJSONBody defines parameters for BeginPasskeyRegistration.
+type BeginPasskeyRegistrationJSONBody struct {
+	Password *string `json:"password,omitempty"`
+}
+
 // FinishPasskeyRegistrationJSONBody defines parameters for FinishPasskeyRegistration.
 type FinishPasskeyRegistrationJSONBody map[string]interface{}
+
+// FinishPasskeyRegistrationParams defines parameters for FinishPasskeyRegistration.
+type FinishPasskeyRegistrationParams struct {
+	Name *string `form:"name,omitempty" json:"name,omitempty"`
+}
 
 // StartTotpJSONBody defines parameters for StartTotp.
 type StartTotpJSONBody struct {
@@ -164,6 +176,9 @@ type LoginJSONRequestBody = LoginRequest
 
 // FinishPasskeyLoginJSONRequestBody defines body for FinishPasskeyLogin for application/json ContentType.
 type FinishPasskeyLoginJSONRequestBody FinishPasskeyLoginJSONBody
+
+// BeginPasskeyRegistrationJSONRequestBody defines body for BeginPasskeyRegistration for application/json ContentType.
+type BeginPasskeyRegistrationJSONRequestBody BeginPasskeyRegistrationJSONBody
 
 // FinishPasskeyRegistrationJSONRequestBody defines body for FinishPasskeyRegistration for application/json ContentType.
 type FinishPasskeyRegistrationJSONRequestBody FinishPasskeyRegistrationJSONBody
@@ -202,7 +217,7 @@ type ServerInterface interface {
 	BeginPasskeyRegistration(w http.ResponseWriter, r *http.Request)
 
 	// (POST /auth/passkeys/register/{challengeId})
-	FinishPasskeyRegistration(w http.ResponseWriter, r *http.Request, challengeId openapi_types.UUID)
+	FinishPasskeyRegistration(w http.ResponseWriter, r *http.Request, challengeId openapi_types.UUID, params FinishPasskeyRegistrationParams)
 
 	// (POST /auth/signup)
 	Signup(w http.ResponseWriter, r *http.Request)
@@ -341,8 +356,24 @@ func (siw *ServerInterfaceWrapper) FinishPasskeyRegistration(w http.ResponseWrit
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params FinishPasskeyRegistrationParams
+
+	// ------------- Optional query parameter "name" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "name", r.URL.Query(), &params.Name, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "name"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.FinishPasskeyRegistration(w, r, challengeId)
+		siw.Handler.FinishPasskeyRegistration(w, r, challengeId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -758,6 +789,20 @@ func (response BeginPasskeyLogin200JSONResponse) VisitBeginPasskeyLoginResponse(
 	return err
 }
 
+type BeginPasskeyLogin429JSONResponse struct{ ErrorJSONResponse }
+
+func (response BeginPasskeyLogin429JSONResponse) VisitBeginPasskeyLoginResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type FinishPasskeyLoginRequestObject struct {
 	ChallengeId openapi_types.UUID `json:"challengeId"`
 	Body        *FinishPasskeyLoginJSONRequestBody
@@ -781,7 +826,21 @@ func (response FinishPasskeyLogin200JSONResponse) VisitFinishPasskeyLoginRespons
 	return err
 }
 
-type FinishPasskeyLogin401JSONResponse struct{ ErrorJSONResponse }
+type FinishPasskeyLogin400JSONResponse struct{ ErrorJSONResponse }
+
+func (response FinishPasskeyLogin400JSONResponse) VisitFinishPasskeyLoginResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyLogin401JSONResponse Error
 
 func (response FinishPasskeyLogin401JSONResponse) VisitFinishPasskeyLoginResponse(w http.ResponseWriter) error {
 
@@ -795,7 +854,22 @@ func (response FinishPasskeyLogin401JSONResponse) VisitFinishPasskeyLoginRespons
 	return err
 }
 
+type FinishPasskeyLogin429JSONResponse Error
+
+func (response FinishPasskeyLogin429JSONResponse) VisitFinishPasskeyLoginResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type BeginPasskeyRegistrationRequestObject struct {
+	Body *BeginPasskeyRegistrationJSONRequestBody
 }
 
 type BeginPasskeyRegistrationResponseObject interface {
@@ -816,8 +890,51 @@ func (response BeginPasskeyRegistration200JSONResponse) VisitBeginPasskeyRegistr
 	return err
 }
 
+type BeginPasskeyRegistration401JSONResponse struct{ ErrorJSONResponse }
+
+func (response BeginPasskeyRegistration401JSONResponse) VisitBeginPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyRegistration423JSONResponse Error
+
+func (response BeginPasskeyRegistration423JSONResponse) VisitBeginPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(423)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyRegistration429JSONResponse Error
+
+func (response BeginPasskeyRegistration429JSONResponse) VisitBeginPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type FinishPasskeyRegistrationRequestObject struct {
 	ChallengeId openapi_types.UUID `json:"challengeId"`
+	Params      FinishPasskeyRegistrationParams
 	Body        *FinishPasskeyRegistrationJSONRequestBody
 }
 
@@ -849,6 +966,20 @@ func (response FinishPasskeyRegistration400JSONResponse) VisitFinishPasskeyRegis
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyRegistration422JSONResponse Error
+
+func (response FinishPasskeyRegistration422JSONResponse) VisitFinishPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -1433,6 +1564,16 @@ func (sh *strictHandler) FinishPasskeyLogin(w http.ResponseWriter, r *http.Reque
 func (sh *strictHandler) BeginPasskeyRegistration(w http.ResponseWriter, r *http.Request) {
 	var request BeginPasskeyRegistrationRequestObject
 
+	var body BeginPasskeyRegistrationJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if !errors.Is(err, io.EOF) {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+			return
+		}
+	} else {
+		request.Body = &body
+	}
+
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.BeginPasskeyRegistration(ctx, request.(BeginPasskeyRegistrationRequestObject))
 	}
@@ -1454,10 +1595,11 @@ func (sh *strictHandler) BeginPasskeyRegistration(w http.ResponseWriter, r *http
 }
 
 // FinishPasskeyRegistration operation middleware
-func (sh *strictHandler) FinishPasskeyRegistration(w http.ResponseWriter, r *http.Request, challengeId openapi_types.UUID) {
+func (sh *strictHandler) FinishPasskeyRegistration(w http.ResponseWriter, r *http.Request, challengeId openapi_types.UUID, params FinishPasskeyRegistrationParams) {
 	var request FinishPasskeyRegistrationRequestObject
 
 	request.ChallengeId = challengeId
+	request.Params = params
 
 	var body FinishPasskeyRegistrationJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -1770,30 +1912,31 @@ func (sh *strictHandler) ListAudit(w http.ResponseWriter, r *http.Request, organ
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

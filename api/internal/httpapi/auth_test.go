@@ -22,7 +22,7 @@ import (
 func newAuthServer(t *testing.T) (*httptest.Server, *mailer.Memory) {
 	pool := testdb.New(t)
 	m := &mailer.Memory{}
-	svc := auth.NewService(pool, m, auth.Options{Origin: "http://localhost:5173", SecretKey: []byte("0123456789abcdef0123456789abcdef")})
+	svc := auth.NewService(pool, m, auth.Options{RPID: "localhost", Origin: "http://localhost:5173", SecretKey: []byte("0123456789abcdef0123456789abcdef")})
 	srv := httptest.NewServer(httpapi.New(httpapi.Deps{Pool: pool, Auth: svc}))
 	t.Cleanup(srv.Close)
 	return srv, m

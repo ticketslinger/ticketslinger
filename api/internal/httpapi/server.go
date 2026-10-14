@@ -199,7 +199,7 @@ func (s *server) Login(ctx context.Context, req LoginRequestObject) (LoginRespon
 	case errors.Is(err, auth.ErrTOTPRequired):
 		return nil, &apiError{401, "totp_required", "Enter the 6-digit code from your authenticator app."}
 	case errors.Is(err, auth.ErrLocked):
-		return nil, &apiError{423, "locked", "Too many wrong passwords. Your account is paused for 15 minutes."}
+		return nil, locked()
 	case errors.Is(err, auth.ErrRateLimited):
 		return nil, tooManyAttempts()
 	case err != nil:
@@ -235,22 +235,102 @@ func (s *server) GetMe(ctx context.Context, _ GetMeRequestObject) (GetMeResponse
 	return GetMe200JSONResponse(me(u, sess)), nil
 }
 
-// Operations not built yet.
-
-func (s *server) BeginPasskeyLogin(context.Context, BeginPasskeyLoginRequestObject) (BeginPasskeyLoginResponseObject, error) {
-	return nil, errNotImplemented
+// passkeyError maps passkey failures; badCreds is the message for
+// ErrBadCredentials, which means a wrong password when adding a passkey and
+// an unknown or refused passkey when signing in.
+func passkeyError(err error, badCreds string) error {
+	switch {
+	case errors.Is(err, auth.ErrBadToken):
+		return &apiError{400, "challenge_expired", "That passkey prompt expired or was already used. Start again."}
+	case errors.Is(err, auth.ErrBadPasskey):
+		return &apiError{400, "invalid_passkey", "We couldn't verify that passkey. Try again, or use a different one."}
+	case errors.Is(err, auth.ErrInvalidName):
+		return &apiError{422, "invalid_name", "Give your passkey a name of 120 characters or fewer."}
+	case errors.Is(err, auth.ErrPasswordRequired):
+		return &apiError{401, "password_required", "Enter your password to add a passkey."}
+	case errors.Is(err, auth.ErrBadCredentials):
+		return &apiError{401, "bad_credentials", badCreds}
+	case errors.Is(err, auth.ErrLocked):
+		return locked()
+	case errors.Is(err, auth.ErrRateLimited):
+		return tooManyAttempts()
+	}
+	return err
 }
 
-func (s *server) FinishPasskeyLogin(context.Context, FinishPasskeyLoginRequestObject) (FinishPasskeyLoginResponseObject, error) {
-	return nil, errNotImplemented
+// toMap turns a WebAuthn options struct into the spec's free-form object.
+func toMap(v any) (map[string]any, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	return m, json.Unmarshal(b, &m)
 }
 
-func (s *server) BeginPasskeyRegistration(context.Context, BeginPasskeyRegistrationRequestObject) (BeginPasskeyRegistrationResponseObject, error) {
-	return nil, errNotImplemented
+func (s *server) BeginPasskeyRegistration(ctx context.Context, req BeginPasskeyRegistrationRequestObject) (BeginPasskeyRegistrationResponseObject, error) {
+	u, sess, ok := userFrom(ctx)
+	if !ok {
+		return nil, unauthorized()
+	}
+	password := ""
+	if req.Body != nil && req.Body.Password != nil {
+		password = *req.Body.Password
+	}
+	id, opts, err := s.Auth.BeginPasskeyRegistration(ctx, u.ID, sess.MFA, password)
+	if err != nil {
+		return nil, passkeyError(err, "That password doesn't match.")
+	}
+	m, err := toMap(opts)
+	if err != nil {
+		return nil, err
+	}
+	return BeginPasskeyRegistration200JSONResponse{ChallengeId: id, Options: m}, nil
 }
 
-func (s *server) FinishPasskeyRegistration(context.Context, FinishPasskeyRegistrationRequestObject) (FinishPasskeyRegistrationResponseObject, error) {
-	return nil, errNotImplemented
+func (s *server) FinishPasskeyRegistration(ctx context.Context, req FinishPasskeyRegistrationRequestObject) (FinishPasskeyRegistrationResponseObject, error) {
+	u, _, ok := userFrom(ctx)
+	if !ok {
+		return nil, unauthorized()
+	}
+	body, err := json.Marshal(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	name := ""
+	if req.Params.Name != nil {
+		name = *req.Params.Name
+	}
+	pk, err := s.Auth.FinishPasskeyRegistration(ctx, u.ID, req.ChallengeId, body, name)
+	if err != nil {
+		return nil, passkeyError(err, "That password doesn't match.")
+	}
+	return FinishPasskeyRegistration201JSONResponse{Id: pk.ID, Name: pk.Name, CreatedAt: pk.CreatedAt}, nil
+}
+
+func (s *server) BeginPasskeyLogin(ctx context.Context, _ BeginPasskeyLoginRequestObject) (BeginPasskeyLoginResponseObject, error) {
+	id, opts, err := s.Auth.BeginPasskeyLogin(ctx, clientFrom(ctx).ip)
+	if err != nil {
+		return nil, passkeyError(err, "")
+	}
+	m, err := toMap(opts)
+	if err != nil {
+		return nil, err
+	}
+	return BeginPasskeyLogin200JSONResponse{ChallengeId: id, Options: m}, nil
+}
+
+func (s *server) FinishPasskeyLogin(ctx context.Context, req FinishPasskeyLoginRequestObject) (FinishPasskeyLoginResponseObject, error) {
+	c := clientFrom(ctx)
+	body, err := json.Marshal(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	sess, u, err := s.Auth.FinishPasskeyLogin(ctx, req.ChallengeId, body, c.ip, c.ua)
+	if err != nil {
+		return nil, passkeyError(err, "We couldn't sign you in with that passkey. Try another, or use your password.")
+	}
+	return FinishPasskeyLogin200JSONResponse{SessionToken: sess.Token, User: me(u, sess)}, nil
 }
 
 func totpError(err error) error {
@@ -261,6 +341,8 @@ func totpError(err error) error {
 		return &apiError{400, "totp_not_started", "Start setting up your authenticator app first."}
 	case errors.Is(err, auth.ErrBadCredentials):
 		return &apiError{401, "bad_credentials", "That password doesn't match."}
+	case errors.Is(err, auth.ErrLocked):
+		return locked()
 	case errors.Is(err, auth.ErrBadCode):
 		return &apiError{400, "invalid_code", "That code didn't work. Check your authenticator app and try the newest one."}
 	case errors.Is(err, auth.ErrRateLimited):
@@ -291,6 +373,8 @@ func (s *server) ConfirmTotp(ctx context.Context, req ConfirmTotpRequestObject) 
 	}
 	return ConfirmTotp204Response{}, nil
 }
+
+// Operations not built yet.
 
 func (s *server) ListOrganizers(context.Context, ListOrganizersRequestObject) (ListOrganizersResponseObject, error) {
 	return nil, errNotImplemented
