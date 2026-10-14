@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,10 +29,16 @@ func TestHashesAreSalted(t *testing.T) {
 	}
 }
 
-func TestHashUsesPinnedParameters(t *testing.T) {
-	h, err := HashPassword("correct horse battery")
+func TestProductionParameters(t *testing.T) {
+	if productionCost != (argonParams{memory: 65536, time: 3, threads: 2}) {
+		t.Fatalf("production cost changed: %+v", productionCost)
+	}
+	h, err := hashPasswordAt(context.Background(), "correct horse battery", productionCost)
 	if err != nil || !strings.HasPrefix(h, "$argon2id$v=19$m=65536,t=3,p=2$") {
 		t.Fatalf("hash %q, err %v", h, err)
+	}
+	if ok, err := CheckPassword(h, "correct horse battery"); err != nil || !ok {
+		t.Fatalf("production hash must verify under the lowered default: %v %v", ok, err)
 	}
 }
 
