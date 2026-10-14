@@ -93,3 +93,60 @@ func TestCatalogHardening(t *testing.T) {
 		t.Fatalf("definer functions: %d %v", n, rows.Err())
 	}
 }
+
+// The storefront and system roles are the only exception to "tenant policies
+// call app_organizer()", every system policy is pinned to app_scope(), and
+// neither role can read identity, key or audit tables.
+func TestSaleRolesStayNarrow(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	owner := testdb.Owner(t, pool)
+	rows, err := owner.Query(ctx, `select c.relname || '.' || p.polname,
+			array(select case when r = 0 then 'PUBLIC' else r::regrole::text end from unnest(p.polroles) r),
+			coalesce(pg_get_expr(p.polqual, p.polrelid), '') || ' ' || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')
+		from pg_policy p join pg_class c on c.oid = p.polrelid
+		join pg_attribute a on a.attrelid = c.oid and a.attname = 'organizer_id' and not a.attisdropped
+		where c.relnamespace = 'public'::regnamespace order by 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exceptions := 0
+	for rows.Next() {
+		var name, expr string
+		var roles []string
+		if err := rows.Scan(&name, &roles, &expr); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(expr, "app_organizer()") {
+			continue
+		}
+		exceptions++
+		if len(roles) == 0 {
+			t.Errorf("%s skips app_organizer() and applies to no role list", name)
+		}
+		for _, r := range roles {
+			switch {
+			case r != "ts_public" && r != "ts_system":
+				t.Errorf("%s skips app_organizer() but applies to %s; only ts_public and ts_system may", name, r)
+			case r == "ts_system" && !strings.Contains(expr, "app_scope()"):
+				t.Errorf("%s is a ts_system policy that doesn't call app_scope(): %s", name, expr)
+			}
+		}
+	}
+	if rows.Err() != nil || exceptions == 0 {
+		t.Fatalf("policies outside app_organizer(): %d %v", exceptions, rows.Err())
+	}
+
+	// memberships stays readable: org_reads (00002) subqueries it with the
+	// caller's rights, and member_reads shows these roles no rows.
+	for _, role := range []string{"ts_public", "ts_system"} {
+		for _, table := range []string{"users", "sessions", "passkeys", "webauthn_challenges", "recovery_codes", "email_tokens", "api_keys", "audit_log"} {
+			var any bool
+			err := owner.QueryRow(ctx, `select has_any_column_privilege($1, $2, 'SELECT, INSERT, UPDATE, REFERENCES')
+				or has_table_privilege($1, $2, 'DELETE, TRUNCATE, TRIGGER')`, role, table).Scan(&any)
+			if err != nil || any {
+				t.Errorf("%s has rights on %s: %v %v", role, table, any, err)
+			}
+		}
+	}
+}
