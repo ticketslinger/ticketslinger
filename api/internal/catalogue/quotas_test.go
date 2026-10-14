@@ -2,6 +2,7 @@ package catalogue_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -117,16 +118,32 @@ func TestQuotaRejectsForeignTicketTypes(t *testing.T) {
 	if err := testdb.Owner(t, e.pool).QueryRow(ctx, `select count(*) from quota_ticket_types where ticket_type_id in ($1, $2)`, e.foreign.ID, other.ID).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("links to foreign ticket types: %d %v", n, err)
 	}
-	// The trigger refuses a cross-event link even when Go is bypassed (owner role, same org).
-	_, err = testdb.Owner(t, e.pool).Exec(ctx, `insert into quota_ticket_types(organizer_id, quota_id, ticket_type_id) values ($1, $2, $3)`, e.a, q.ID, other.ID)
-	var pg *pgconn.PgError
-	if !asPg(err, &pg) || pg.Code != "23514" {
-		t.Fatalf("trigger: %v", err)
+	// Same org, different event: the composite foreign keys refuse it even when
+	// Go is bypassed. Raw SQL as the app role, under RLS.
+	rawErr := func(sql string, args ...any) error {
+		return e.run(e.a, func(tx pgx.Tx) error { _, err := tx.Exec(ctx, sql, args...); return err })
 	}
-	// And a cross-tenant link dies on the composite foreign key.
-	_, err = testdb.Owner(t, e.pool).Exec(ctx, `insert into quota_ticket_types(organizer_id, quota_id, ticket_type_id) values ($1, $2, $3)`, e.a, q.ID, e.foreign.ID)
-	if err == nil {
+	err = rawErr(`insert into quota_ticket_types(organizer_id, event_id, quota_id, ticket_type_id) values ($1, $2, $3, $4)`, e.a, q.EventID, q.ID, other.ID)
+	var pg *pgconn.PgError
+	if !asPg(err, &pg) || pg.Code != "23503" {
+		t.Fatalf("cross-event link: %v", err)
+	}
+	// And a cross-tenant link dies on the organizer foreign key.
+	if err := rawErr(`insert into quota_ticket_types(organizer_id, event_id, quota_id, ticket_type_id) values ($1, $2, $3, $4)`, e.a, q.EventID, q.ID, e.foreign.ID); err == nil {
 		t.Fatal("cross-tenant link accepted")
+	}
+	// A parent can't move to another event while it has links.
+	var ev2 uuid.UUID
+	if err := testdb.Owner(t, e.pool).QueryRow(ctx, `select event_id from ticket_types where id = $1`, other.ID).Scan(&ev2); err != nil {
+		t.Fatal(err)
+	}
+	err = rawErr(`update quotas set event_id = $2 where id = $1`, q.ID, ev2)
+	if !asPg(err, &pg) || pg.Code != "23503" {
+		t.Fatalf("move quota: %v", err)
+	}
+	err = rawErr(`update ticket_types set event_id = $2 where id = $1`, e.general.ID, ev2)
+	if !asPg(err, &pg) || pg.Code != "23503" {
+		t.Fatalf("move ticket type: %v", err)
 	}
 }
 
@@ -321,5 +338,106 @@ func TestLiveEventKeepsEveryTicketTypeInAQuota(t *testing.T) {
 	}
 	if err := e.del(q2.ID); err != nil {
 		t.Fatalf("draft delete: %v", err)
+	}
+}
+
+func TestTicketTypeCreateJoinsQuotas(t *testing.T) {
+	e := newQEnv(t)
+	ctx := context.Background()
+	q, err := e.create(t, "Hall", 100, e.general.ID, e.vip.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(org uuid.UUID, name string, quotas ...uuid.UUID) (x catalogue.TicketType, err error) {
+		in := tt(name)
+		in.QuotaIDs = quotas
+		err = e.run(org, func(tx pgx.Tx) (z error) {
+			x, z = catalogue.CreateTicketType(ctx, tx, org, e.ev.ID, e.actor, in)
+			return
+		})
+		return
+	}
+	// A foreign quota is 422 whoever holds it: B's own, or none at all.
+	var bq catalogue.Quota
+	if err := e.run(e.b, func(tx pgx.Tx) error {
+		ev, err := catalogue.CreateEvent(ctx, tx, e.b, e.actor, in("b-gala"))
+		if err != nil {
+			return err
+		}
+		bq, err = catalogue.CreateQuota(ctx, tx, e.b, ev.ID, e.actor, catalogue.QuotaInput{Name: "B", Size: 1})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mk(e.a, "Early", bq.ID); !invalidCode(err, "unknown_quota") {
+		t.Fatalf("other tenant's quota: %v", err)
+	}
+	// Draft: optional, linked when given.
+	linked, err := mk(e.a, "Linked", q.ID, q.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mk(e.a, "Loose"); err != nil {
+		t.Fatalf("draft without quotas: %v", err)
+	}
+	var got catalogue.Quota
+	if err := e.run(e.a, func(tx pgx.Tx) (err error) { got, err = catalogue.GetQuota(ctx, tx, e.ev.ID, q.ID); return }); err != nil || len(got.TicketTypeIDs) != 3 {
+		t.Fatalf("linked: %v %+v (want %v among 3)", err, got.TicketTypeIDs, linked.ID)
+	}
+	// Another event's quota in the same org.
+	var other catalogue.Quota
+	if err := e.run(e.a, func(tx pgx.Tx) error {
+		ev2, err := catalogue.CreateEvent(ctx, tx, e.a, e.actor, in("second"))
+		if err != nil {
+			return err
+		}
+		other, err = catalogue.CreateQuota(ctx, tx, e.a, ev2.ID, e.actor, catalogue.QuotaInput{Name: "Elsewhere", Size: 1})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mk(e.a, "Early", other.ID); !invalidCode(err, "unknown_quota") {
+		t.Fatalf("other event's quota: %v", err)
+	}
+	// Live: quota_ids is mandatory. (Cover the two ticket types left bare first.)
+	all := []uuid.UUID{e.general.ID, e.vip.ID, linked.ID}
+	var loose catalogue.TicketType
+	if err := e.run(e.a, func(tx pgx.Tx) error {
+		ts, err := catalogue.ListTicketTypes(ctx, tx, e.ev.ID)
+		for _, x := range ts {
+			if x.Name == "Loose" {
+				loose = x
+			}
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	all = append(all, loose.ID)
+	if _, err := e.patch(q.ID, catalogue.QuotaPatch{TicketTypeIDs: &all}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.setStatus(t, "live"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mk(e.a, "Late"); !conflict(err, "live_needs_capacity") {
+		t.Fatalf("live without quota_ids: %v", err)
+	}
+	if _, err := mk(e.a, "Late", other.ID); !invalidCode(err, "unknown_quota") {
+		t.Fatalf("live with foreign quota: %v", err)
+	}
+	late, err := mk(e.a, "Late", q.ID)
+	if err != nil {
+		t.Fatalf("live with a quota: %v", err)
+	}
+	if err := e.run(e.a, func(tx pgx.Tx) (err error) { got, err = catalogue.GetQuota(ctx, tx, e.ev.ID, q.ID); return }); err != nil || !slices.Contains(got.TicketTypeIDs, late.ID) {
+		t.Fatalf("late not linked: %v %+v", err, got.TicketTypeIDs)
+	}
+	// The audit payload carries quota_ids.
+	var j string
+	if err := e.run(e.a, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `select after::text from audit_log where action = 'ticket_type.created' and entity_id = $1`, late.ID).Scan(&j)
+	}); err != nil || !strings.Contains(j, `"quota_ids"`) || !strings.Contains(j, q.ID.String()) {
+		t.Fatalf("audit: %v %s", err, j)
 	}
 }

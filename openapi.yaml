@@ -247,7 +247,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
     post:
       operationId: createTicketType
-      description: Owners and admins, or a write API key. It goes to the end of the list.
+      description: Owners and admins, or a write API key. It goes to the end of the list. price_cents is required (422 missing_field).
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
@@ -256,6 +256,7 @@ paths:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/TicketType" } } } }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/ticket-types/{ticketType}:
     get:
@@ -305,7 +306,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
     post:
       operationId: createQuota
-      description: Owners and admins, or a write API key. ticket_type_ids may be empty; every id must belong to this event (422 unknown_ticket_type).
+      description: Owners and admins, or a write API key. size is required (422 missing_field). ticket_type_ids may be empty; every id must belong to this event (422 unknown_ticket_type).
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
@@ -519,7 +520,7 @@ components:
     CreateQuota:
       allOf:
         - { $ref: "#/components/schemas/QuotaFields" }
-        - { type: object, required: [name, size] }
+        - { type: object, required: [name, size], properties: { size: { type: integer, minimum: 0, maximum: 1000000, x-go-type: "*int" } } }
     Quota:
       type: object
       required: [id, event_id, name, size, ticket_type_ids, created_at, updated_at]
@@ -547,7 +548,7 @@ components:
     CreateTicketType:
       allOf:
         - { $ref: "#/components/schemas/TicketTypeFields" }
-        - { type: object, required: [name, price_cents] }
+        - { type: object, required: [name, price_cents], properties: { price_cents: { type: integer, format: int64, minimum: 0, maximum: 10000000, x-go-type: "*int64" }, quota_ids: { type: array, items: { type: string, format: uuid }, description: "Quotas of this event to join. Optional on a draft; a live event needs at least one (409 live_needs_capacity). An id from another event is 422 unknown_quota." } } }
     TicketType:
       type: object
       required: [id, event_id, name, description, price_cents, tax_rate_bp, prices_include_tax, sales_start, sales_end, min_per_order, max_per_order, hidden, position, created_at, updated_at]

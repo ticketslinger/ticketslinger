@@ -63,7 +63,7 @@ func validateQuota(name string, size int) error {
 }
 
 // quotaDBError is dbError for quotas: 23514 is a failed CHECK or the
-// same-event trigger.
+// same-event foreign keys.
 func quotaDBError(err error) error {
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) && pg.Code == "23514" {
@@ -72,12 +72,17 @@ func quotaDBError(err error) error {
 	return err
 }
 
-// linkSet sorts and deduplicates ids, then checks inside the locked
-// transaction that they are all ticket types of this event.
-func linkSet(ctx context.Context, tx pgx.Tx, event uuid.UUID, ids []uuid.UUID) ([]uuid.UUID, error) {
+// dedupe sorts ids and drops repeats.
+func dedupe(ids []uuid.UUID) []uuid.UUID {
 	ids = slices.Clone(ids)
 	slices.SortFunc(ids, func(a, b uuid.UUID) int { return slices.Compare(a[:], b[:]) })
-	ids = slices.Compact(ids)
+	return slices.Compact(ids)
+}
+
+// linkSet dedupes ids, then checks inside the locked transaction that they
+// are all ticket types of this event.
+func linkSet(ctx context.Context, tx pgx.Tx, event uuid.UUID, ids []uuid.UUID) ([]uuid.UUID, error) {
+	ids = dedupe(ids)
 	var n int
 	if err := tx.QueryRow(ctx, `select count(*) from ticket_types where event_id = $1 and id = any($2)`, event, ids).Scan(&n); err != nil {
 		return nil, err
@@ -88,12 +93,19 @@ func linkSet(ctx context.Context, tx pgx.Tx, event uuid.UUID, ids []uuid.UUID) (
 	return ids, nil
 }
 
-func setLinks(ctx context.Context, tx pgx.Tx, org, quota uuid.UUID, ids []uuid.UUID) error {
+// link writes every quota-by-ticket-type pair; the ids are already checked.
+func link(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, quotas, tts []uuid.UUID) error {
+	_, err := tx.Exec(ctx, `insert into quota_ticket_types(organizer_id, event_id, quota_id, ticket_type_id)
+		select $1, $2, q, t from unnest($3::uuid[]) q, unnest($4::uuid[]) t`, org, event, quotas, tts)
+	return quotaDBError(err)
+}
+
+// setLinks replaces a quota's ticket types.
+func setLinks(ctx context.Context, tx pgx.Tx, org, event, quota uuid.UUID, ids []uuid.UUID) error {
 	if _, err := tx.Exec(ctx, `delete from quota_ticket_types where quota_id = $1`, quota); err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, `insert into quota_ticket_types(organizer_id, quota_id, ticket_type_id) select $1, $2, unnest($3::uuid[])`, org, quota, ids)
-	return quotaDBError(err)
+	return link(ctx, tx, org, event, []uuid.UUID{quota}, ids)
 }
 
 // liveNeedsCapacity refuses to leave a live event with a ticket type in no
@@ -131,7 +143,7 @@ func CreateQuota(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor aud
 		org, event, in.Name, in.Size).Scan(&id); err != nil {
 		return Quota{}, quotaDBError(err)
 	}
-	if err := setLinks(ctx, tx, org, id, ids); err != nil {
+	if err := setLinks(ctx, tx, org, event, id, ids); err != nil {
 		return Quota{}, err
 	}
 	q, err := getQuota(ctx, tx, event, id)
@@ -195,7 +207,7 @@ func UpdateQuota(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 		return Quota{}, quotaDBError(err)
 	}
 	if !slices.Equal(q.TicketTypeIDs, before.TicketTypeIDs) {
-		if err := setLinks(ctx, tx, org, id, q.TicketTypeIDs); err != nil {
+		if err := setLinks(ctx, tx, org, event, id, q.TicketTypeIDs); err != nil {
 			return Quota{}, err
 		}
 		if err := liveNeedsCapacity(ctx, tx, ev); err != nil {

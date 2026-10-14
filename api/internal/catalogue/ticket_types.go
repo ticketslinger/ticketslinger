@@ -44,6 +44,9 @@ type TicketTypeInput struct {
 	MinPerOrder       *int
 	MaxPerOrder       *int
 	Hidden            bool
+	// QuotaIDs are the quotas of this event to join. A live event needs at
+	// least one; on a draft they are optional.
+	QuotaIDs []uuid.UUID
 }
 
 // TicketTypePatch changes only the fields that are set. For the four
@@ -127,10 +130,22 @@ func CreateTicketType(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, acto
 	if err := validateTT(&t); err != nil {
 		return TicketType{}, err
 	}
-	if _, err := lockEvent(ctx, tx, event); err != nil {
+	ev, err := lockEvent(ctx, tx, event)
+	if err != nil {
 		return TicketType{}, err
 	}
-	t, err := scanTT(tx.QueryRow(ctx, `insert into ticket_types(organizer_id, event_id, name, description, price_cents, tax_rate_bp, prices_include_tax,
+	quotas := dedupe(in.QuotaIDs)
+	if ev.Status == "live" && len(quotas) == 0 {
+		return TicketType{}, ErrConflict{"live_needs_capacity", "Every ticket on a live event needs a capacity. Move the event back to draft first, or pass quota_ids."}
+	}
+	var n int
+	if err := tx.QueryRow(ctx, `select count(*) from quotas where event_id = $1 and id = any($2)`, event, quotas).Scan(&n); err != nil {
+		return TicketType{}, err
+	}
+	if n != len(quotas) {
+		return TicketType{}, invalid("unknown_quota", "One of those quotas isn't part of this event.")
+	}
+	t, err = scanTT(tx.QueryRow(ctx, `insert into ticket_types(organizer_id, event_id, name, description, price_cents, tax_rate_bp, prices_include_tax,
 			sales_start, sales_end, min_per_order, max_per_order, hidden, position)
 		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
 			(select coalesce(max(position), 0) + 1 from ticket_types where event_id = $2)) returning `+ttCols,
@@ -138,7 +153,14 @@ func CreateTicketType(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, acto
 	if err != nil {
 		return TicketType{}, ttDBError(err)
 	}
-	return t, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "ticket_type.created", EntityType: "ticket_type", EntityID: t.ID, After: t})
+	if err := link(ctx, tx, org, event, quotas, []uuid.UUID{t.ID}); err != nil {
+		return TicketType{}, err
+	}
+	after := struct {
+		TicketType
+		QuotaIDs []uuid.UUID `json:"quota_ids"`
+	}{t, quotas}
+	return t, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "ticket_type.created", EntityType: "ticket_type", EntityID: t.ID, After: after})
 }
 
 func GetTicketType(ctx context.Context, tx pgx.Tx, event, id uuid.UUID) (TicketType, error) {

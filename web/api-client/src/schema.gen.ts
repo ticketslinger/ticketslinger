@@ -347,7 +347,7 @@ export interface paths {
         /** @description Any member, or any API key. In position order. */
         get: operations["listTicketTypes"];
         put?: never;
-        /** @description Owners and admins, or a write API key. It goes to the end of the list. */
+        /** @description Owners and admins, or a write API key. It goes to the end of the list. price_cents is required (422 missing_field). */
         post: operations["createTicketType"];
         delete?: never;
         options?: never;
@@ -384,7 +384,7 @@ export interface paths {
         /** @description Any member, or any API key. Oldest first. */
         get: operations["listQuotas"];
         put?: never;
-        /** @description Owners and admins, or a write API key. ticket_type_ids may be empty; every id must belong to this event (422 unknown_ticket_type). */
+        /** @description Owners and admins, or a write API key. size is required (422 missing_field). ticket_type_ids may be empty; every id must belong to this event (422 unknown_ticket_type). */
         post: operations["createQuota"];
         delete?: never;
         options?: never;
@@ -602,7 +602,9 @@ export interface components {
             /** @description The ticket types that draw on this capacity. On a patch the list replaces the current one; leave it out to keep it. */
             ticket_type_ids?: string[];
         };
-        CreateQuota: components["schemas"]["QuotaFields"] & Record<string, never>;
+        CreateQuota: components["schemas"]["QuotaFields"] & {
+            size: number;
+        };
         Quota: {
             /** Format: uuid */
             id: string;
@@ -641,7 +643,12 @@ export interface components {
             max_per_order?: number;
             hidden?: boolean;
         };
-        CreateTicketType: components["schemas"]["TicketTypeFields"] & Record<string, never>;
+        CreateTicketType: components["schemas"]["TicketTypeFields"] & {
+            /** Format: int64 */
+            price_cents: number;
+            /** @description Quotas of this event to join. Optional on a draft; a live event needs at least one (409 live_needs_capacity). An id from another event is 422 unknown_quota. */
+            quota_ids?: string[];
+        };
         TicketType: {
             /** Format: uuid */
             id: string;
@@ -1379,6 +1386,7 @@ export interface operations {
             };
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };

@@ -260,7 +260,13 @@ func TestEventCannotGoLiveIncomplete(t *testing.T) {
 	}
 	var second catalogue.TicketType
 	if err := as(t, pool, user, a, func(tx pgx.Tx) (err error) {
-		second, err = catalogue.CreateTicketType(ctx, tx, a, ev.ID, actor, tt("VIP"))
+		var hall catalogue.Quota
+		if hall, err = catalogue.CreateQuota(ctx, tx, a, ev.ID, actor, catalogue.QuotaInput{Name: "Second", Size: 5}); err != nil {
+			return
+		}
+		vip := tt("VIP")
+		vip.QuotaIDs = []uuid.UUID{hall.ID}
+		second, err = catalogue.CreateTicketType(ctx, tx, a, ev.ID, actor, vip)
 		return
 	}); err != nil {
 		t.Fatal(err)
