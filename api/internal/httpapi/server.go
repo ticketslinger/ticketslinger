@@ -639,6 +639,9 @@ var (
 	slugRE         = regexp.MustCompile(`^[a-z0-9](-?[a-z0-9])*$`)
 	errInvalidName = invalidField("invalid_name", "name", "Give your organizer a name of up to 120 characters.")
 	errInvalidSlug = invalidField("invalid_slug", "slug", "Use 3 to 40 lowercase letters, numbers and single hyphens.")
+	// The storefront's own first URL segments (migration 00024 is the backstop).
+	reservedSlugs   = []string{"checkout", "orders", "assets", "api", "healthz"}
+	errReservedSlug = invalidField("invalid_slug", "slug", "That web address is taken by the ticket site itself. Pick another.")
 )
 
 func toOrganizer(o organizers.Organizer) Organizer {
@@ -675,6 +678,9 @@ func (s *server) CreateOrganizer(ctx context.Context, req CreateOrganizerRequest
 	}
 	if !slugRE.MatchString(req.Body.Slug) || len(req.Body.Slug) < 3 || len(req.Body.Slug) > 40 {
 		return nil, errInvalidSlug
+	}
+	if slices.Contains(reservedSlugs, req.Body.Slug) {
+		return nil, errReservedSlug
 	}
 	o, err := s.Organizers.Create(ctx, u.ID, name, req.Body.Slug)
 	if errors.Is(err, organizers.ErrInvalid) {

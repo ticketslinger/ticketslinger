@@ -1,0 +1,176 @@
+/* Mobile first: one column, 16px gutters, 44px tap targets. */
+:root {
+  --text: #111;
+  --muted: #444;
+  --bg: #fff;
+  --line: #ccc;
+  /* Form-control borders: at least 3:1 against --bg (WCAG 1.4.11). #767676 on #fff is 4.5:1. */
+  --control: #767676;
+  --accent: #0b4fd6;
+  --accent-text: #fff;
+  --alert: #a40e0e;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #f2f2f2;
+    --muted: #c8c8c8;
+    --bg: #121212;
+    --line: #555;
+    /* #8a8a8a on #121212 is 5.4:1. */
+    --control: #8a8a8a;
+    --accent: #7ea6ff;
+    --accent-text: #000;
+    --alert: #ff8a80;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+main {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+h1 {
+  font-size: 1.75rem;
+  line-height: 1.2;
+  margin: 0 0 8px;
+}
+
+h2 {
+  font-size: 1.125rem;
+  margin: 0;
+}
+
+p {
+  margin: 0 0 12px;
+}
+
+.organizer,
+.when,
+.where,
+.status,
+.fee {
+  color: var(--muted);
+}
+
+.address {
+  display: block;
+}
+
+.description,
+.ticket-description {
+  white-space: pre-line;
+}
+
+.tickets {
+  list-style: none;
+  margin: 24px 0 16px;
+  padding: 0;
+}
+
+.ticket {
+  border-top: 1px solid var(--line);
+  padding: 16px 0;
+}
+
+.ticket-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.price {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.picker,
+.code-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+label {
+  font-weight: 600;
+}
+
+select,
+input,
+button {
+  min-height: 44px;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--control);
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+select {
+  min-width: 5rem;
+}
+
+input {
+  flex: 1;
+  min-width: 0;
+}
+
+button {
+  cursor: pointer;
+}
+
+.buy button {
+  width: 100%;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.cf-turnstile {
+  margin-bottom: 12px;
+}
+
+.code {
+  margin-top: 32px;
+}
+
+.code label {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.notice {
+  color: var(--alert);
+  font-weight: 600;
+  margin: 8px 0 12px;
+  flex-basis: 100%;
+}
+
+.ended {
+  margin-top: 24px;
+  font-weight: 600;
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
