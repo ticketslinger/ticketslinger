@@ -4,6 +4,7 @@ import { formatWhen } from "../time";
 import { ErrorText, focusOnMount, Link, navigate, useAction, useLoad } from "../ui";
 import { type Event, EventForm } from "./EventForm";
 import { canEdit, type Org } from "./Organizer";
+import { Tickets } from "./Tickets";
 
 const STATUS: Record<Event["status"], string> = {
   draft: "Draft",
@@ -89,10 +90,13 @@ export function NewEvent({ org }: { org: Org }) {
   );
 }
 
-// Tasks for tickets, promo codes and questions add their tabs here.
-const TABS = [{ path: "", label: "Details" }];
+// Promo codes and questions add their tabs here, with a route each in main.tsx.
+const TABS = [
+  { path: "", label: "Details" },
+  { path: "/tickets", label: "Tickets" },
+];
 
-export function EventPage({ org, id }: { org: Org; id: string }) {
+export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: string }) {
   const path = { organizer: org.slug, event: id };
   const {
     data: event,
@@ -175,15 +179,16 @@ export function EventPage({ org, id }: { org: Org; id: string }) {
               <Link
                 key={t.label}
                 href={`/o/${org.slug}/events/${event.id}${t.path}`}
-                aria-current="page"
+                aria-current={t.path === tab ? "page" : undefined}
               >
                 {t.label}
               </Link>
             ))}
           </nav>
-          <EventForm org={org} event={event} onSaved={setEvent} />
+          {tab === "" && <EventForm org={org} event={event} onSaved={setEvent} />}
+          {tab === "/tickets" && <Tickets org={org} event={event} />}
 
-          {canEdit(org) && event.status === "draft" && (
+          {tab === "" && canEdit(org) && event.status === "draft" && (
             <section className="danger">
               {confirming ? (
                 <>

@@ -113,6 +113,9 @@ export function useUnsavedChanges(dirty: boolean) {
   );
 }
 
+/** Runs `go`, after the in-page "unsaved changes" question if a form has some. */
+export const askToLeave = (go: () => void) => (blocker ? blocker(go) : go());
+
 /** A ref that focuses its element when it appears, for confirm steps that replace a button. */
 export const focusOnMount = (el: HTMLElement | null) => el?.focus();
 
@@ -164,24 +167,33 @@ export function useLoad<T>(load: () => Promise<T>) {
 export function useAction() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // The API's error code for the last failure, so a form can point at the field it names.
+  const [code, setCode] = useState("");
   async function run(fn: () => Promise<void>) {
     setBusy(true);
     setError("");
+    setCode("");
     try {
       await fn();
     } catch (e) {
-      setError(asFailure(e).message);
+      const f = asFailure(e);
+      setError(f.message);
+      setCode(f.code);
     } finally {
       setBusy(false);
     }
   }
-  return { busy, error, setError, run };
+  const clear = () => {
+    setError("");
+    setCode("");
+  };
+  return { busy, error, code, setError, clear, run };
 }
 
 /** Errors live in an always-present alert region so screen readers announce them. */
-export function ErrorText({ children }: { children: ReactNode }) {
+export function ErrorText({ children, id }: { children: ReactNode; id?: string }) {
   return (
-    <p className="error" role="alert">
+    <p className="error" role="alert" id={id}>
       {children}
     </p>
   );
