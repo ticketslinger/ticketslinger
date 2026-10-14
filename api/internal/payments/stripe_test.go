@@ -275,16 +275,16 @@ func TestNoAnswerIsUnavailable(t *testing.T) {
 	}
 }
 
-// A platform reading an account it's no longer connected to is refused with
-// 403, or account_invalid: that's "no access", told apart by status and
-// code only.
+// Only account_invalid means "no access to the account". A bare 403 may be
+// a restricted key lacking Connect permissions, so it stays a plain refusal.
 func TestNoAccessIsItsOwnRefusal(t *testing.T) {
 	for _, tc := range []struct {
 		status   int
 		body     string
 		noAccess bool
 	}{
-		{403, `{"error":{"type":"invalid_request_error","message":"no access"}}`, true},
+		{403, `{"error":{"type":"invalid_request_error","message":"no access"}}`, false}, // a restricted key without Connect read
+		{403, `{"error":{"type":"invalid_request_error","code":"account_invalid","message":"x"}}`, true},
 		{400, `{"error":{"type":"invalid_request_error","code":"account_invalid","message":"x"}}`, true},
 		{404, `{"error":{"type":"invalid_request_error","code":"resource_missing","message":"does not have access to account"}}`, false},
 		{500, `{"error":{"type":"api_error","code":"account_invalid","message":"x"}}`, false},
@@ -292,7 +292,7 @@ func TestNoAccessIsItsOwnRefusal(t *testing.T) {
 		s, rec := newStripe(t)
 		rec.status, rec.fail = tc.status, tc.body
 		_, err := s.Account(context.Background(), "acct_test1")
-		if errors.Is(err, plugin.ErrNoAccess) != tc.noAccess {
+		if errors.Is(err, plugin.ErrNoAccess) != tc.noAccess || tc.status < 500 && !errors.Is(err, plugin.ErrRefused) {
 			t.Errorf("%d %s: no access %v, want %v", tc.status, tc.body, errors.Is(err, plugin.ErrNoAccess), tc.noAccess)
 		}
 	}

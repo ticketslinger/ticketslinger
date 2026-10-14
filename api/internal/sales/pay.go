@@ -182,11 +182,15 @@ func (s *Service) paymentsReady(ctx context.Context, tx pgx.Tx, org uuid.UUID) (
 	var account *string
 	var enabled bool
 	// A disconnected organizer keeps the old id for its past payments.
-	// FOR SHARE: a disconnect (FOR NO KEY UPDATE) waits for this sale to
-	// commit and then sees its checkout paying, or this waits and sees the
-	// disconnect. Disconnect locks nothing else, so there's no cycle.
+	// An unlocked read on purpose: connect and disconnect hold the organizer
+	// row across Stripe calls, and a sale (holding quota locks) must never
+	// wait on Stripe. The race this leaves is accepted: a Pay that read
+	// "ready" just before a disconnect commits makes its intent anyway. On a
+	// linked account Stripe refuses it (our access is gone); on a created
+	// one at most that one sale lands in the organizer's own account, and
+	// its webhook still finds the order because the account id stays.
 	if err := tx.QueryRow(ctx, `select stripe_account_id, stripe_charges_enabled and stripe_disconnected_at is null
-		from organizers where id = $1 for share`, org).Scan(&account, &enabled); err != nil {
+		from organizers where id = $1`, org).Scan(&account, &enabled); err != nil {
 		return "", err
 	}
 	if account == nil || !enabled {

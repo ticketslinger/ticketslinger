@@ -52,9 +52,9 @@ func fail(op string, err error) error {
 		}
 		st := se.HTTPStatusCode
 		pe.Refused = st >= 400 && st < 500 && st != http.StatusConflict && st != http.StatusTooManyRequests
-		// A platform reading an account it isn't connected to gets 403, or
-		// account_invalid; never matched on Stripe's message text.
-		pe.NoAccess = pe.Refused && (st == http.StatusForbidden || se.Code == stripe.ErrorCodeAccountInvalid)
+		// account_invalid only: a bare 403 can be a restricted key without
+		// Connect permissions, not a lost account. Never the message text.
+		pe.NoAccess = pe.Refused && se.Code == stripe.ErrorCodeAccountInvalid
 		return pe
 	}
 	// No answer: say roughly why, and nothing else (a URL can carry ids).

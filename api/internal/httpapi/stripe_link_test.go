@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stripe/stripe-go/v87"
 
@@ -332,9 +333,21 @@ func TestDisconnectCreatedAccountIsLocalOnly(t *testing.T) {
 	if res := s.do(s.owner, "POST", paymentsURL+"/disconnect", ""); res.StatusCode != 409 || s.errorCode(res) != "not_connected" {
 		t.Fatalf("second disconnect: %d %q", res.StatusCode, s.errorCode(res))
 	}
-	// Create again: the same account, switched back on, no new one made.
+	// Create again: the same account, switched back on, no new one made,
+	// and live again from now, so an older deauthorize can't switch it off.
+	var first time.Time
+	if err := testdb.Owner(t, s.pool).QueryRow(context.Background(), `select stripe_connected_at from organizers where slug = 'acme'`).Scan(&first); err != nil {
+		t.Fatal(err)
+	}
 	before := fake.Accounts()
 	s.must(s.do(s.owner, "POST", paymentsURL+"/connect", ""), 200)
+	var again time.Time
+	if err := testdb.Owner(t, s.pool).QueryRow(context.Background(), `select stripe_connected_at from organizers where slug = 'acme'`).Scan(&again); err != nil {
+		t.Fatal(err)
+	}
+	if !again.After(first) {
+		t.Fatalf("stripe_connected_at %v after reconnecting, was %v: want it to move forward", again, first)
+	}
 	if st := s.must(s.do(s.owner, "POST", paymentsURL+"/refresh", ""), 200); st["connected"] != true || st["charges_enabled"] != true || st["disconnected"] != false {
 		t.Fatalf("reconnect: %v", st)
 	}

@@ -692,3 +692,21 @@ func TestStaleDeauthorizeLeavesANewerLinkLive(t *testing.T) {
 		t.Fatal("a deauthorize from after the re-link didn't disconnect")
 	}
 }
+
+// One account can sit on a live organizer and on others that disconnected
+// it; its webhooks go to the live one.
+func TestWebhooksFindTheLiveOrganizer(t *testing.T) {
+	s, _ := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	beta := f.organizer(t, "beta")
+	f.exec(t, `update organizers set stripe_account_id = 'acct_fake1', stripe_disconnected_at = now() where id = $1`, beta)
+	raw, _ := json.Marshal(map[string]any{"id": "acct_fake1", "object": "account", "charges_enabled": false, "details_submitted": true})
+	f.must(t, s.HandleStripeEvent(ctx, stripe.Event{ID: "evt_off", Type: stripe.EventTypeAccountUpdated, Account: "acct_fake1", Data: &stripe.EventData{Raw: raw}}))
+	var acme, betaOn bool
+	f.must(t, f.owner.QueryRow(ctx, `select (select stripe_charges_enabled from organizers where id = $1), (select stripe_charges_enabled from organizers where id = $2)`,
+		f.org, beta).Scan(&acme, &betaOn))
+	if acme || !betaOn {
+		t.Fatalf("account.updated went to the wrong organizer: acme charges %v, beta charges %v", acme, betaOn)
+	}
+}

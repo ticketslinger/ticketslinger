@@ -54,12 +54,14 @@ $$;
 REVOKE ALL ON FUNCTION purge_expired_link_states(int) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION purge_expired_link_states(int) TO ts_app;
 
--- The organizer the account is live for, else the one that disconnected it
--- most recently, so a just-disconnected account's late webhooks still land.
+-- The organizer the account is live for (NULL disconnected_at sorts first),
+-- else the one that disconnected it most recently, so a just-disconnected
+-- account's late webhooks still land. The live index allows one live row
+-- beside any number of disconnected ones.
 CREATE OR REPLACE FUNCTION organizer_for_stripe_account(p_account text) RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp AS
   $$ SELECT id FROM public.organizers WHERE stripe_account_id = p_account
-      ORDER BY stripe_disconnected_at IS NOT NULL, stripe_disconnected_at DESC LIMIT 1 $$;
+      ORDER BY stripe_disconnected_at DESC NULLS FIRST LIMIT 1 $$;
 
 -- +goose Down
 CREATE OR REPLACE FUNCTION organizer_for_stripe_account(p_account text) RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER

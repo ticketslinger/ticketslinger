@@ -507,10 +507,10 @@ func TestGetCheckoutCarriesWhatThePageAsks(t *testing.T) {
 	}
 }
 
-// Pay reads the organizer FOR SHARE: a disconnect holding the row makes it
-// wait, and once that commits Pay sees it and refuses.
-func TestPayWaitsForADisconnect(t *testing.T) {
-	s, f, rec := payService(t, seedOpts{quota: 10, price: 2500})
+// Connect and disconnect hold the organizer row across Stripe calls; a sale
+// must never wait on that. Pay reads the row without a lock.
+func TestPayDoesNotWaitOnTheOrganizerRow(t *testing.T) {
+	s, f, _ := payService(t, seedOpts{quota: 10, price: 2500})
 	ctx := context.Background()
 	c := f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
 	hold, err := f.owner.Begin(ctx)
@@ -518,25 +518,14 @@ func TestPayWaitsForADisconnect(t *testing.T) {
 	defer func() { _ = hold.Rollback(ctx) }()
 	_, err = hold.Exec(ctx, `select 1 from organizers where id = $1 for no key update`, f.org)
 	f.must(t, err)
-	done := make(chan error, 1)
-	go func() {
-		_, err := s.Pay(ctx, c.Token, sales.Details{Email: "buyer@example.com"})
-		done <- err
-	}()
-	for waiting, start := 0, time.Now(); waiting == 0; {
-		f.must(t, f.owner.QueryRow(ctx, `select count(*) from pg_locks where not granted and locktype = 'transactionid'`).Scan(&waiting))
-		if time.Since(start) > 10*time.Second {
-			t.Fatal("Pay never waited on the organizer row")
-		}
-		time.Sleep(10 * time.Millisecond)
+	short, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	ps, err := s.Pay(short, c.Token, sales.Details{Email: "buyer@example.com"})
+	if err != nil || ps.ClientSecret == "" {
+		t.Fatalf("pay while the organizer row is held: %+v %v", ps, err)
 	}
-	_, err = hold.Exec(ctx, `update organizers set stripe_disconnected_at = now(), stripe_charges_enabled = false where id = $1`, f.org)
-	f.must(t, err)
-	f.must(t, hold.Commit(ctx))
-	if err := <-done; conflictCode(err) != "payments_not_ready" {
-		t.Fatalf("pay after a concurrent disconnect: %v, want payments_not_ready", err)
-	}
-	if len(rec.calls()) != 0 {
-		t.Fatal("a payment intent was made after the disconnect")
+	c2, err := s.CreateCheckout(short, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
+	if err != nil || c2.Token == "" {
+		t.Fatalf("checkout while the organizer row is held: %v", err)
 	}
 }
