@@ -28,3 +28,21 @@ func TestLoadRejectsBadTrustedProxy(t *testing.T) {
 		t.Fatal("expected error for an invalid CIDR")
 	}
 }
+
+func TestLoadSecretKey(t *testing.T) {
+	t.Setenv("TS_DATABASE_URL", "postgres://x")
+	t.Setenv("TS_SECRET_KEY", "")
+	if c, err := Load(); err != nil || c.SecretKey != nil {
+		t.Fatalf("unset key: %v %v", c.SecretKey, err)
+	}
+	t.Setenv("TS_SECRET_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	if c, err := Load(); err != nil || len(c.SecretKey) != 32 {
+		t.Fatalf("good key: %v", err)
+	}
+	for _, bad := range []string{"not base64!", "c2hvcnQ="} {
+		t.Setenv("TS_SECRET_KEY", bad)
+		if _, err := Load(); err == nil {
+			t.Fatalf("expected error for %q", bad)
+		}
+	}
+}

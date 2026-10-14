@@ -1,8 +1,11 @@
 package httpapi_test
 
 import (
+	"time"
+
 	"context"
 	"encoding/json"
+	"github.com/pquerna/otp/totp"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -19,7 +22,7 @@ import (
 func newAuthServer(t *testing.T) (*httptest.Server, *mailer.Memory) {
 	pool := testdb.New(t)
 	m := &mailer.Memory{}
-	svc := auth.NewService(pool, m, auth.Options{Origin: "http://localhost:5173"})
+	svc := auth.NewService(pool, m, auth.Options{Origin: "http://localhost:5173", SecretKey: []byte("0123456789abcdef0123456789abcdef")})
 	srv := httptest.NewServer(httpapi.New(httpapi.Deps{Pool: pool, Auth: svc}))
 	t.Cleanup(srv.Close)
 	return srv, m
@@ -139,7 +142,7 @@ func TestOversizedBodyIs400(t *testing.T) {
 
 func TestRateLimitAndSessionIPUseRealClientIP(t *testing.T) {
 	pool := testdb.New(t)
-	svc := auth.NewService(pool, &mailer.Memory{}, auth.Options{Origin: "http://localhost:5173"})
+	svc := auth.NewService(pool, &mailer.Memory{}, auth.Options{Origin: "http://localhost:5173", SecretKey: []byte("0123456789abcdef0123456789abcdef")})
 	cfg := config.Config{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.MustParsePrefix("::1/128")}}
 	srv := httptest.NewServer(httpapi.New(httpapi.Deps{Pool: pool, Auth: svc, Config: cfg}))
 	defer srv.Close()
@@ -161,5 +164,28 @@ func TestRateLimitAndSessionIPUseRealClientIP(t *testing.T) {
 	var ip string
 	if err := pool.QueryRow(context.Background(), `SELECT host(ip) FROM sessions`).Scan(&ip); err != nil || ip != "203.0.113.2" {
 		t.Fatalf("sessions.ip = %q, %v", ip, err)
+	}
+}
+
+func TestTOTPEndpoints(t *testing.T) {
+	srv, _ := newAuthServer(t)
+	_, body := do(t, "POST", srv.URL+"/v1/auth/signup", "", `{"email":"a@example.com","password":"a long passphrase","name":"A"}`)
+	tok := body["session_token"].(string)
+	if st, _ := do(t, "POST", srv.URL+"/v1/auth/totp", "", ""); st != 401 {
+		t.Fatalf("unauthenticated start: %d", st)
+	}
+	st, setup := do(t, "POST", srv.URL+"/v1/auth/totp", tok, "")
+	if st != 200 || setup["secret"] == "" || setup["otpauth_url"] == "" {
+		t.Fatalf("start: %d %v", st, setup)
+	}
+	if st, _ := do(t, "POST", srv.URL+"/v1/auth/totp/confirm", tok, `{"code":"000000"}`); st != 400 {
+		t.Fatalf("wrong code: %d", st)
+	}
+	code, _ := totp.GenerateCode(setup["secret"].(string), time.Now())
+	if st, _ := do(t, "POST", srv.URL+"/v1/auth/totp/confirm", tok, `{"code":"`+code+`"}`); st != 204 {
+		t.Fatalf("confirm: %d", st)
+	}
+	if st, e := do(t, "POST", srv.URL+"/v1/auth/totp", tok, ""); st != 409 {
+		t.Fatalf("restart while enabled: %d %v", st, e)
 	}
 }

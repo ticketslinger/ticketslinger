@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -16,6 +17,9 @@ type Config struct {
 	PublicURL          string
 	DashboardOrigin    string
 	WebAuthnRPID       string
+	// SecretKey encrypts secrets at rest (TS_SECRET_KEY: base64 of 32 bytes).
+	// Nil when unset; `serve` refuses to start without it.
+	SecretKey []byte
 	// TrustedProxies may set the client address with X-Real-IP.
 	TrustedProxies []netip.Prefix
 }
@@ -38,6 +42,13 @@ func Load() (Config, error) {
 			return c, fmt.Errorf("TS_TRUSTED_PROXIES: %w", err)
 		}
 		c.TrustedProxies = append(c.TrustedProxies, p)
+	}
+	if v := os.Getenv("TS_SECRET_KEY"); v != "" {
+		k, err := base64.StdEncoding.DecodeString(v)
+		if err != nil || len(k) != 32 {
+			return c, errors.New("TS_SECRET_KEY must be base64 of exactly 32 bytes")
+		}
+		c.SecretKey = k
 	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("TS_DATABASE_URL is required")
