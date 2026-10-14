@@ -167,7 +167,10 @@ func (s *Service) Signup(ctx context.Context, email, password, name, ip, ua stri
 	return sess, u, nil
 }
 
-func (s *Service) Login(ctx context.Context, email, password, totpCode, ip, ua string) (Session, User, error) {
+func (s *Service) Login(ctx context.Context, email, password, totpCode, recoveryCode, ip, ua string) (Session, User, error) {
+	if totpCode != "" && recoveryCode != "" {
+		return Session{}, User{}, ErrOneSecondStep
+	}
 	email = normEmail(email)
 	now := time.Now()
 	if !s.ipLimit.allow("login:"+ip, now) || !s.emLimit.allow(email, now) {
@@ -180,12 +183,14 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, ip, ua s
 		sealed []byte
 		last   *int64
 		locked bool
+		hasKey bool
 	)
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, email, name, email_verified_at IS NOT NULL, totp_enabled_at IS NOT NULL,
-		        password_hash, coalesce(locked_until > now(), false), totp_secret, totp_last_step
+		        password_hash, coalesce(locked_until > now(), false), totp_secret, totp_last_step,
+		        EXISTS (SELECT 1 FROM passkeys p WHERE p.user_id = users.id)
 		   FROM users WHERE email = $1`, email).
-		Scan(&u.ID, &u.Email, &u.Name, &u.EmailVerified, &totpOn, &hash, &locked, &sealed, &last)
+		Scan(&u.ID, &u.Email, &u.Name, &u.EmailVerified, &totpOn, &hash, &locked, &sealed, &last, &hasKey)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && hash == nil) {
 		_, _ = checkPassword(ctx, dummyHash(), password)
 		return Session{}, User{}, ErrBadCredentials
@@ -204,13 +209,23 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, ip, ua s
 	if !ok {
 		return Session{}, User{}, s.recordFailure(ctx, u.ID)
 	}
-	if totpOn {
-		if totpCode == "" {
-			return Session{}, User{}, ErrTOTPRequired
+	var codeID uuid.UUID
+	if recoveryCode != "" {
+		if !totpOn && !hasKey { // stale codes from a factor since removed
+			return Session{}, User{}, s.recordFailure(ctx, u.ID)
 		}
+		// Accepted for any account with a second factor; it stands in for the TOTP code or the passkey.
+		if codeID, err = s.matchRecovery(ctx, u.ID, recoveryCode); err != nil {
+			return Session{}, User{}, err
+		}
+		if codeID == uuid.Nil {
+			return Session{}, User{}, s.recordFailure(ctx, u.ID)
+		}
+	} else if totpOn && totpCode == "" {
+		return Session{}, User{}, ErrTOTPRequired
 	}
 	var step int64
-	if totpOn {
+	if totpOn && recoveryCode == "" {
 		var ok bool
 		if step, ok, err = s.checkTOTP(u.ID, sealed, last, totpCode); err != nil {
 			return Session{}, User{}, err
@@ -222,7 +237,17 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, ip, ua s
 	var sess Session
 	replay := false
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		if totpOn {
+		if codeID != uuid.Nil {
+			// Conditional update: of two logins racing with one recovery code, only one gets a row.
+			tag, err := tx.Exec(ctx, `UPDATE recovery_codes SET used_at = now() WHERE id = $1 AND used_at IS NULL`, codeID)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				replay = true
+				return nil
+			}
+		} else if totpOn {
 			// Conditional update: of two logins racing with one code, only one gets a row.
 			ok, err := recordTOTPStep(ctx, tx, u.ID, step, false)
 			if err != nil {
@@ -236,7 +261,7 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, ip, ua s
 		if _, err := tx.Exec(ctx, `UPDATE users SET failed_logins = 0 WHERE id = $1`, u.ID); err != nil {
 			return err
 		}
-		sess, err = createSession(ctx, tx, u.ID, totpOn, ip, ua)
+		sess, err = createSession(ctx, tx, u.ID, totpOn || codeID != uuid.Nil, ip, ua)
 		return err
 	})
 	if err == nil && replay {

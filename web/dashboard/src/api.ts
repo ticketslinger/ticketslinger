@@ -70,8 +70,13 @@ async function post(path: string, body?: unknown): Promise<unknown> {
 export const session = {
   signup: (name: string, email: string, password: string) =>
     post("/session/signup", { name, email, password }),
-  login: (email: string, password: string, totp?: string) =>
-    post("/session/login", { email, password, ...(totp ? { totp_code: totp } : {}) }),
+  login: (email: string, password: string, totp?: string, recovery?: string) =>
+    post("/session/login", {
+      email,
+      password,
+      ...(totp ? { totp_code: totp } : {}),
+      ...(recovery ? { recovery_code: recovery } : {}),
+    }),
   async passkeyLogin() {
     const { challenge_id, options } = must(await api.POST("/auth/passkeys/login"));
     const optionsJSON = (

@@ -202,7 +202,7 @@ func TestPasskeyRegistrationNeedsReauthentication(t *testing.T) {
 		}
 	}
 	// The wrong passwords count toward the login lockout.
-	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", ""); !errors.Is(err, auth.ErrLocked) {
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", "", ""); !errors.Is(err, auth.ErrLocked) {
 		t.Fatalf("login after 5 wrong passwords: got %v, want ErrLocked", err)
 	}
 	if _, _, err := s.BeginPasskeyRegistration(ctx, u.ID, false, "a long passphrase"); !errors.Is(err, auth.ErrLocked) {

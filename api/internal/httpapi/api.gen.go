@@ -79,7 +79,10 @@ type Health struct {
 type LoginRequest struct {
 	Email    openapi_types.Email `json:"email"`
 	Password string              `json:"password"`
-	TotpCode *string             `json:"totp_code,omitempty"`
+
+	// RecoveryCode One of the account's unused recovery codes, in place of an authenticator code or passkey. Spaces, hyphens and case don't matter. Sending it together with totp_code is 422 one_second_step.
+	RecoveryCode *string `json:"recovery_code,omitempty"`
+	TotpCode     *string `json:"totp_code,omitempty"`
 }
 
 // Me defines model for Me.
@@ -222,6 +225,9 @@ type ServerInterface interface {
 
 	// (POST /auth/passkeys/register/{challengeId})
 	FinishPasskeyRegistration(w http.ResponseWriter, r *http.Request, challengeId openapi_types.UUID, params FinishPasskeyRegistrationParams)
+
+	// (POST /auth/recovery-codes)
+	CreateRecoveryCodes(w http.ResponseWriter, r *http.Request)
 
 	// (POST /auth/signup)
 	Signup(w http.ResponseWriter, r *http.Request)
@@ -378,6 +384,20 @@ func (siw *ServerInterfaceWrapper) FinishPasskeyRegistration(w http.ResponseWrit
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.FinishPasskeyRegistration(w, r, challengeId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateRecoveryCodes operation middleware
+func (siw *ServerInterfaceWrapper) CreateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateRecoveryCodes(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -678,6 +698,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/verify-email", wrapper.VerifyEmail)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/totp", wrapper.StartTotp)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/totp/confirm", wrapper.ConfirmTotp)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/recovery-codes", wrapper.CreateRecoveryCodes)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/passkeys/register", wrapper.BeginPasskeyRegistration)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/passkeys/register/{challengeId}", wrapper.FinishPasskeyRegistration)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/auth/passkeys/login", wrapper.BeginPasskeyLogin)
@@ -725,6 +746,20 @@ func (response Login401JSONResponse) VisitLoginResponse(w http.ResponseWriter) e
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Login422JSONResponse Error
+
+func (response Login422JSONResponse) VisitLoginResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -1012,6 +1047,71 @@ func (response FinishPasskeyRegistration422JSONResponse) VisitFinishPasskeyRegis
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateRecoveryCodesRequestObject struct {
+}
+
+type CreateRecoveryCodesResponseObject interface {
+	VisitCreateRecoveryCodesResponse(w http.ResponseWriter) error
+}
+
+type CreateRecoveryCodes200JSONResponse struct {
+	Codes []string `json:"codes"`
+}
+
+func (response CreateRecoveryCodes200JSONResponse) VisitCreateRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateRecoveryCodes401JSONResponse struct{ ErrorJSONResponse }
+
+func (response CreateRecoveryCodes401JSONResponse) VisitCreateRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateRecoveryCodes403JSONResponse Error
+
+func (response CreateRecoveryCodes403JSONResponse) VisitCreateRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateRecoveryCodes409JSONResponse Error
+
+func (response CreateRecoveryCodes409JSONResponse) VisitCreateRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -1466,6 +1566,9 @@ type StrictServerInterface interface {
 	// (POST /auth/passkeys/register/{challengeId})
 	FinishPasskeyRegistration(ctx context.Context, request FinishPasskeyRegistrationRequestObject) (FinishPasskeyRegistrationResponseObject, error)
 
+	// (POST /auth/recovery-codes)
+	CreateRecoveryCodes(ctx context.Context, request CreateRecoveryCodesRequestObject) (CreateRecoveryCodesResponseObject, error)
+
 	// (POST /auth/signup)
 	Signup(ctx context.Context, request SignupRequestObject) (SignupResponseObject, error)
 
@@ -1709,6 +1812,30 @@ func (sh *strictHandler) FinishPasskeyRegistration(w http.ResponseWriter, r *htt
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(FinishPasskeyRegistrationResponseObject); ok {
 		if err := validResponse.VisitFinishPasskeyRegistrationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateRecoveryCodes operation middleware
+func (sh *strictHandler) CreateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+	var request CreateRecoveryCodesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateRecoveryCodes(ctx, request.(CreateRecoveryCodesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateRecoveryCodes")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateRecoveryCodesResponseObject); ok {
+		if err := validResponse.VisitCreateRecoveryCodesResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -2003,35 +2130,41 @@ func (sh *strictHandler) ListAudit(w http.ResponseWriter, r *http.Request, organ
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
+	"SDbT0Ujkckju6Nf4o99hpLLR/Slf3a3+OwA=",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

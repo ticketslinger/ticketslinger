@@ -4,6 +4,7 @@ import { ErrorText, Field, Link, useAction } from "../ui";
 
 export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
   const [needCode, setNeedCode] = useState(false);
+  const [useRecovery, setUseRecovery] = useState(false);
   const { busy, error, run } = useAction();
 
   const withPasskey = () =>
@@ -28,7 +29,8 @@ export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
               await session.login(
                 String(f.get("email")),
                 String(f.get("password")),
-                needCode ? String(f.get("code")) : undefined,
+                needCode && !useRecovery ? String(f.get("code")) : undefined,
+                useRecovery ? String(f.get("recovery")) : undefined,
               );
             } catch (err) {
               if (err instanceof ApiFailure && err.code === "totp_required" && !needCode) {
@@ -49,7 +51,20 @@ export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
           autoComplete="current-password"
           required
         />
-        {needCode && (
+        {useRecovery && (
+          <Field
+            id="recovery"
+            label="Recovery code"
+            hint="Each recovery code works once. Type one of the codes you saved, like K7QM-4XWD-9TBR."
+            autoComplete="off"
+            autoCapitalize="characters"
+            spellCheck={false}
+            maxLength={32}
+            required
+            autoFocus
+          />
+        )}
+        {needCode && !useRecovery && (
           <Field
             id="code"
             label="6-digit code"
@@ -65,6 +80,13 @@ export function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
         <ErrorText>{error}</ErrorText>
         <button type="submit" disabled={busy}>
           Sign in
+        </button>
+        <button type="button" className="secondary" onClick={() => setUseRecovery(!useRecovery)}>
+          {useRecovery
+            ? needCode
+              ? "Use my authenticator app instead"
+              : "I don't need a recovery code"
+            : "Use a recovery code instead"}
         </button>
       </form>
       <p className="muted">

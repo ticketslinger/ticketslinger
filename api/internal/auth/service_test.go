@@ -29,7 +29,7 @@ func TestSignupThenLogin(t *testing.T) {
 	if len(m.Sent) != 1 {
 		t.Fatalf("want 1 verification email, got %d", len(m.Sent))
 	}
-	sess, u, err := s.Login(ctx, "ann@example.com", "a long passphrase", "", "", "")
+	sess, u, err := s.Login(ctx, "ann@example.com", "a long passphrase", "", "", "", "")
 	if err != nil || sess.Token == "" || u.Email != "ann@example.com" || sess.MFA {
 		t.Fatalf("login: %+v %+v %v", sess, u, err)
 	}
@@ -53,9 +53,9 @@ func TestLoginLockoutAfterFiveFailures(t *testing.T) {
 	ctx := context.Background()
 	_, _, _ = s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", "")
 	for i := 0; i < 5; i++ {
-		_, _, _ = s.Login(ctx, "a@example.com", "wrong", "", "", "")
+		_, _, _ = s.Login(ctx, "a@example.com", "wrong", "", "", "", "")
 	}
-	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", ""); !errors.Is(err, auth.ErrLocked) {
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", "", ""); !errors.Is(err, auth.ErrLocked) {
 		t.Fatalf("got %v, want ErrLocked after 5 failures", err)
 	}
 }
@@ -122,17 +122,17 @@ func TestSuccessfulLoginResetsFailures(t *testing.T) {
 	_, _, _ = s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", "")
 	fail4 := func() {
 		for i := 0; i < 4; i++ {
-			if _, _, err := s.Login(ctx, "a@example.com", "wrong", "", "", ""); !errors.Is(err, auth.ErrBadCredentials) {
+			if _, _, err := s.Login(ctx, "a@example.com", "wrong", "", "", "", ""); !errors.Is(err, auth.ErrBadCredentials) {
 				t.Fatalf("failure %d: %v", i, err)
 			}
 		}
 	}
 	fail4()
-	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", ""); err != nil {
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	fail4()
-	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", ""); err != nil {
+	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", "", ""); err != nil {
 		t.Fatalf("got %v; 4+4 failures split by a success must not lock", err)
 	}
 }

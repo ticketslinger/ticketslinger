@@ -27,11 +27,13 @@ paths:
   /auth/login:
     post:
       operationId: login
+      description: 401 totp_required means the account has an authenticator app; send totp_code, or a recovery_code instead. A valid recovery code is accepted for any account with a second factor and gives a session that passed it.
       security: []
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LoginRequest" } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SessionCreated" } } } }
         "401": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
         "423": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
   /auth/logout:
@@ -65,6 +67,15 @@ paths:
         "204": { description: Enabled }
         "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+  /auth/recovery-codes:
+    post:
+      operationId: createRecoveryCodes
+      description: Replaces the account's recovery codes with ten new single-use ones and returns them. They are shown this once. Needs a session that passed a second factor (403 mfa_required) and an account that has one (409 no_second_factor).
+      responses:
+        "200": { description: The new codes, once, content: { application/json: { schema: { type: object, required: [codes], properties: { codes: { type: array, items: { type: string } } } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /auth/passkeys/register:
     post:
       operationId: beginPasskeyRegistration
@@ -172,6 +183,7 @@ components:
         email: { type: string, format: email }
         password: { type: string }
         totp_code: { type: string, pattern: "^[0-9]{6}$" }
+        recovery_code: { type: string, maxLength: 32, description: "One of the account's unused recovery codes, in place of an authenticator code or passkey. Spaces, hyphens and case don't matter. Sending it together with totp_code is 422 one_second_step." }
     SessionCreated:
       type: object
       required: [session_token, user]

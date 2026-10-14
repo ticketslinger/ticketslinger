@@ -200,12 +200,18 @@ func (s *server) Login(ctx context.Context, req LoginRequestObject) (LoginRespon
 	if req.Body.TotpCode != nil {
 		code = *req.Body.TotpCode
 	}
-	sess, u, err := s.Auth.Login(ctx, string(req.Body.Email), req.Body.Password, code, c.ip, c.ua)
+	recovery := ""
+	if req.Body.RecoveryCode != nil {
+		recovery = *req.Body.RecoveryCode
+	}
+	sess, u, err := s.Auth.Login(ctx, string(req.Body.Email), req.Body.Password, code, recovery, c.ip, c.ua)
 	switch {
 	case errors.Is(err, auth.ErrBadCredentials):
 		return nil, &apiError{401, "bad_credentials", "That email and password don't match."}
 	case errors.Is(err, auth.ErrTOTPRequired):
-		return nil, &apiError{401, "totp_required", "Enter the 6-digit code from your authenticator app."}
+		return nil, &apiError{401, "totp_required", "Enter the 6-digit code from your authenticator app, or one of your recovery codes."}
+	case errors.Is(err, auth.ErrOneSecondStep):
+		return nil, &apiError{422, "one_second_step", "Use either the code from your authenticator app or a recovery code, not both."}
 	case errors.Is(err, auth.ErrLocked):
 		return nil, locked()
 	case errors.Is(err, auth.ErrRateLimited):
@@ -367,6 +373,23 @@ func totpError(err error) error {
 		return tooManyAttempts()
 	}
 	return err
+}
+
+func (s *server) CreateRecoveryCodes(ctx context.Context, _ CreateRecoveryCodesRequestObject) (CreateRecoveryCodesResponseObject, error) {
+	u, sess, ok := userFrom(ctx)
+	if !ok {
+		return nil, unauthorized()
+	}
+	codes, err := s.Auth.GenerateRecoveryCodes(ctx, u.ID, sess.MFA)
+	switch {
+	case errors.Is(err, auth.ErrNoSecondFactor):
+		return nil, &apiError{409, "no_second_factor", "Add a passkey or an authenticator app first. Recovery codes stand in for one of them."}
+	case errors.Is(err, auth.ErrMFARequired):
+		return nil, &apiError{403, "mfa_required", "Sign in with your passkey or authenticator code first, then create recovery codes."}
+	case err != nil:
+		return nil, err
+	}
+	return CreateRecoveryCodes200JSONResponse{Codes: codes}, nil
 }
 
 func (s *server) StartTotp(ctx context.Context, req StartTotpRequestObject) (StartTotpResponseObject, error) {

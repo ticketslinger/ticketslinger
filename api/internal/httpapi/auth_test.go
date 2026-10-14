@@ -231,3 +231,41 @@ func TestMeReportsSecondFactors(t *testing.T) {
 		}
 	}
 }
+
+func TestRecoveryCodesOverHTTP(t *testing.T) {
+	srv, _ := newAuthServer(t)
+	_, body := do(t, "POST", srv.URL+"/v1/auth/signup", "", `{"email":"a@example.com","password":"a long passphrase","name":"A"}`)
+	tok := body["session_token"].(string)
+	if st, _ := do(t, "POST", srv.URL+"/v1/auth/recovery-codes", "", ""); st != 401 {
+		t.Fatalf("unauthenticated: %d", st)
+	}
+	if st, e := do(t, "POST", srv.URL+"/v1/auth/recovery-codes", tok, ""); st != 409 || errCode(e) != "no_second_factor" {
+		t.Fatalf("no factor: %d %v", st, e)
+	}
+	_, setup := do(t, "POST", srv.URL+"/v1/auth/totp", tok, `{"password":"a long passphrase"}`)
+	secret := setup["secret"].(string)
+	c1, _ := totp.GenerateCode(secret, time.Now())
+	do(t, "POST", srv.URL+"/v1/auth/totp/confirm", tok, `{"code":"`+c1+`"}`)
+	if st, e := do(t, "POST", srv.URL+"/v1/auth/recovery-codes", tok, ""); st != 403 || errCode(e) != "mfa_required" {
+		t.Fatalf("password session: %d %v", st, e)
+	}
+	c2, _ := totp.GenerateCode(secret, time.Now().Add(30*time.Second))
+	_, lb := do(t, "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"a long passphrase","totp_code":"`+c2+`"}`)
+	mfaTok := lb["session_token"].(string)
+	st, out := do(t, "POST", srv.URL+"/v1/auth/recovery-codes", mfaTok, "")
+	codes, _ := out["codes"].([]any)
+	if st != 200 || len(codes) != 10 {
+		t.Fatalf("create: %d %v", st, out)
+	}
+	if st, e := do(t, "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"a long passphrase","totp_code":"123456","recovery_code":"aaaa-bbbb-cccc"}`); st != 422 || errCode(e) != "one_second_step" {
+		t.Fatalf("both: %d %v", st, e)
+	}
+	login := `{"email":"a@example.com","password":"a long passphrase","recovery_code":"` + codes[0].(string) + `"}`
+	st, ok := do(t, "POST", srv.URL+"/v1/auth/login", "", login)
+	if user, _ := ok["user"].(map[string]any); st != 200 || user["mfa"] != true {
+		t.Fatalf("recovery login: %d %v", st, ok)
+	}
+	if st, e := do(t, "POST", srv.URL+"/v1/auth/login", "", login); st != 401 || errCode(e) != "bad_credentials" {
+		t.Fatalf("reuse: %d %v", st, e)
+	}
+}
