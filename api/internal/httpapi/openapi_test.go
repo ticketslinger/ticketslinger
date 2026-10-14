@@ -186,6 +186,8 @@ func sample(t *testing.T, name string, parts []*openapi3.Schema) any {
 		return "2027-03-01T19:00:00Z"
 	case "ends_at":
 		return "2027-03-01T22:00:00Z"
+	case "price_cents":
+		return 2500 // a paid ticket costs at least 50
 	}
 	switch {
 	case len(s.Enum) > 0:

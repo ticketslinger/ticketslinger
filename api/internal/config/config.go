@@ -26,6 +26,11 @@ type Config struct {
 	// Platform fee per paid ticket: basis points of the pre-tax price plus a flat amount.
 	PlatformFeeBP    int   // TS_PLATFORM_FEE_BP, 0-10000, default 200
 	PlatformFeeCents int64 // TS_PLATFORM_FEE_CENTS, 0-10000, default 50
+	// Stripe Connect. Without a secret key, paid tickets can't be sold.
+	StripeSecretKey      string // TS_STRIPE_SECRET_KEY: sk_test_, sk_live_ or a restricted rk_ key
+	StripePublishableKey string // TS_STRIPE_PUBLISHABLE_KEY: pk_, same mode; required with a secret key
+	StripeWebhookSecret  string // TS_STRIPE_WEBHOOK_SECRET: whsec_; required with a secret key
+	StorefrontURL        string // TS_STOREFRONT_URL
 }
 
 func Load() (Config, error) {
@@ -36,6 +41,11 @@ func Load() (Config, error) {
 		PublicURL:          env("TS_PUBLIC_URL", "http://localhost:3000"),
 		DashboardOrigin:    env("TS_DASHBOARD_ORIGIN", "http://localhost:5173"),
 		WebAuthnRPID:       env("TS_WEBAUTHN_RPID", "localhost"),
+		StorefrontURL:      env("TS_STOREFRONT_URL", "http://localhost:3001"),
+
+		StripeSecretKey:      os.Getenv("TS_STRIPE_SECRET_KEY"),
+		StripePublishableKey: os.Getenv("TS_STRIPE_PUBLISHABLE_KEY"),
+		StripeWebhookSecret:  os.Getenv("TS_STRIPE_WEBHOOK_SECRET"),
 	}
 	for _, cidr := range strings.Split(env("TS_TRUSTED_PROXIES", "127.0.0.1/32,::1/128"), ",") {
 		if cidr = strings.TrimSpace(cidr); cidr == "" {
@@ -63,6 +73,9 @@ func Load() (Config, error) {
 		return c, err
 	}
 	c.PlatformFeeBP, c.PlatformFeeCents = bpv, int64(cents)
+	if err := checkStripe(c); err != nil {
+		return c, err
+	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("TS_DATABASE_URL is required")
 	}
@@ -87,4 +100,46 @@ func intEnv(k string, def, hi int) (int, error) {
 		return 0, fmt.Errorf("%s must be a whole number from 0 to %d", k, hi)
 	}
 	return n, nil
+}
+
+// checkStripe checks the Stripe keys' shapes. Errors never repeat a key.
+func checkStripe(c Config) error {
+	sk, pk, wh := c.StripeSecretKey, c.StripePublishableKey, c.StripeWebhookSecret
+	if wh != "" && !strings.HasPrefix(wh, "whsec_") {
+		return errors.New("TS_STRIPE_WEBHOOK_SECRET must start with whsec_")
+	}
+	if sk == "" {
+		if pk != "" {
+			return errors.New("TS_STRIPE_PUBLISHABLE_KEY is set without TS_STRIPE_SECRET_KEY")
+		}
+		return nil
+	}
+	skMode, ok := StripeMode(sk, "sk_", "rk_")
+	if !ok {
+		return errors.New("TS_STRIPE_SECRET_KEY must be a secret key (sk_test_, sk_live_) or a restricted key (rk_)")
+	}
+	pkMode, ok := StripeMode(pk, "pk_")
+	if !ok {
+		return errors.New("TS_STRIPE_PUBLISHABLE_KEY must be set with a secret key, and start with pk_test_ or pk_live_")
+	}
+	if skMode != pkMode {
+		return errors.New("TS_STRIPE_SECRET_KEY and TS_STRIPE_PUBLISHABLE_KEY must both be test keys or both be live keys")
+	}
+	if wh == "" {
+		return errors.New("TS_STRIPE_WEBHOOK_SECRET is required with a secret key")
+	}
+	return nil
+}
+
+// StripeMode is "test" or "live" for a key that starts with one of prefixes
+// followed by test_ or live_.
+func StripeMode(key string, prefixes ...string) (string, bool) {
+	for _, p := range prefixes {
+		for _, mode := range []string{"test", "live"} {
+			if strings.HasPrefix(key, p+mode+"_") {
+				return mode, true
+			}
+		}
+	}
+	return "", false
 }

@@ -4,7 +4,7 @@ info:
   version: 0.1.0
   license: { name: AGPL-3.0-only, identifier: AGPL-3.0-only }
   description: |
-    Every POST, PUT, PATCH and DELETE accepts an Idempotency-Key header: 1 to 255 printable ASCII characters, a fresh random value per intended action (400 bad_idempotency_key otherwise). Send the same key to retry and nothing happens twice. The first response is kept for 24 hours and replayed with Idempotent-Replayed: true. Keys belong to the caller (the signed-in user, the API key, or nobody for public calls) and to the method and path, so they never cross between callers. The same key with a different body is 422 idempotency_key_reused. The same key while the first request is still running is 409 idempotency_in_progress; wait a moment and retry. Responses with a 5xx status, and 429 rate-limit answers, are not kept, so a retry runs fresh; 409 idempotency_in_progress carries Retry-After: 1. Operations that hand back credentials (sign-up, sign-in, authenticator setup, recovery codes, API key creation) never keep their responses, so a retry runs again. Without signing in, the key must be random and at least 22 letters, digits, - or _ (a UUID works). Busy moments on a sale answer 503 try_again with Retry-After: 1.
+    Every POST, PUT, PATCH and DELETE accepts an Idempotency-Key header: 1 to 255 printable ASCII characters, a fresh random value per intended action (400 bad_idempotency_key otherwise). Send the same key to retry and nothing happens twice. The first response is kept for 24 hours and replayed with Idempotent-Replayed: true. Keys belong to the caller (the signed-in user, the API key, or nobody for public calls) and to the method and path, so they never cross between callers. The same key with a different body is 422 idempotency_key_reused. The same key while the first request is still running is 409 idempotency_in_progress; wait a moment and retry. Responses with a 5xx status, and 429 rate-limit answers, are not kept, so a retry runs fresh; 409 idempotency_in_progress carries Retry-After: 1. Operations that hand back credentials (sign-up, sign-in, authenticator setup, recovery codes, API key creation, Stripe onboarding links) never keep their responses, so a retry runs again. Without signing in, the key must be random and at least 22 letters, digits, - or _ (a UUID works). Busy moments on a sale answer 503 try_again with Retry-After: 1.
 servers:
   - url: https://api.ticketslinger.com/v1
 security:
@@ -248,6 +248,45 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/payments:
+    get:
+      operationId: getPayments
+      description: Any member, or any API key. Whether this organizer can take card payments. provider is none when the server has no payment provider set up; paid tickets can't be sold until it has one and charges_enabled is true.
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PaymentsStatus" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/payments/connect:
+    post:
+      operationId: connectPayments
+      x-idempotency-store: false
+      description: "Owners and admins only, from a signed-in session. Creates the organizer's Stripe account the first time (a Standard account: the organizer gets the full Stripe dashboard and deals with Stripe directly), then returns a one-time Stripe onboarding link. Send the person there; Stripe brings them back to /o/{organizer}/payments?return=1 when they finish, or ?refresh=1 when the link has expired. Calling it again reuses the same account. Its response carries a one-time onboarding link, so we never keep it: a retry with the same key runs again, and a duplicate sent while the first is running gets 409 idempotency_in_progress. 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached."
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OnboardingLink" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/payments/refresh:
+    post:
+      operationId: refreshPayments
+      description: "Owners and admins, or a write API key. Asks Stripe for the account's current state and saves it; call it when someone comes back from onboarding. 409 not_connected before the first connect; 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached."
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PaymentsStatus" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events:
     get:
       operationId: listEvents
@@ -283,7 +322,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
     patch:
       operationId: updateEvent
-      description: "Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed). Going live is refused with 422 event_over once ends_at has passed (an event that has started but not ended can go live), 422 no_ticket_types without a ticket type, and 422 unquotaed_ticket_type while a ticket type has no quota. A live event's ends_at can still change. The slug changes only on a draft (409 slug_locked). Once tickets are sold or held in an open checkout, tax_rate_bp, prices_include_tax, fee_mode and timezone can't change and the event can't go back to draft (409 has_sales; any order counts, even one without tickets); field names the property refused."
+      description: "Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed). Going live is refused with 422 event_over once ends_at has passed (an event that has started but not ended can go live), 422 no_ticket_types without a ticket type, 422 unquotaed_ticket_type while a ticket type has no quota, and 422 payments_not_ready when any ticket type costs money and the organizer's Stripe account can't take payments yet (see /organizers/{organizer}/payments). A live event's ends_at can still change. The slug changes only on a draft (409 slug_locked). Once tickets are sold or held in an open checkout, tax_rate_bp, prices_include_tax, fee_mode and timezone can't change and the event can't go back to draft (409 has_sales; any order counts, even one without tickets); field names the property refused."
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
@@ -660,6 +699,19 @@ components:
             message: { type: string }
             field: { type: string, description: "The request property this error is about, when there is one (e.g. price_cents, applies_to, options[2])." }
     Health: { type: object, required: [status], properties: { status: { type: string } } }
+    PaymentsStatus:
+      type: object
+      required: [provider, connected, charges_enabled, details_submitted]
+      properties:
+        provider: { type: string, enum: [stripe, test, none], description: "stripe in production, test for the built-in fake, none when the server takes no payments." }
+        connected: { type: boolean, description: Whether the organizer has a Stripe account. }
+        charges_enabled: { type: boolean, description: "Whether Stripe lets the account take payments. Paid tickets go on sale only when it does." }
+        details_submitted: { type: boolean, description: Whether the organizer has finished Stripe's onboarding form. }
+    OnboardingLink:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string, description: "Stripe's onboarding page. It works once and expires within minutes, so redirect to it straight away." }
     SignupRequest:
       type: object
       required: [email, password, name]
@@ -890,7 +942,7 @@ components:
       properties:
         name: { type: string, minLength: 1, maxLength: 120 }
         description: { type: string, maxLength: 2000 }
-        price_cents: { type: integer, format: int64, minimum: 0, maximum: 10000000, description: "In cents: 2500 is $25. Up to $100,000." }
+        price_cents: { type: integer, format: int64, minimum: 0, maximum: 10000000, description: "In cents: 2500 is $25. 0 makes it free; otherwise it costs at least 50, the least a card can be charged (422 below_minimum_charge). Up to $100,000." }
         tax_rate_bp: { type: [integer, "null"], minimum: 0, maximum: 10000, description: "Overrides the event's tax rate. Send null to go back to the event's. Leave it out to keep it as it is." }
         prices_include_tax: { type: [boolean, "null"], description: "Overrides the event's setting. Send null to go back to the event's. Leave it out to keep it as it is." }
         sales_start: { type: [string, "null"], format: date-time }

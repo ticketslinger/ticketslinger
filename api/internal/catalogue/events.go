@@ -246,10 +246,10 @@ func sameEvent(a, b Event) bool {
 }
 
 // goLive decides whether a draft may go on sale: it must not have ended yet
-// (one that has started is fine), it needs at least one ticket type, and every
-// ticket type needs a quota. It runs in the transaction that holds the event's
-// row lock, so a ticket type or quota can't change between the check and the
-// status change.
+// (one that has started is fine), it needs at least one ticket type, every
+// ticket type needs a quota, and paid tickets need a Stripe account that can
+// charge. It runs in the transaction that holds the event's row lock, so a
+// ticket type or quota can't change between the check and the status change.
 func goLive(ctx context.Context, tx pgx.Tx, e Event) error {
 	if !e.EndsAt.After(time.Now()) {
 		return invalid("event_over", "status", "This event has already ended, so it can't go on sale.")
@@ -269,6 +269,14 @@ func goLive(ctx context.Context, tx pgx.Tx, e Event) error {
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return err
+	}
+	var unpaid bool
+	if err := tx.QueryRow(ctx, `select exists (select 1 from ticket_types where event_id = $1 and price_cents > 0)
+		and not (select o.stripe_charges_enabled from organizers o join events e on e.organizer_id = o.id where e.id = $1)`, e.ID).Scan(&unpaid); err != nil {
+		return err
+	}
+	if unpaid {
+		return invalid("payments_not_ready", "status", "Paid tickets need a Stripe account that's ready to take cards. Finish connecting Stripe, then try again.")
 	}
 	return nil
 }

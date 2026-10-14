@@ -148,7 +148,7 @@ func TestTicketTypeRoundTrip(t *testing.T) {
 		t.Fatalf("bad limits: %d %q", res.StatusCode, h.errorCode(res))
 	}
 	h.must(h.do(owner, "GET", base+"/"+id, ""), 200)
-	for _, body := range []string{`{"name":"Z","price_cents":1,"min_per_order":0}`, `{"name":"Z","price_cents":1,"max_per_order":0}`, `{"name":"Z","price_cents":1,"max_per_order":101}`} {
+	for _, body := range []string{`{"name":"Z","price_cents":100,"min_per_order":0}`, `{"name":"Z","price_cents":100,"max_per_order":0}`, `{"name":"Z","price_cents":100,"max_per_order":101}`} {
 		if res := h.do(owner, "POST", base, body); res.StatusCode != 422 || h.errorCode(res) != "bad_limits" {
 			t.Fatalf("%s: %d %q", body, res.StatusCode, h.errorCode(res))
 		}
@@ -177,6 +177,7 @@ func TestTicketTypeRoundTrip(t *testing.T) {
 	// Live (every ticket type needs a quota first), then the last ticket type is protected.
 	h.must(h.do(owner, "POST", "/v1/organizers/acme/events/"+ev+"/quotas",
 		`{"name":"Hall","size":100,"ticket_type_ids":["`+list[0]["id"].(string)+`","`+list[1]["id"].(string)+`"]}`), 201)
+	h.chargesEnabled("acme")
 	h.must(h.do(owner, "PATCH", "/v1/organizers/acme/events/"+ev, `{"status":"live"}`), 200)
 	h.must(h.do(owner, "DELETE", base+"/"+id, ""), 204)
 	var other string
@@ -200,7 +201,7 @@ func TestTicketTypesUnderAnotherTenantsEvent(t *testing.T) {
 	tk := h.must(h.do(owner, "POST", "/v1/organizers/acme/events/"+ev+"/ticket-types", `{"name":"General","price_cents":2500}`), 201)["id"].(string)
 	// The caller owns both organizers, so only the event's own tenant can answer.
 	base := "/v1/organizers/other/events/" + ev + "/ticket-types"
-	h.must(h.do(owner, "POST", base, `{"name":"Sneak","price_cents":1}`), 404)
+	h.must(h.do(owner, "POST", base, `{"name":"Sneak","price_cents":100}`), 404)
 	h.must(h.do(owner, "PATCH", base+"/"+tk, `{"name":"Sneak"}`), 404)
 	h.must(h.do(owner, "GET", base, ""), 404)
 	h.must(h.do(owner, "DELETE", base+"/"+tk, ""), 404)
@@ -245,15 +246,16 @@ func TestQuotaOverHTTP(t *testing.T) {
 	}
 	// "Comp" and "Zero" above: cover Comp, then go live.
 	h.must(h.do(owner, "PATCH", base+"/"+id, `{"ticket_type_ids":["`+tk+`","`+comp+`"]}`), 200)
+	h.chargesEnabled("acme")
 	h.must(h.do(owner, "PATCH", "/v1/organizers/acme/events/"+ev, `{"status":"live"}`), 200)
 	tts := "/v1/organizers/acme/events/" + ev + "/ticket-types"
-	if res := h.do(owner, "POST", tts, `{"name":"Late","price_cents":1}`); res.StatusCode != 409 || h.errorCode(res) != "live_needs_capacity" {
+	if res := h.do(owner, "POST", tts, `{"name":"Late","price_cents":100}`); res.StatusCode != 409 || h.errorCode(res) != "live_needs_capacity" {
 		t.Fatalf("live create without quotas: %d %q", res.StatusCode, h.errorCode(res))
 	}
-	if res := h.do(owner, "POST", tts, `{"name":"Late","price_cents":1,"quota_ids":["`+oq+`"]}`); res.StatusCode != 422 || h.errorCode(res) != "unknown_quota" {
+	if res := h.do(owner, "POST", tts, `{"name":"Late","price_cents":100,"quota_ids":["`+oq+`"]}`); res.StatusCode != 422 || h.errorCode(res) != "unknown_quota" {
 		t.Fatalf("live create with foreign quota: %d %q", res.StatusCode, h.errorCode(res))
 	}
-	h.must(h.do(owner, "POST", tts, `{"name":"Late","price_cents":1,"quota_ids":["`+id+`"]}`), 201)
+	h.must(h.do(owner, "POST", tts, `{"name":"Late","price_cents":100,"quota_ids":["`+id+`"]}`), 201)
 	if res := h.do(owner, "PATCH", base+"/"+id, `{"ticket_type_ids":[]}`); res.StatusCode != 409 || h.errorCode(res) != "live_needs_capacity" {
 		t.Fatalf("unlink on live: %d %q", res.StatusCode, h.errorCode(res))
 	}
@@ -422,6 +424,7 @@ func TestGoLiveNeedsAnEventThatHasNotEnded(t *testing.T) {
 	// Started an hour ago and still running: that can go on sale.
 	at := func(d time.Duration) string { return time.Now().Add(d).UTC().Format(time.RFC3339) }
 	h.must(h.do(owner, "PATCH", base, `{"starts_at":"`+at(-time.Hour)+`","ends_at":"`+at(2*time.Hour)+`"}`), 200)
+	h.chargesEnabled("acme")
 	h.must(h.do(owner, "PATCH", base, `{"status":"live"}`), 200)
 	// Once live, the end time can still move, even into the past.
 	if up := h.must(h.do(owner, "PATCH", base, `{"ends_at":"`+at(-30*time.Minute)+`"}`), 200); up["status"] != "live" {

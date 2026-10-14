@@ -13,6 +13,7 @@ import (
 	"github.com/oapi-codegen/nullable"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
+	"github.com/ticketslinger/ticketslinger/api/internal/pricing"
 )
 
 type TicketType struct {
@@ -77,7 +78,7 @@ func scanTT(row pgx.Row) (TicketType, error) {
 	return t, err
 }
 
-// validateTT holds the rules the CHECK constraints in 00008 back up.
+// validateTT holds the rules the CHECK constraints in 00008 and 00021 back up.
 // It trims the name first, as validate does for events.
 func validateTT(t *TicketType) error {
 	t.Name = strings.TrimSpace(t.Name)
@@ -88,6 +89,8 @@ func validateTT(t *TicketType) error {
 		return invalid("invalid_description", "description", "The description can run to 2,000 characters. This one is longer.")
 	case t.PriceCents < 0 || t.PriceCents > 10000000:
 		return invalid("bad_price", "price_cents", "A price runs from $0 to $100,000. Send it in cents: $25 is 2500.")
+	case t.PriceCents > 0 && t.PriceCents < pricing.MinimumChargeCents:
+		return invalid("below_minimum_charge", "price_cents", "A paid ticket has to cost at least $0.50. That's the least a card can be charged.")
 	case t.TaxRateBP != nil && (*t.TaxRateBP < 0 || *t.TaxRateBP > 10000):
 		return invalid("invalid_tax_rate", "tax_rate_bp", "Tax is in basis points, from 0 to 10000. For 8.25%, send 825.")
 	case t.MinPerOrder < 1 || t.MinPerOrder > 100:

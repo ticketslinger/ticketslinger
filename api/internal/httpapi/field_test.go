@@ -17,7 +17,7 @@ func TestValidationErrorsNameTheField(t *testing.T) {
 	// A hidden ticket type, a ticket type of another event, and a second ticket type to reorder.
 	hidden := h.must(h.do(owner, "POST", ev+"/ticket-types", `{"name":"Secret","price_cents":100,"hidden":true}`), 201)["id"].(string)
 	other := h.must(h.do(owner, "POST", org+"/events", `{"slug":"other","name":"Other","timezone":"Europe/London","starts_at":"2027-03-01T19:00:00Z","ends_at":"2027-03-01T22:00:00Z"}`), 201)["id"].(string)
-	foreign := h.must(h.do(owner, "POST", org+"/events/"+other+"/ticket-types", `{"name":"Elsewhere","price_cents":1}`), 201)["id"].(string)
+	foreign := h.must(h.do(owner, "POST", org+"/events/"+other+"/ticket-types", `{"name":"Elsewhere","price_cents":100}`), 201)["id"].(string)
 	long := func(n int) string { return strings.Repeat("a", n) }
 
 	type c struct{ name, method, path, body, code, field string }
@@ -36,15 +36,16 @@ func TestValidationErrorsNameTheField(t *testing.T) {
 			{"missing starts_at", "POST", org + "/events", `{"slug":"new","name":"N","timezone":"Europe/London","ends_at":"2027-03-01T22:00:00Z"}`, "missing_field", "starts_at"},
 		},
 		"ticket types": {
-			{"name", "POST", ev + "/ticket-types", `{"name":" ","price_cents":1}`, "invalid_name", "name"},
-			{"description", "POST", ev + "/ticket-types", `{"name":"X","price_cents":1,"description":"` + long(2001) + `"}`, "invalid_description", "description"},
+			{"name", "POST", ev + "/ticket-types", `{"name":" ","price_cents":100}`, "invalid_name", "name"},
+			{"description", "POST", ev + "/ticket-types", `{"name":"X","price_cents":100,"description":"` + long(2001) + `"}`, "invalid_description", "description"},
 			{"price", "POST", ev + "/ticket-types", `{"name":"X","price_cents":-5}`, "bad_price", "price_cents"},
-			{"tax", "POST", ev + "/ticket-types", `{"name":"X","price_cents":1,"tax_rate_bp":10001}`, "invalid_tax_rate", "tax_rate_bp"},
-			{"min limit", "POST", ev + "/ticket-types", `{"name":"X","price_cents":1,"min_per_order":0}`, "bad_limits", "min_per_order"},
-			{"max limit", "POST", ev + "/ticket-types", `{"name":"X","price_cents":1,"max_per_order":101}`, "bad_limits", "max_per_order"},
+			{"minimum charge", "POST", ev + "/ticket-types", `{"name":"X","price_cents":49}`, "below_minimum_charge", "price_cents"},
+			{"tax", "POST", ev + "/ticket-types", `{"name":"X","price_cents":100,"tax_rate_bp":10001}`, "invalid_tax_rate", "tax_rate_bp"},
+			{"min limit", "POST", ev + "/ticket-types", `{"name":"X","price_cents":100,"min_per_order":0}`, "bad_limits", "min_per_order"},
+			{"max limit", "POST", ev + "/ticket-types", `{"name":"X","price_cents":100,"max_per_order":101}`, "bad_limits", "max_per_order"},
 			{"min above max", "PATCH", ev + "/ticket-types/" + f["ticketType"], `{"min_per_order":50}`, "bad_limits", "max_per_order"},
-			{"sales window", "POST", ev + "/ticket-types", `{"name":"X","price_cents":1,"sales_start":"2027-01-02T00:00:00Z","sales_end":"2027-01-01T00:00:00Z"}`, "bad_sales_window", "sales_end"},
-			{"quota", "POST", ev + "/ticket-types", `{"name":"X","price_cents":1,"quota_ids":["` + foreign + `"]}`, "unknown_quota", "quota_ids"},
+			{"sales window", "POST", ev + "/ticket-types", `{"name":"X","price_cents":100,"sales_start":"2027-01-02T00:00:00Z","sales_end":"2027-01-01T00:00:00Z"}`, "bad_sales_window", "sales_end"},
+			{"quota", "POST", ev + "/ticket-types", `{"name":"X","price_cents":100,"quota_ids":["` + foreign + `"]}`, "unknown_quota", "quota_ids"},
 			{"missing price", "POST", ev + "/ticket-types", `{"name":"X"}`, "missing_field", "price_cents"},
 		},
 		"quotas": {
