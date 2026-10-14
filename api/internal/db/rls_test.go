@@ -39,7 +39,8 @@ func TestRLSUnscopedSeesNothing(t *testing.T) {
 		values ($1, 'live-show', 'Show', 'UTC', now(), now() + interval '1 hour', 'live')`, org); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"organizers", "memberships", "audit_log", "events"} {
+	seedSale(t, pool, org)
+	for _, table := range append([]string{"organizers", "memberships", "audit_log", "events"}, salesTables...) {
 		var n int
 		if err := pool.QueryRow(context.Background(), `select count(*) from `+table).Scan(&n); err != nil {
 			t.Fatal(err)
@@ -144,15 +145,20 @@ func TestRLSForgedOrganizerScopeSeesNothing(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	seedSale(t, pool, oa)
 	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `select set_config('app.user_id', $1, true), set_config('app.organizer_id', $2, true)`, ub.String(), oa.String()); err != nil {
 			return err
 		}
-		for _, q := range []string{
+		qs := []string{
 			`select count(*) from organizers where id = $1`,
 			`select count(*) from memberships where organizer_id = $1`,
 			`select count(*) from audit_log where organizer_id = $1`,
-		} {
+		}
+		for _, table := range salesTables {
+			qs = append(qs, `select count(*) from `+table+` where organizer_id = $1`)
+		}
+		for _, q := range qs {
 			var n int
 			if err := tx.QueryRow(ctx, q, oa).Scan(&n); err != nil {
 				return err
@@ -569,5 +575,57 @@ func TestMemberDirectoryIsHardened(t *testing.T) {
 	}
 	if public || !app {
 		t.Errorf("execute: public=%v ts_app=%v, want false/true", public, app)
+	}
+}
+
+// The tenant tables 00017 adds for sales. stripe_events has no organizer.
+var salesTables = []string{"checkouts", "holds", "orders", "tickets", "answers", "payments", "refunds"}
+
+// seedSale writes one row of each sales table for org through the owner
+// pool, as the system role would: a live event, a held cart, a paid order
+// with one answered ticket, its payment and a refund.
+func seedSale(t *testing.T, app *pgxpool.Pool, org uuid.UUID) {
+	t.Helper()
+	_, err := testdb.Owner(t, app).Exec(context.Background(), `with
+		e as (insert into events(organizer_id, slug, name, timezone, starts_at, ends_at, status)
+			values ($1, 'sold-show', 'Show', 'UTC', now(), now() + interval '1 hour', 'live') returning id),
+		tt as (insert into ticket_types(organizer_id, event_id, name, price_cents, position) select $1, id, 'General', 2500, 1 from e returning id, event_id),
+		q as (insert into questions(organizer_id, event_id, label, kind, scope, position) select $1, id, 'Diet', 'text', 'order', 1 from e returning id),
+		c as (insert into checkouts(organizer_id, event_id, token_hash, expires_at)
+			select $1, id, sha256('tok'), now() + interval '15 minutes' from e returning id, event_id),
+		h as (insert into holds(organizer_id, event_id, checkout_id, ticket_type_id, quantity) select $1, c.event_id, c.id, tt.id, 1 from c, tt),
+		o as (insert into orders(organizer_id, event_id, code, email, status, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents,
+				fee_mode, quote, details)
+			select $1, id, 'TS-ABCDE', 'b@example.com', 'paid', 2500, 0, 0, 100, 2600, 'pass', '{}', '{}' from e returning id, event_id),
+		k as (insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, secret)
+			select $1, o.event_id, o.id, tt.id, 2500, 0, 0, 100, decode(md5(random()::text), 'hex') from o, tt returning id),
+		a as (insert into answers(organizer_id, event_id, order_id, question_id, value) select $1, o.event_id, o.id, q.id, 'None' from o, q),
+		p as (insert into payments(organizer_id, order_id, provider, stripe_account_id, payment_intent_id, client_secret, amount_cents, application_fee_cents)
+			select $1, id, 'test', 'acct_1', 'pi_1', 'pi_1_secret', 2600, 100 from o returning id)
+		insert into refunds(organizer_id, payment_id, amount_cents, fee_refunded, status, reason)
+			select $1, id, 2600, true, 'succeeded', 'organizer' from p`, org)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Members read their sales but can't write them: only the system role does.
+func TestRLSAppCannotWriteSales(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	ua, oa := seedOrg(t, pool, "a@example.com", "org-a")
+	seedSale(t, pool, oa)
+	err := db.WithOrganizer(ctx, pool, ua, oa, func(tx pgx.Tx, _ string) error {
+		var n int
+		if err := tx.QueryRow(ctx, `select count(*) from tickets`).Scan(&n); err != nil || n != 1 {
+			t.Errorf("own tickets: %d %v, want 1", n, err)
+		}
+		_, err := tx.Exec(ctx, `insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, secret)
+			select organizer_id, event_id, order_id, ticket_type_id, 0, 0, 0, 0, decode(md5(random()::text), 'hex') from tickets`)
+		return err
+	})
+	var pg *pgconn.PgError
+	if !errors.As(err, &pg) || pg.Code != "42501" {
+		t.Fatalf("ts_app insert into tickets: %v, want 42501", err)
 	}
 }

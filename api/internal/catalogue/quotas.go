@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -189,7 +190,9 @@ func UpdateQuota(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 	if err != nil {
 		return Quota{}, err
 	}
-	before, err := scanQuota(tx.QueryRow(ctx, `select `+quotaCols+` from quotas where id = $1 and event_id = $2 for update`, id, event))
+	// Read before locking: a guard below locks quotas in id order, which this
+	// one may not lead. The event lock keeps other catalogue writes off it.
+	before, err := getQuota(ctx, tx, event, id)
 	if err != nil {
 		return Quota{}, err
 	}
@@ -211,6 +214,9 @@ func UpdateQuota(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 	if q.Name == before.Name && q.Size == before.Size && slices.Equal(q.TicketTypeIDs, before.TicketTypeIDs) {
 		return before, nil
 	}
+	if err := quotaGuards(ctx, tx, event, before, q); err != nil {
+		return Quota{}, err
+	}
 	if _, err := tx.Exec(ctx, `update quotas set name = $2, size = $3, updated_at = clock_timestamp() where id = $1`, id, q.Name, q.Size); err != nil {
 		return Quota{}, quotaDBError(err)
 	}
@@ -229,6 +235,35 @@ func UpdateQuota(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 	return q, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "quota.updated", EntityType: "quota", EntityID: id, Before: before, After: q})
 }
 
+// quotaGuards refuses a shrink below what is sold and held, and unlinking a
+// ticket type that has sales. Both lock the quotas of the ticket types the
+// quota had, so no checkout slips in between the count and the write.
+func quotaGuards(ctx context.Context, tx pgx.Tx, event uuid.UUID, before, after Quota) error {
+	var removed []uuid.UUID
+	for _, t := range before.TicketTypeIDs {
+		if !slices.Contains(after.TicketTypeIDs, t) {
+			removed = append(removed, t)
+		}
+	}
+	if after.Size < before.Size && len(before.TicketTypeIDs) > 0 {
+		if _, err := salesExist(ctx, tx, event, before.TicketTypeIDs); err != nil {
+			return err
+		}
+		var used int
+		if err := tx.QueryRow(ctx, `select quota_used($1, null)`, before.ID).Scan(&used); err != nil {
+			return err
+		}
+		if after.Size < used {
+			n := strconv.Itoa(used)
+			return ErrConflict{"quota_below_sales", "size", "You've sold or are holding " + n + " here. Set the capacity to at least " + n + "."}
+		}
+	}
+	if len(removed) > 0 {
+		return guardSales(ctx, tx, event, removed, "ticket_type_ids", "these tickets")
+	}
+	return nil
+}
+
 // DeleteQuota removes a quota and records quota.deleted. On a live event it
 // can't strand a ticket type: ErrConflict live_needs_capacity.
 func DeleteQuota(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor audit.Actor) error {
@@ -236,11 +271,15 @@ func DeleteQuota(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 	if err != nil {
 		return err
 	}
-	before, err := scanQuota(tx.QueryRow(ctx, `select `+quotaCols+` from quotas where id = $1 and event_id = $2 for update`, id, event))
+	before, err := getQuota(ctx, tx, event, id)
 	if err != nil {
 		return err
 	}
-	// ponytail: P3 must guard this once tickets are sold against the quota.
+	if len(before.TicketTypeIDs) > 0 {
+		if err := guardSales(ctx, tx, event, before.TicketTypeIDs, "", "tickets in this capacity"); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(ctx, `delete from quotas where id = $1`, id); err != nil {
 		return err
 	}

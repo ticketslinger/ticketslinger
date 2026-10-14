@@ -96,7 +96,8 @@ func TestCatalogHardening(t *testing.T) {
 
 // The storefront and system roles are the only exception to "tenant policies
 // call app_organizer()", every system policy is pinned to app_scope(), and
-// neither role can read identity, key or audit tables.
+// neither role can read identity, key or audit tables. organizers is a tenant
+// table keyed by id rather than organizer_id, so it is named here.
 func TestSaleRolesStayNarrow(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
@@ -105,17 +106,22 @@ func TestSaleRolesStayNarrow(t *testing.T) {
 			array(select case when r = 0 then 'PUBLIC' else r::regrole::text end from unnest(p.polroles) r),
 			coalesce(pg_get_expr(p.polqual, p.polrelid), '') || ' ' || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')
 		from pg_policy p join pg_class c on c.oid = p.polrelid
-		join pg_attribute a on a.attrelid = c.oid and a.attname = 'organizer_id' and not a.attisdropped
-		where c.relnamespace = 'public'::regnamespace order by 1`)
+		where c.relnamespace = 'public'::regnamespace
+		  and (c.relname = 'organizers' or exists (select 1 from pg_attribute a
+		       where a.attrelid = c.oid and a.attname = 'organizer_id' and not a.attisdropped))
+		order by 1`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	exceptions := 0
+	exceptions, organizers := 0, 0
 	for rows.Next() {
 		var name, expr string
 		var roles []string
 		if err := rows.Scan(&name, &roles, &expr); err != nil {
 			t.Fatal(err)
+		}
+		if strings.HasPrefix(name, "organizers.") {
+			organizers++
 		}
 		if strings.Contains(expr, "app_organizer()") {
 			continue
@@ -133,8 +139,8 @@ func TestSaleRolesStayNarrow(t *testing.T) {
 			}
 		}
 	}
-	if rows.Err() != nil || exceptions == 0 {
-		t.Fatalf("policies outside app_organizer(): %d %v", exceptions, rows.Err())
+	if rows.Err() != nil || exceptions == 0 || organizers == 0 {
+		t.Fatalf("policies outside app_organizer(): %d, on organizers: %d, %v", exceptions, organizers, rows.Err())
 	}
 
 	// memberships stays readable: org_reads (00002) subqueries it with the

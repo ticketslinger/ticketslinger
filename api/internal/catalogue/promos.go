@@ -296,6 +296,15 @@ func UpdatePromo(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 		slices.Equal(p.AppliesTo, before.AppliesTo) && slices.Equal(p.Unlocks, before.Unlocks) {
 		return before, nil
 	}
+	if p.Kind != before.Kind || p.Value != before.Value {
+		field := "value"
+		if p.Kind != before.Kind {
+			field = "kind"
+		}
+		if err := promoUsed(ctx, tx, id, field); err != nil {
+			return PromoCode{}, err
+		}
+	}
 	if _, err := tx.Exec(ctx, `update promo_codes set code = $2, kind = $3, value = $4, max_uses = $5, valid_from = $6, valid_until = $7,
 		applies_to_all = $8, updated_at = clock_timestamp() where id = $1`, id, p.Code, p.Kind, p.Value, p.MaxUses, p.ValidFrom, p.ValidUntil, p.AppliesToAll); err != nil {
 		return PromoCode{}, promoDBError(err)
@@ -309,6 +318,21 @@ func UpdatePromo(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 	return p, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "promo_code.updated", EntityType: "promo_code", EntityID: id, Before: before, After: p})
 }
 
+// promoUsed refuses changing what a code takes off, or deleting it, once an
+// order has redeemed it or an open checkout is using it. The caller holds the
+// code's row lock, which a checkout applying it takes too.
+func promoUsed(ctx context.Context, tx pgx.Tx, id uuid.UUID, field string) error {
+	var used bool
+	if err := tx.QueryRow(ctx, `select used_count > 0 or exists (select 1 from checkouts c where c.promo_code_id = $1
+		and c.status in ('open', 'paying') and c.expires_at > now()) from promo_codes where id = $1`, id).Scan(&used); err != nil {
+		return err
+	}
+	if used {
+		return errHasSales(field, "with this code")
+	}
+	return nil
+}
+
 // DeletePromo removes a code and records promo_code.deleted.
 func DeletePromo(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor audit.Actor) error {
 	if _, err := lockEvent(ctx, tx, event); err != nil {
@@ -318,7 +342,9 @@ func DeletePromo(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 	if err != nil {
 		return err
 	}
-	// ponytail: P3 must guard this once orders have redeemed the code.
+	if err := promoUsed(ctx, tx, id, ""); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `delete from promo_codes where id = $1`, id); err != nil {
 		return err
 	}

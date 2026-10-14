@@ -333,7 +333,7 @@ export interface paths {
         delete: operations["deleteEvent"];
         options?: never;
         head?: never;
-        /** @description Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed). Going live is refused with 422 event_over once ends_at has passed (an event that has started but not ended can go live), 422 no_ticket_types without a ticket type, and 422 unquotaed_ticket_type while a ticket type has no quota. A live event's ends_at can still change. The slug changes only on a draft (409 slug_locked). */
+        /** @description Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed). Going live is refused with 422 event_over once ends_at has passed (an event that has started but not ended can go live), 422 no_ticket_types without a ticket type, and 422 unquotaed_ticket_type while a ticket type has no quota. A live event's ends_at can still change. The slug changes only on a draft (409 slug_locked). Once tickets are sold or held in an open checkout, tax_rate_bp, prices_include_tax, fee_mode and timezone can't change and the event can't go back to draft (409 has_sales); field names the property refused. */
         patch: operations["updateEvent"];
         trace?: never;
     };
@@ -383,11 +383,11 @@ export interface paths {
         get: operations["getTicketType"];
         put?: never;
         post?: never;
-        /** @description Owners and admins, or a write API key. The last ticket type of a live event answers 409 last_ticket_type_live. */
+        /** @description Owners and admins, or a write API key. The last ticket type of a live event answers 409 last_ticket_type_live. One that has been sold, or is held by any checkout, answers 409 has_sales. */
         delete: operations["deleteTicketType"];
         options?: never;
         head?: never;
-        /** @description Owners and admins, or a write API key. Send only what changes. Showing a hidden ticket type that a promo code unlocks answers 409 unlocked_by_promo. */
+        /** @description Owners and admins, or a write API key. Send only what changes. Showing a hidden ticket type that a promo code unlocks answers 409 unlocked_by_promo. Once this ticket type is sold or held in an open checkout, price_cents, tax_rate_bp, prices_include_tax, min_per_order and max_per_order can't change (409 has_sales); name, description, the sales window and hidden still can. */
         patch: operations["updateTicketType"];
         trace?: never;
     };
@@ -420,11 +420,11 @@ export interface paths {
         get: operations["getQuota"];
         put?: never;
         post?: never;
-        /** @description Owners and admins, or a write API key. On a live event, a delete that leaves a ticket type in no quota answers 409 live_needs_capacity. */
+        /** @description Owners and admins, or a write API key. On a live event, a delete that leaves a ticket type in no quota answers 409 live_needs_capacity. A quota whose ticket types have sales, or are held in an open checkout, answers 409 has_sales. */
         delete: operations["deleteQuota"];
         options?: never;
         head?: never;
-        /** @description Owners and admins, or a write API key. Send only what changes. A ticket_type_ids list replaces the whole set. On a live event, leaving a ticket type in no quota answers 409 live_needs_capacity. */
+        /** @description Owners and admins, or a write API key. Send only what changes. A ticket_type_ids list replaces the whole set. On a live event, leaving a ticket type in no quota answers 409 live_needs_capacity. size can grow at any time but can't drop below what is sold and held in open checkouts (409 quota_below_sales), and a ticket type with sales can't leave the set (409 has_sales). */
         patch: operations["updateQuota"];
         trace?: never;
     };
@@ -457,11 +457,11 @@ export interface paths {
         get: operations["getPromoCode"];
         put?: never;
         post?: never;
-        /** @description Owners and admins, or a write API key. */
+        /** @description Owners and admins, or a write API key. A code an order has used, or an open checkout is using, answers 409 has_sales. */
         delete: operations["deletePromoCode"];
         options?: never;
         head?: never;
-        /** @description Owners and admins, or a write API key. Send only what changes. Changing kind needs value too (422 value_required_with_kind). applies_to and unlocks replace the whole set when sent. null clears max_uses, valid_from or valid_until; leaving one out keeps it. used_count can't be set. */
+        /** @description Owners and admins, or a write API key. Send only what changes. Changing kind needs value too (422 value_required_with_kind). applies_to and unlocks replace the whole set when sent. null clears max_uses, valid_from or valid_until; leaving one out keeps it. used_count can't be set. Once an order has used the code, or an open checkout is using it, kind and value can't change (409 has_sales). */
         patch: operations["updatePromoCode"];
         trace?: never;
     };
@@ -511,7 +511,7 @@ export interface paths {
         get: operations["getQuestion"];
         put?: never;
         post?: never;
-        /** @description Owners and admins, or a write API key. */
+        /** @description Owners and admins, or a write API key. A question buyers have answered answers 409 has_sales. */
         delete: operations["deleteQuestion"];
         options?: never;
         head?: never;
@@ -2000,6 +2000,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     updatePromoCode: {
@@ -2171,6 +2172,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     updateQuestion: {
