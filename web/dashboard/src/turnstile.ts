@@ -6,13 +6,17 @@ const SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explic
 type Turnstile = {
   render(
     el: HTMLElement,
-    opts: { sitekey: string; callback: (token: string) => void; "error-callback": () => void },
+    opts: {
+      sitekey: string;
+      callback: (token: string) => void;
+      "expired-callback": () => void;
+      "error-callback": () => void;
+    },
   ): string;
   remove(id: string): void;
 };
 
 let script: Promise<Turnstile> | undefined;
-const widgets = new WeakMap<HTMLElement, string>();
 
 /** Adds Cloudflare's script once, as a script element (the CSP allows no inline code). */
 function load(): Promise<Turnstile> {
@@ -35,21 +39,24 @@ function load(): Promise<Turnstile> {
   return script;
 }
 
-/** Renders the widget into el, replacing any earlier one there, and resolves with its token. */
-export async function loadTurnstile(siteKey: string, el: HTMLElement): Promise<string> {
+/**
+ * Renders the widget into el. onToken gets each token as the check passes,
+ * including the fresh one the widget fetches when an old one expires, and ""
+ * while there's no live token. Resolves with a function that removes it.
+ */
+export async function loadTurnstile(
+  siteKey: string,
+  el: HTMLElement,
+  onToken: (token: string) => void,
+): Promise<() => void> {
   const t = await load();
-  const old = widgets.get(el);
-  if (old) t.remove(old);
-  return new Promise((resolve, reject) => {
-    widgets.set(
-      el,
-      t.render(el, {
-        sitekey: siteKey,
-        callback: resolve,
-        "error-callback": () => reject(new Error("turnstile error")),
-      }),
-    );
+  const id = t.render(el, {
+    sitekey: siteKey,
+    callback: onToken,
+    "expired-callback": () => onToken(""),
+    "error-callback": () => onToken(""),
   });
+  return () => t.remove(id);
 }
 
 let siteKey: Promise<string> | undefined;
@@ -66,9 +73,9 @@ export function turnstileSiteKey(): Promise<string> {
 }
 
 /**
- * Shows the widget in `ref` while `wanted` and Turnstile is on. `token` stays
- * "" until the check passes. Each token works once, so call `reset` after
- * sending one that didn't sign you in.
+ * Shows the widget in `ref` while `wanted` and Turnstile is on, and removes
+ * it on unmount. `token` is the live token, or "" until the check passes.
+ * Each token works once, so call `reset` after sending one.
  */
 export function useTurnstile(wanted: boolean) {
   const [key, setKey] = useState("");
@@ -83,13 +90,18 @@ export function useTurnstile(wanted: boolean) {
     const el = ref.current;
     if (!wanted || !key || !el) return;
     let live = true;
+    let remove: (() => void) | undefined;
     setToken("");
-    loadTurnstile(key, el).then(
-      (t) => live && setToken(t),
+    loadTurnstile(key, el, (t) => live && setToken(t)).then(
+      (r) => {
+        if (live) remove = r;
+        else r();
+      },
       () => {},
     );
     return () => {
       live = false;
+      remove?.();
     };
   }, [wanted, key, round]);
   return { ref, token, shown: wanted && key !== "", reset: () => setRound((r) => r + 1) };

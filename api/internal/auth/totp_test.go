@@ -146,7 +146,7 @@ func TestTOTPStartNeedsPassword(t *testing.T) {
 		t.Fatalf("got %v, want ErrBadCredentials", err)
 	}
 	var n int
-	_ = pool.QueryRow(ctx, `SELECT failures FROM login_failures WHERE user_id = $1 AND ip = ''`, u.ID).Scan(&n)
+	_ = pool.QueryRow(ctx, `SELECT failures FROM login_failures WHERE ip = ''`).Scan(&n)
 	if n != 1 {
 		t.Fatalf("login_failures.failures = %d, want 1", n)
 	}

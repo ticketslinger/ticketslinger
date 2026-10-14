@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
@@ -36,9 +38,13 @@ func newGuardedSvc(t *testing.T, v *turnstile.Verifier) *auth.Service {
 	return s
 }
 
-func login(s *auth.Service, password, token, ip string) error {
-	_, _, err := s.Login(context.Background(), "a@example.com", password, "", "", token, ip, "")
+func loginAs(s *auth.Service, email, password, token, ip string) error {
+	_, _, err := s.Login(context.Background(), email, password, "", "", token, ip, "")
 	return err
+}
+
+func login(s *auth.Service, password, token, ip string) error {
+	return loginAs(s, "a@example.com", password, token, ip)
 }
 
 func TestLockoutIsPerAddress(t *testing.T) {
@@ -56,11 +62,23 @@ func TestLockoutIsPerAddress(t *testing.T) {
 	}
 }
 
+// A stranger hammering from one address can't rate-limit the owner out
+// everywhere: the per-email limit is per email and address.
+func TestHammeringOneAddressLeavesOthersAlone(t *testing.T) {
+	s := newGuardedSvc(t, nil)
+	for i := 0; i < 12; i++ {
+		_ = login(s, "wrong", "", "203.0.113.1")
+	}
+	if err := login(s, pw, "", "198.51.100.7"); err != nil {
+		t.Fatalf("owner from another address: %v, want signed in", err)
+	}
+}
+
 // One host usually owns a whole IPv6 /64, so the /64 is the address.
 func TestLockoutKeysIPv6ByPrefix(t *testing.T) {
 	s := newGuardedSvc(t, nil)
 	for i := 0; i < 5; i++ {
-		_ = login(s, "wrong", "", "2001:db8:1:2::"+string(rune('a'+i)))
+		_ = login(s, "wrong", "", "2001:db8:1:2::"+strconv.Itoa(i+1))
 	}
 	if err := login(s, pw, "", "2001:db8:1:2:ffff::1"); !errors.Is(err, auth.ErrLocked) {
 		t.Fatalf("same /64: %v, want ErrLocked", err)
@@ -70,6 +88,7 @@ func TestLockoutKeysIPv6ByPrefix(t *testing.T) {
 	}
 }
 
+// Every attempt counts, including one refused for a missing or bad token.
 func TestTurnstileAfterThreeFailures(t *testing.T) {
 	s := newGuardedSvc(t, fakeTurnstile(t))
 	for i := 0; i < 3; i++ {
@@ -81,16 +100,10 @@ func TestTurnstileAfterThreeFailures(t *testing.T) {
 		t.Fatalf("4th without a token: %v, want ErrTurnstileRequired", err)
 	}
 	if err := login(s, pw, "forged", "203.0.113.1"); !errors.Is(err, turnstile.ErrFailed) {
-		t.Fatalf("4th with a bad token: %v, want turnstile.ErrFailed", err)
-	}
-	if err := login(s, "wrong", "ok", "203.0.113.1"); !errors.Is(err, auth.ErrBadCredentials) {
-		t.Fatalf("4th with a token, wrong password: %v", err)
-	}
-	if err := login(s, "wrong", "ok", "203.0.113.1"); !errors.Is(err, auth.ErrBadCredentials) {
-		t.Fatalf("5th with a token, wrong password: %v", err)
+		t.Fatalf("5th with a bad token: %v, want turnstile.ErrFailed", err)
 	}
 	if err := login(s, pw, "ok", "203.0.113.1"); !errors.Is(err, auth.ErrLocked) {
-		t.Fatalf("token attempts count toward the lock: %v", err)
+		t.Fatalf("refused tokens count toward the lock: %v", err)
 	}
 	if err := login(s, pw, "", "198.51.100.7"); err != nil {
 		t.Fatalf("another address needs no token: %v", err)
@@ -102,12 +115,11 @@ func TestTurnstileAfterThreeFailures(t *testing.T) {
 func TestAccountWideBrake(t *testing.T) {
 	s := newGuardedSvc(t, fakeTurnstile(t))
 	for i := 0; i < 10; i++ {
-		ip := "203.0.113." + string(rune('1'+i/2)) // two failures from each of five addresses
+		ip := "203.0.113." + strconv.Itoa(1+i/2) // two failures from each of five addresses
 		if err := login(s, "wrong", "", ip); !errors.Is(err, auth.ErrBadCredentials) {
 			t.Fatalf("failure %d from %s: %v", i, ip, err)
 		}
 	}
-	auth.ResetLimits(s) // the per-email limiter allows 10 a minute
 	if err := login(s, pw, "", "198.51.100.7"); !errors.Is(err, auth.ErrTurnstileRequired) {
 		t.Fatalf("fresh address after 10 failures: %v, want ErrTurnstileRequired", err)
 	}
@@ -119,11 +131,62 @@ func TestAccountWideBrake(t *testing.T) {
 func TestAccountWideBrakeIsOffWithoutTurnstile(t *testing.T) {
 	s := newGuardedSvc(t, nil)
 	for i := 0; i < 10; i++ {
-		_ = login(s, "wrong", "", "203.0.113."+string(rune('1'+i/2)))
+		_ = login(s, "wrong", "", "203.0.113."+strconv.Itoa(1+i/2))
 	}
-	auth.ResetLimits(s)
 	if err := login(s, pw, "", "198.51.100.7"); err != nil {
 		t.Fatalf("got %v, want signed in", err)
+	}
+}
+
+// An email with no account goes through the same counting, the same check
+// and the same lock as a real one, so the answers don't say which is which.
+func TestUnknownEmailLooksLikeARealOne(t *testing.T) {
+	s := newGuardedSvc(t, fakeTurnstile(t))
+	steps := []struct{ password, token string }{
+		{"wrong", ""}, {"wrong", ""}, {"wrong", ""}, {"wrong", ""}, {"wrong", "forged"}, {"wrong", "ok"},
+	}
+	run := func(email string) []error {
+		var got []error
+		for _, st := range steps {
+			got = append(got, loginAs(s, email, st.password, st.token, "203.0.113.1"))
+		}
+		for i := 0; i < 10; i++ { // and the account-wide brake, from fresh addresses
+			_ = loginAs(s, email, "wrong", "", "198.51.100."+strconv.Itoa(1+i/2))
+		}
+		return append(got, loginAs(s, email, "wrong", "", "192.0.2.1"))
+	}
+	real, ghost := run("a@example.com"), run("nobody@example.com")
+	want := []error{auth.ErrBadCredentials, auth.ErrBadCredentials, auth.ErrBadCredentials,
+		auth.ErrTurnstileRequired, turnstile.ErrFailed, auth.ErrLocked, auth.ErrTurnstileRequired}
+	for i := range want {
+		if !errors.Is(real[i], want[i]) || !errors.Is(ghost[i], want[i]) {
+			t.Errorf("step %d: real %v, unknown %v, want %v", i, real[i], ghost[i], want[i])
+		}
+	}
+}
+
+// Parallel guesses can't race past the limit: each attempt is counted
+// before its password is checked.
+func TestParallelGuessesStopAtTheLimit(t *testing.T) {
+	s := newGuardedSvc(t, nil)
+	const n = 10
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() { errs[i] = login(s, "wrong", "", "203.0.113.1") })
+	}
+	wg.Wait()
+	checked := 0
+	for _, err := range errs {
+		switch {
+		case errors.Is(err, auth.ErrBadCredentials):
+			checked++
+		case !errors.Is(err, auth.ErrLocked):
+			t.Fatalf("got %v", err)
+		}
+	}
+	if checked > 5 {
+		t.Fatalf("%d of %d parallel guesses reached the password check, want at most 5", checked, n)
 	}
 }
 
@@ -176,7 +239,7 @@ func TestReauthenticationCountsPerAddress(t *testing.T) {
 // A count lapses 15 minutes after its last failure.
 func TestFailuresLapseAfterTheWindow(t *testing.T) {
 	pool := testdb.New(t)
-	s := auth.NewService(pool, &mailer.Memory{}, auth.Options{Origin: "http://localhost:5173"})
+	s := auth.NewService(pool, &mailer.Memory{}, auth.Options{Origin: "http://localhost:5173", SecretKey: testKey})
 	if _, _, err := s.Signup(context.Background(), "a@example.com", pw, "A", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -190,5 +253,19 @@ func TestFailuresLapseAfterTheWindow(t *testing.T) {
 	_ = login(s, "wrong", "", "203.0.113.1")
 	if err := login(s, pw, "", "203.0.113.1"); err != nil {
 		t.Fatalf("4 stale failures and 2 fresh: %v, want signed in", err)
+	}
+}
+
+// Rows name the account by a keyed hash of its email, never the email or a
+// plain hash of it.
+func TestFailuresDontStoreTheEmail(t *testing.T) {
+	pool := testdb.New(t)
+	s := auth.NewService(pool, &mailer.Memory{}, auth.Options{SecretKey: testKey})
+	_ = loginAs(s, "nobody@example.com", "wrong", "", "203.0.113.1")
+	var n int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM login_failures WHERE length(account) = 32
+		   AND account <> sha256('nobody@example.com') AND position('nobody' in encode(account, 'escape')) = 0`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("rows keyed by an HMAC: %d, %v", n, err)
 	}
 }

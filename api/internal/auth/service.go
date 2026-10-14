@@ -3,6 +3,7 @@ package auth
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -49,11 +50,12 @@ const (
 	sessionLifetime = 30 * 24 * time.Hour
 	verifyLifetime  = 48 * time.Hour
 	maxSessionAge   = 90 * 24 * time.Hour // absolute cap, however often a session slides
-	// Failed sign-ins count per account and address (see addrKey) over a
-	// window that restarts with each failure. turnstileAfter failures put that
-	// address behind Turnstile; maxFailures lock it out for the window.
-	// accountBrake failures over all addresses put every address behind
-	// Turnstile, and never lock, so a stranger can't lock the owner out.
+	// Sign-in attempts count per email and address (see addrKey) over a
+	// window that restarts with each one; a success clears its address.
+	// After turnstileAfter, that address needs Turnstile; the maxFailures-th
+	// locks it out for the window. accountBrake over all addresses puts every
+	// address behind Turnstile, and never locks, so a stranger can't lock
+	// the owner out. Emails without an account count the same way.
 	turnstileAfter = 3
 	maxFailures    = 5
 	accountBrake   = 10
@@ -94,11 +96,15 @@ type Service struct {
 	beforeHash func()             // test hook, nil in production
 	wa         *webauthn.WebAuthn // nil when RPID or Origin is unusable; passkey calls then return waErr
 	waErr      error
+	failKey    []byte // HMAC key that names an email in login_failures
 }
 
 func NewService(pool *pgxpool.Pool, m mailer.Mailer, o Options) *Service {
 	s := &Service{pool: pool, mail: m, opts: o}
 	s.ipLimit, s.emLimit, s.recLimit = newLimits()
+	mac := hmac.New(sha256.New, o.SecretKey)
+	mac.Write([]byte("login-failures"))
+	s.failKey = mac.Sum(nil)
 	s.wa, s.waErr = newWebAuthn(o)
 	return s
 }
@@ -137,7 +143,7 @@ func hashToken(tok string) []byte { h := sha256.Sum256([]byte(tok)); return h[:]
 // Signup creates an account. With Turnstile on, turnstileToken must pass
 // (turnstile.ErrFailed, or turnstile.ErrUnavailable when Cloudflare can't say).
 func (s *Service) Signup(ctx context.Context, email, password, name, turnstileToken, ip, ua string) (Session, User, error) {
-	if !s.ipLimit.Allow("signup:"+ip, time.Now()) {
+	if !s.ipLimit.Allow("signup:"+addrKey(ip), time.Now()) {
 		return Session{}, User{}, ErrRateLimited
 	}
 	email, name = normEmail(email), strings.TrimSpace(name)
@@ -197,16 +203,33 @@ func (s *Service) Signup(ctx context.Context, email, password, name, turnstileTo
 }
 
 // Login signs in with a password and, when the account has one, a second
-// step. Repeated failures from one address need turnstileToken
-// (ErrTurnstileRequired), then lock that address out (ErrLocked).
+// step. Every attempt counts until one succeeds: after a few from one
+// address it needs turnstileToken (ErrTurnstileRequired), then that address
+// is locked out (ErrLocked). An email with no account answers the same way.
 func (s *Service) Login(ctx context.Context, email, password, totpCode, recoveryCode, turnstileToken, ip, ua string) (Session, User, error) {
 	if totpCode != "" && recoveryCode != "" {
 		return Session{}, User{}, ErrOneSecondStep
 	}
 	email = normEmail(email)
 	now := time.Now()
-	if !s.ipLimit.Allow("login:"+ip, now) || !s.emLimit.Allow(email, now) {
+	// Per email and address: a stranger hammering one address mustn't
+	// rate-limit the owner everywhere. Spread-out guessing meets accountBrake.
+	if !s.ipLimit.Allow("login:"+addrKey(ip), now) || !s.emLimit.Allow(email+"|"+addrKey(ip), now) {
 		return Session{}, User{}, ErrRateLimited
+	}
+	// Counted before anything is checked, whether or not the account exists.
+	account := s.accountKey(email)
+	here, total, err := s.reserve(ctx, account, ip)
+	if err != nil {
+		return Session{}, User{}, err
+	}
+	if s.opts.Turnstile.Enabled() && (here > turnstileAfter || total >= accountBrake) {
+		if turnstileToken == "" {
+			return Session{}, User{}, ErrTurnstileRequired
+		}
+		if err := s.opts.Turnstile.Verify(ctx, turnstileToken, ip); err != nil {
+			return Session{}, User{}, err
+		}
 	}
 	var (
 		u      User
@@ -216,7 +239,7 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, recovery
 		last   *int64
 		hasKey bool
 	)
-	err := s.pool.QueryRow(ctx,
+	err = s.pool.QueryRow(ctx,
 		`SELECT id, email, name, email_verified_at IS NOT NULL, totp_enabled_at IS NOT NULL,
 		        password_hash, totp_secret, totp_last_step,
 		        EXISTS (SELECT 1 FROM passkeys p WHERE p.user_id = users.id)
@@ -229,40 +252,25 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, recovery
 	if err != nil {
 		return Session{}, User{}, err
 	}
-	f, err := s.failures(ctx, u.ID, ip)
-	if err != nil {
-		return Session{}, User{}, err
-	}
-	if f.locked {
-		return Session{}, User{}, ErrLocked
-	}
-	if s.opts.Turnstile.Enabled() && (f.here >= turnstileAfter || f.account >= accountBrake) {
-		if turnstileToken == "" {
-			return Session{}, User{}, ErrTurnstileRequired
-		}
-		if err := s.opts.Turnstile.Verify(ctx, turnstileToken, ip); err != nil {
-			return Session{}, User{}, err
-		}
-	}
 	u.TOTPEnabled = totpOn
 	ok, err := checkPassword(ctx, *hash, password)
 	if err != nil {
 		return Session{}, User{}, err
 	}
 	if !ok {
-		return Session{}, User{}, s.recordFailure(ctx, u.ID, ip)
+		return Session{}, User{}, ErrBadCredentials
 	}
 	var codeID uuid.UUID
 	if recoveryCode != "" {
 		if !totpOn && !hasKey { // stale codes from a factor since removed
-			return Session{}, User{}, s.recordFailure(ctx, u.ID, ip)
+			return Session{}, User{}, ErrBadCredentials
 		}
 		// Accepted for any account with a second factor; it stands in for the TOTP code or the passkey.
 		if codeID, err = s.matchRecovery(ctx, u.ID, recoveryCode); err != nil {
 			return Session{}, User{}, err
 		}
 		if codeID == uuid.Nil {
-			return Session{}, User{}, s.recordFailure(ctx, u.ID, ip)
+			return Session{}, User{}, ErrBadCredentials
 		}
 	} else if totpOn && totpCode == "" {
 		return Session{}, User{}, ErrTOTPRequired
@@ -274,7 +282,7 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, recovery
 			return Session{}, User{}, err
 		}
 		if !ok {
-			return Session{}, User{}, s.recordFailure(ctx, u.ID, ip)
+			return Session{}, User{}, ErrBadCredentials
 		}
 	}
 	var sess Session
@@ -301,14 +309,14 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, recovery
 				return nil
 			}
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM login_failures WHERE user_id = $1 AND ip = $2`, u.ID, addrKey(ip)); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM login_failures WHERE account = $1 AND ip = $2`, account, addrKey(ip)); err != nil {
 			return err
 		}
 		sess, err = createSession(ctx, tx, u.ID, totpOn || codeID != uuid.Nil, ip, ua)
 		return err
 	})
 	if err == nil && replay {
-		return Session{}, User{}, s.recordFailure(ctx, u.ID, ip)
+		return Session{}, User{}, ErrBadCredentials
 	}
 	return sess, u, err
 }
@@ -327,39 +335,38 @@ func addrKey(ip string) string {
 	return a.String()
 }
 
-// A row's count lapses once lockout has passed since its last failure; the
-// sweep deletes it a day later.
-const fresh = `updated_at > now() - $3::interval`
-
-type failureCounts struct {
-	here, account int // this address's failures, and the account's over all addresses
-	locked        bool
+// accountKey names email in login_failures: an HMAC, so the table can't be
+// read back to emails with a dictionary.
+func (s *Service) accountKey(email string) []byte {
+	mac := hmac.New(sha256.New, s.failKey)
+	mac.Write([]byte(normEmail(email)))
+	return mac.Sum(nil)
 }
 
-// failures reads the account's live failure counts as seen from ip.
-func (s *Service) failures(ctx context.Context, id uuid.UUID, ip string) (failureCounts, error) {
-	var f failureCounts
-	err := s.pool.QueryRow(ctx,
-		`SELECT coalesce(sum(failures) FILTER (WHERE ip = $2), 0), coalesce(sum(failures), 0),
-		        coalesce(bool_or(ip = $2 AND locked_until > now()), false)
-		   FROM login_failures WHERE user_id = $1 AND (`+fresh+` OR locked_until > now())`,
-		id, addrKey(ip), lockout.String()).Scan(&f.here, &f.account, &f.locked)
-	return f, err
-}
-
-// recordFailure counts a failed sign-in from ip and locks that address out
-// of the account at maxFailures. It always returns ErrBadCredentials.
-func (s *Service) recordFailure(ctx context.Context, id uuid.UUID, ip string) error {
-	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO login_failures AS f (user_id, ip, failures) VALUES ($1, $2, 1)
-		 ON CONFLICT (user_id, ip) DO UPDATE SET
-		   failures     = CASE WHEN f.`+fresh+` THEN f.failures + 1 ELSE 1 END,
-		   locked_until = CASE WHEN f.`+fresh+` AND f.failures + 1 >= $4 THEN now() + $3::interval ELSE f.locked_until END,
-		   updated_at   = now()`,
-		id, addrKey(ip), lockout.String(), maxFailures); err != nil {
-		return err
+// reserve counts this attempt from ip before any check runs, so parallel
+// guesses can't race past the limits. It returns this address's attempts in
+// the window, this one included, and the account's over all addresses
+// before this one. A locked address gets ErrLocked and isn't counted. A
+// count lapses once lockout passes without an attempt; the sweep deletes
+// the row a day later.
+func (s *Service) reserve(ctx context.Context, account []byte, ip string) (here, total int, err error) {
+	err = s.pool.QueryRow(ctx,
+		`WITH r AS (
+		   INSERT INTO login_failures AS f (account, ip, failures) VALUES ($1, $2, 1)
+		   ON CONFLICT (account, ip) DO UPDATE SET
+		     failures     = CASE WHEN f.updated_at > now() - $3::interval THEN f.failures + 1 ELSE 1 END,
+		     locked_until = CASE WHEN f.updated_at > now() - $3::interval AND f.failures + 1 >= $4 THEN now() + $3::interval END,
+		     updated_at   = now()
+		   WHERE f.locked_until IS NULL OR f.locked_until <= now()
+		   RETURNING failures)
+		 SELECT r.failures, (SELECT coalesce(sum(failures), 0) FROM login_failures
+		                      WHERE account = $1 AND updated_at > now() - $3::interval)
+		   FROM r`,
+		account, addrKey(ip), lockout.String(), maxFailures).Scan(&here, &total)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, 0, ErrLocked
 	}
-	return ErrBadCredentials
+	return here, total, err
 }
 
 func createSession(ctx context.Context, tx pgx.Tx, userID uuid.UUID, mfa bool, ip, ua string) (Session, error) {
@@ -437,15 +444,12 @@ func (s *Service) reauthenticate(ctx context.Context, userID uuid.UUID, password
 		Scan(&email, &hash); err != nil {
 		return "", err
 	}
-	if !s.emLimit.Allow(email, time.Now()) {
+	if !s.emLimit.Allow(normEmail(email)+"|"+addrKey(ip), time.Now()) {
 		return "", ErrRateLimited
 	}
-	f, err := s.failures(ctx, userID, ip)
-	if err != nil {
+	account := s.accountKey(email)
+	if _, _, err := s.reserve(ctx, account, ip); err != nil {
 		return "", err
-	}
-	if f.locked {
-		return "", ErrLocked
 	}
 	if hash == nil {
 		return "", ErrBadCredentials
@@ -455,7 +459,8 @@ func (s *Service) reauthenticate(ctx context.Context, userID uuid.UUID, password
 		return "", err
 	}
 	if !ok {
-		return "", s.recordFailure(ctx, userID, ip)
+		return "", ErrBadCredentials
 	}
-	return email, nil
+	_, err = s.pool.Exec(ctx, `DELETE FROM login_failures WHERE account = $1 AND ip = $2`, account, addrKey(ip))
+	return email, err
 }

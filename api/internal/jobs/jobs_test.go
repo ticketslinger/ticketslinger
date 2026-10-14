@@ -214,7 +214,7 @@ func TestSweepRemovesOnlyExpired(t *testing.T) {
 	idem := `insert into idempotency_keys(scope, key, request_hash, owner, expires_at) values ('anon POST /x', $1, '\x00', uuidv7(), now() + $2::interval)`
 	exec(idem, "old", "-1 minute")
 	exec(idem, "fresh", "1 hour")
-	fails := `insert into login_failures(user_id, ip, failures, updated_at) values ($1, $2, 3, now() - $3::interval)`
+	fails := `insert into login_failures(account, ip, failures, updated_at) values (sha256($1::text::bytea), $2, 3, now() - $3::interval)`
 	exec(fails, user, "203.0.113.1", "25 hours")
 	exec(fails, user, "203.0.113.2", "23 hours")
 

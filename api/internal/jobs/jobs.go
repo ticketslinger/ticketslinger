@@ -152,7 +152,7 @@ func Sweep(ctx context.Context, pool *pgxpool.Pool) error {
 		`delete from webauthn_challenges where id in (select id from webauthn_challenges where expires_at < now() limit $1)`,
 		`delete from email_tokens where token_hash in (select token_hash from email_tokens where expires_at < now() limit $1)`,
 		`delete from idempotency_keys where (scope, key) in (select scope, key from idempotency_keys where expires_at < now() limit $1)`,
-		`delete from login_failures where (user_id, ip) in (select user_id, ip from login_failures where updated_at < now() - interval '1 day' limit $1)`,
+		`delete from login_failures where (account, ip) in (select account, ip from login_failures where updated_at < now() - interval '1 day' limit $1)`,
 	} {
 		for {
 			tag, err := pool.Exec(ctx, q, sweepBatch)

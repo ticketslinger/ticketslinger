@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -82,19 +83,49 @@ func TestLoginLockoutIsPerAddressOverHTTP(t *testing.T) {
 func TestLoginAsksForTurnstileAfterThreeFailures(t *testing.T) {
 	srv := guardedServer(t, acceptOK)
 	do(t, "POST", srv.URL+"/v1/auth/signup", "", `{"email":"a@example.com","password":"a long passphrase","name":"A","turnstile_token":"ok"}`)
-	for i := 0; i < 3; i++ {
-		doFrom(t, "203.0.113.1", "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"wrong password"}`)
+	for _, ip := range []string{"203.0.113.1", "203.0.113.2"} {
+		for i := 0; i < 3; i++ {
+			doFrom(t, ip, "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"wrong password"}`)
+		}
 	}
 	code, b := doFrom(t, "203.0.113.1", "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"a long passphrase"}`)
 	if code != 401 || errCode(b) != "turnstile_required" || errField(b) != "turnstile_token" {
 		t.Fatalf("without a token: %d %v", code, b)
 	}
-	code, b = doFrom(t, "203.0.113.1", "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"a long passphrase","turnstile_token":"forged"}`)
+	if code, b := doFrom(t, "203.0.113.1", "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"a long passphrase","turnstile_token":"ok"}`); code != 200 {
+		t.Fatalf("with a token: %d %v", code, b)
+	}
+	code, b = doFrom(t, "203.0.113.2", "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"a long passphrase","turnstile_token":"forged"}`)
 	if code != 422 || errCode(b) != "turnstile_failed" || errField(b) != "turnstile_token" {
 		t.Fatalf("refused token: %d %v", code, b)
 	}
-	if code, b := doFrom(t, "203.0.113.1", "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"a long passphrase","turnstile_token":"ok"}`); code != 200 {
-		t.Fatalf("with a token: %d %v", code, b)
+}
+
+// An email with no account gets exactly the answers a real one gets.
+func TestUnknownEmailAnswersLikeARealOne(t *testing.T) {
+	srv := guardedServer(t, acceptOK)
+	do(t, "POST", srv.URL+"/v1/auth/signup", "", `{"email":"a@example.com","password":"a long passphrase","name":"A","turnstile_token":"ok"}`)
+	answers := func(email string) []string {
+		var out []string
+		for _, tok := range []string{"", "", "", "", "forged", "ok", "ok"} {
+			body := `{"email":"` + email + `","password":"wrong password","turnstile_token":"` + tok + `"}`
+			if tok == "" {
+				body = `{"email":"` + email + `","password":"wrong password"}`
+			}
+			code, b := doFrom(t, "203.0.113.1", "POST", srv.URL+"/v1/auth/login", "", body)
+			raw, _ := json.Marshal(b)
+			out = append(out, strconv.Itoa(code)+" "+string(raw))
+		}
+		return out
+	}
+	real, ghost := answers("a@example.com"), answers("nobody@example.com")
+	for i := range real {
+		if real[i] != ghost[i] {
+			t.Errorf("attempt %d: real %s, unknown %s", i+1, real[i], ghost[i])
+		}
+	}
+	if !strings.HasPrefix(real[3], "401") || !strings.HasPrefix(real[6], "423") {
+		t.Fatalf("the sequence didn't reach the check and the lock: %v", real)
 	}
 }
 

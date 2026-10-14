@@ -217,7 +217,7 @@ func (s *Service) BeginPasskeyLogin(ctx context.Context, ip string) (uuid.UUID, 
 	if s.waErr != nil {
 		return uuid.Nil, nil, s.waErr
 	}
-	if !s.ipLimit.Allow("passkey:"+ip, time.Now()) {
+	if !s.ipLimit.Allow("passkey:"+addrKey(ip), time.Now()) {
 		return uuid.Nil, nil, ErrRateLimited
 	}
 	assertion, sd, err := s.wa.BeginDiscoverableLogin()
@@ -235,7 +235,7 @@ func (s *Service) FinishPasskeyLogin(ctx context.Context, challengeID uuid.UUID,
 	if s.waErr != nil {
 		return Session{}, User{}, s.waErr
 	}
-	if !s.ipLimit.Allow("passkey:"+ip, time.Now()) {
+	if !s.ipLimit.Allow("passkey:"+addrKey(ip), time.Now()) {
 		return Session{}, User{}, ErrRateLimited
 	}
 	sd, err := s.consumeChallenge(ctx, challengeID, "login", nil)
