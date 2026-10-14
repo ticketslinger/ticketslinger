@@ -18,10 +18,19 @@ func TestVersionIsSet(t *testing.T) {
 	}
 }
 
-func get(t *testing.T, h http.Handler, path string) (int, string) {
+// local is a test-mode config that serve accepts.
+func local(addr string) config.Config {
+	return config.Config{HTTPAddr: addr, PublicURL: "http://127.0.0.1:3001", DashboardOrigin: "http://localhost:3002"}
+}
+
+func get(t *testing.T, h http.Handler, path string, header ...string) (int, string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+	req := httptest.NewRequest("GET", path, nil)
+	for i := 0; i+1 < len(header); i += 2 {
+		req.Header.Set(header[i], header[i+1])
+	}
+	h.ServeHTTP(rec, req)
 	b, _ := io.ReadAll(rec.Body)
 	return rec.Code, string(b)
 }
@@ -38,13 +47,42 @@ func TestTestMailEndpointIsAbsentWithoutTestMode(t *testing.T) {
 
 func TestTestModeRefusesNonLoopbackAddress(t *testing.T) {
 	for _, addr := range []string{"0.0.0.0:3000", ":3000", "[::]:3000", "192.168.1.5:3000", "example.com:3000"} {
-		if _, err := newHandler(config.Config{HTTPAddr: addr}, nil, true); err == nil {
+		if _, err := newHandler(local(addr), nil, true); err == nil {
 			t.Errorf("%s: test mode started on a non-loopback address", addr)
 		}
 	}
 	for _, addr := range []string{"127.0.0.1:3000", "[::1]:3000", "localhost:3000"} {
-		if _, err := newHandler(config.Config{HTTPAddr: addr}, nil, true); err != nil {
+		if _, err := newHandler(local(addr), nil, true); err != nil {
 			t.Errorf("%s: %v", addr, err)
+		}
+	}
+}
+
+// Behind a same-host reverse proxy the API listens on loopback too, so the
+// public URLs must be local as well before test mode will start.
+func TestTestModeRefusesPublicURLs(t *testing.T) {
+	for name, mod := range map[string]func(*config.Config){
+		"https public URL":           func(c *config.Config) { c.PublicURL = "https://api.ticketslinger.com" },
+		"https loopback public URL":  func(c *config.Config) { c.PublicURL = "https://127.0.0.1:3001" },
+		"public dashboard origin":    func(c *config.Config) { c.DashboardOrigin = "http://app.ticketslinger.com" },
+		"LAN dashboard origin":       func(c *config.Config) { c.DashboardOrigin = "http://192.168.1.5:3002" },
+		"lookalike dashboard origin": func(c *config.Config) { c.DashboardOrigin = "http://localhost.example.com" },
+	} {
+		c := local("127.0.0.1:3001")
+		mod(&c)
+		if _, err := newHandler(c, nil, true); err == nil {
+			t.Errorf("%s: test mode started", name)
+		}
+	}
+}
+
+func TestTestMailRefusesProxiedRequests(t *testing.T) {
+	m := &mailer.Memory{}
+	_ = m.Send(context.Background(), "a@example.com", "Confirm", "Open http://localhost:3002/verify-email?token=t")
+	h := testMail(http.NotFoundHandler(), m)
+	for _, hdr := range []string{"X-Real-IP", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded"} {
+		if code, body := get(t, h, "/__test/last-email?to=a@example.com", hdr, "203.0.113.9"); code != 404 {
+			t.Errorf("%s: got %d %q, want 404", hdr, code, body)
 		}
 	}
 }

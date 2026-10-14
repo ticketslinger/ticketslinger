@@ -30,6 +30,7 @@ function run(cmd: string[], opts: { cwd?: string; env?: Record<string, string | 
 }
 
 // A fresh database every run, so nothing left over from the last one leaks in.
+// This DROPS and recreates ticketslinger_e2e: only ever point E2E_PG at a throwaway Postgres.
 const admin = new SQL(url("ts_owner", "ticketslinger"));
 await admin.unsafe(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`);
 await admin.unsafe(`CREATE DATABASE ${DB}`);

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -101,10 +102,15 @@ func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Hand
 	var mail mailer.Mailer = mailer.Log{}
 	mem := &mailer.Memory{}
 	if testMode {
-		host, _, err := net.SplitHostPort(cfg.HTTPAddr)
-		ip, _ := netip.ParseAddr(host) // zero Addr on failure, which isn't loopback
-		if err != nil || host != "localhost" && !ip.IsLoopback() {
+		// A same-host reverse proxy also reaches the API on loopback, so the
+		// public URLs have to be local too; production's https URLs fail here.
+		if host, _, err := net.SplitHostPort(cfg.HTTPAddr); err != nil || !isLocal(host) {
 			return nil, fmt.Errorf("TS_TEST_MODE needs a loopback TS_HTTP_ADDR, not %q", cfg.HTTPAddr)
+		}
+		for name, v := range map[string]string{"TS_PUBLIC_URL": cfg.PublicURL, "TS_DASHBOARD_ORIGIN": cfg.DashboardOrigin} {
+			if u, err := url.Parse(v); err != nil || u.Scheme != "http" || !isLocal(u.Hostname()) {
+				return nil, fmt.Errorf("TS_TEST_MODE needs an http://localhost or loopback %s, not %q", name, v)
+			}
 		}
 		mail = mem
 	}
@@ -116,13 +122,18 @@ func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Hand
 }
 
 // testMail serves the link in the newest message to ?to=, so a browser test
-// can follow the verification email.
+// can follow the verification email. Anything that came through a proxy gets
+// the same 404 as when the route isn't mounted.
 func testMail(api http.Handler, m *mailer.Memory) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/", api)
 	mux.HandleFunc("GET /__test/last-email", func(w http.ResponseWriter, r *http.Request) {
+		proxied := false
+		for _, h := range []string{"X-Real-IP", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded"} {
+			proxied = proxied || r.Header.Get(h) != ""
+		}
 		link := m.LastLink(r.URL.Query().Get("to"))
-		if link == "" {
+		if proxied || link == "" {
 			http.NotFound(w, r)
 			return
 		}
@@ -130,4 +141,10 @@ func testMail(api http.Handler, m *mailer.Memory) http.Handler {
 		_, _ = fmt.Fprint(w, link)
 	})
 	return mux
+}
+
+// isLocal reports whether host is "localhost" or a loopback IP.
+func isLocal(host string) bool {
+	ip, err := netip.ParseAddr(host)
+	return host == "localhost" || err == nil && ip.IsLoopback()
 }
