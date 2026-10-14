@@ -49,7 +49,6 @@ type QuestionPatch struct {
 	Required           *bool
 	AppliesToAll       *bool
 	AppliesTo          *[]uuid.UUID
-	Position           *int
 }
 
 const questionCols = `id, event_id, label, kind, options, required, scope, applies_to_all,
@@ -79,8 +78,6 @@ func validateQuestion(q *Question) error {
 		return invalid("bad_kind", "A question is a text box, a select (pick one) or a checkbox.")
 	case q.Scope != "order" && q.Scope != "ticket":
 		return invalid("bad_scope", "Ask once per order, or once per ticket.")
-	case q.Position < 1:
-		return invalid("bad_position", "Positions start at 1.")
 	}
 	if q.Kind != "select" {
 		if len(q.Options) > 0 {
@@ -109,11 +106,17 @@ func validateQuestion(q *Question) error {
 // fold maps s and ſ, or σ, ς and Σ, to one key: upper then lower case.
 func fold(s string) string { return strings.ToLower(strings.ToUpper(s)) }
 
-// questionDBError is dbError for questions: 23514 a failed CHECK.
+// questionDBError is dbError for questions: 23514 a failed CHECK, 23503 a
+// link whose ticket type isn't there (or isn't in this event).
 func questionDBError(err error) error {
 	var pg *pgconn.PgError
-	if errors.As(err, &pg) && pg.Code == "23514" {
-		return ErrInvalid{"invalid_question", "Something in that question isn't allowed. Check the label, the kind and the options."}
+	if errors.As(err, &pg) {
+		switch pg.Code {
+		case "23514":
+			return ErrInvalid{"invalid_question", "Something in that question isn't allowed. Check the label, the kind and the options."}
+		case "23503":
+			return ErrInvalid{"invalid_question", "One of those ticket types isn't part of this event any more. Reload and try again."}
+		}
 	}
 	return err
 }
@@ -131,7 +134,7 @@ func setQuestionLinks(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, 
 // CreateQuestion adds a question at the end of the event's list and records
 // question.created by actor. tx must be scoped to org.
 func CreateQuestion(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor audit.Actor, in QuestionInput) (Question, error) {
-	q := Question{Label: in.Label, Kind: in.Kind, Scope: in.Scope, Required: in.Required, Position: 1,
+	q := Question{Label: in.Label, Kind: in.Kind, Scope: in.Scope, Required: in.Required,
 		Options: slices.Clone(in.Options), AppliesToAll: in.AppliesToAll == nil || *in.AppliesToAll}
 	if err := validateQuestion(&q); err != nil {
 		return Question{}, err
@@ -181,7 +184,8 @@ func ListQuestions(ctx context.Context, tx pgx.Tx, event uuid.UUID) ([]Question,
 }
 
 // UpdateQuestion applies patch under the event lock and records
-// question.updated. A patch that changes nothing writes nothing.
+// question.updated. A patch that changes nothing writes nothing. Position
+// changes only through ReorderQuestions.
 func UpdateQuestion(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor audit.Actor, patch QuestionPatch) (Question, error) {
 	if _, err := lockEvent(ctx, tx, event); err != nil {
 		return Question{}, err
@@ -200,9 +204,6 @@ func UpdateQuestion(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, ac
 	}
 	if patch.Required != nil {
 		q.Required = *patch.Required
-	}
-	if patch.Position != nil {
-		q.Position = *patch.Position
 	}
 	if patch.Kind != nil && *patch.Kind != before.Kind {
 		q.Kind = *patch.Kind
@@ -234,12 +235,12 @@ func UpdateQuestion(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, ac
 			return Question{}, err
 		}
 	}
-	if q.Label == before.Label && q.Kind == before.Kind && q.Scope == before.Scope && q.Required == before.Required && q.Position == before.Position &&
+	if q.Label == before.Label && q.Kind == before.Kind && q.Scope == before.Scope && q.Required == before.Required &&
 		q.AppliesToAll == before.AppliesToAll && slices.Equal(q.Options, before.Options) && slices.Equal(q.AppliesTo, before.AppliesTo) {
 		return before, nil
 	}
 	if _, err := tx.Exec(ctx, `update questions set label = $2, kind = $3, options = $4, required = $5, scope = $6, applies_to_all = $7,
-		position = $8, updated_at = clock_timestamp() where id = $1`, id, q.Label, q.Kind, q.Options, q.Required, q.Scope, q.AppliesToAll, q.Position); err != nil {
+		updated_at = clock_timestamp() where id = $1`, id, q.Label, q.Kind, q.Options, q.Required, q.Scope, q.AppliesToAll); err != nil {
 		return Question{}, questionDBError(err)
 	}
 	if err := setQuestionLinks(ctx, tx, org, event, id, q.AppliesTo); err != nil {

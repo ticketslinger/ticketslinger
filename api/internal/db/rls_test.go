@@ -414,16 +414,18 @@ func TestAuditRowWrittenByKeyNamesTheKey(t *testing.T) {
 	}
 }
 
-// Keys never manage keys, even with raw SQL inside their own scope: they may
-// read their organizer's keys but not mint, upgrade, un-revoke or delete one.
-// A user scope still can.
+// Keys never manage keys, even with raw SQL inside their own scope: a write
+// key may read its organizer's keys but not mint, upgrade, un-revoke or delete
+// one. (A read key can't write anything: TestReadKeyScopeIsReadOnly.) A user
+// scope still can.
 func TestKeyScopeCannotManageKeys(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
 	ua, oa := seedOrg(t, pool, "a@example.com", "org-a")
 	key := seedKey(t, pool, oa, "read", false)
 	revoked := seedKey(t, pool, oa, "write", true)
-	p := db.Principal{KeyID: key, KeyOrg: oa, KeyScope: "read"}
+	writer := seedKey(t, pool, oa, "write", false)
+	p := db.Principal{KeyID: writer, KeyOrg: oa, KeyScope: "write"}
 	inKeyScope := func(q string, args ...any) (int64, error) {
 		var n int64
 		err := db.WithPrincipal(ctx, pool, p, oa, func(tx pgx.Tx, _ string) error {
@@ -440,9 +442,9 @@ func TestKeyScopeCannotManageKeys(t *testing.T) {
 		t.Errorf("key inserting a key: err=%v, want 42501", err)
 	}
 	for name, q := range map[string]string{
-		"upgrade own scope": `update api_keys set scope = 'write' where id = '` + key.String() + `'`,
-		"un-revoke a key":   `update api_keys set revoked_at = null where id = '` + revoked.String() + `'`,
-		"delete a key":      `delete from api_keys where id = '` + revoked.String() + `'`,
+		"upgrade a key":   `update api_keys set scope = 'write' where id = '` + key.String() + `'`,
+		"un-revoke a key": `update api_keys set revoked_at = null where id = '` + revoked.String() + `'`,
+		"delete a key":    `delete from api_keys where id = '` + revoked.String() + `'`,
 	} {
 		n, err := inKeyScope(q)
 		if err != nil || n != 0 {
@@ -458,8 +460,8 @@ func TestKeyScopeCannotManageKeys(t *testing.T) {
 	var seen int
 	if err := db.WithPrincipal(ctx, pool, p, oa, func(tx pgx.Tx, _ string) error {
 		return tx.QueryRow(ctx, `select count(*) from api_keys`).Scan(&seen)
-	}); err != nil || seen != 2 {
-		t.Fatalf("key reading keys: n=%d err=%v, want 2", seen, err)
+	}); err != nil || seen != 3 {
+		t.Fatalf("key reading keys: n=%d err=%v, want 3", seen, err)
 	}
 	err = db.WithOrganizer(ctx, pool, ua, oa, func(tx pgx.Tx, _ string) error {
 		if _, err := tx.Exec(ctx, `insert into api_keys(organizer_id, name, key_hash, prefix, scope)

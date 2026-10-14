@@ -43,7 +43,8 @@ func WithOrganizer(ctx context.Context, pool *pgxpool.Pool, user, org uuid.UUID,
 // WithPrincipal is WithOrganizer for either kind of principal. A key only
 // reaches its own organizer, with role "key:read" or "key:write"; the database
 // independently refuses a revoked key, another organizer, or a transaction
-// that names both a user and a key.
+// that names both a user and a key. A read key's transaction is READ ONLY, so
+// the database refuses its writes too.
 func WithPrincipal(ctx context.Context, pool *pgxpool.Pool, p Principal, org uuid.UUID, fn func(tx pgx.Tx, role string) error) error {
 	if (p.UserID == uuid.Nil) == (p.KeyID == uuid.Nil) {
 		return errors.New("db: a principal is exactly one of a user or a key")
@@ -56,7 +57,11 @@ func WithPrincipal(ctx context.Context, pool *pgxpool.Pool, p Principal, org uui
 			return ErrNotMember
 		}
 	}
-	return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+	var opts pgx.TxOptions
+	if p.KeyScope == "read" {
+		opts.AccessMode = pgx.ReadOnly
+	}
+	return pgx.BeginTxFunc(ctx, pool, opts, func(tx pgx.Tx) error {
 		if p.KeyID != uuid.Nil {
 			if _, err := tx.Exec(ctx,
 				`select set_config('app.api_key_id', $1, true), set_config('app.organizer_id', $2, true)`,

@@ -95,6 +95,14 @@ func (s *server) CreateEvent(ctx context.Context, req CreateEventRequestObject) 
 	}
 	var out CreateEvent201JSONResponse
 	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		// Checked after membership, so a stranger still gets 404. A missing
+		// time decodes as the zero time, year 1.
+		switch {
+		case b.StartsAt.IsZero():
+			return missingField("starts_at", "when the event starts, like 2027-03-01T19:00:00Z")
+		case b.EndsAt.IsZero():
+			return missingField("ends_at", "when the event ends, like 2027-03-01T22:00:00Z")
+		}
 		e, err := catalogue.CreateEvent(ctx, tx, org.ID, actorFrom(ctx), in)
 		out = CreateEvent201JSONResponse(toEvent(e))
 		return err
@@ -508,7 +516,7 @@ func (s *server) GetQuestion(ctx context.Context, req GetQuestionRequestObject) 
 
 func (s *server) UpdateQuestion(ctx context.Context, req UpdateQuestionRequestObject) (UpdateQuestionResponseObject, error) {
 	b := req.Body
-	p := catalogue.QuestionPatch{Label: b.Label, Options: b.Options, Required: b.Required, AppliesToAll: b.AppliesToAll, AppliesTo: b.AppliesTo, Position: b.Position}
+	p := catalogue.QuestionPatch{Label: b.Label, Options: b.Options, Required: b.Required, AppliesToAll: b.AppliesToAll, AppliesTo: b.AppliesTo}
 	if b.Kind != nil {
 		v := string(*b.Kind)
 		p.Kind = &v

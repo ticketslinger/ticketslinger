@@ -3,6 +3,7 @@ package catalogue
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -77,7 +78,9 @@ func scanTT(row pgx.Row) (TicketType, error) {
 }
 
 // validateTT holds the rules the CHECK constraints in 00008 back up.
+// It trims the name first, as validate does for events.
 func validateTT(t *TicketType) error {
+	t.Name = strings.TrimSpace(t.Name)
 	switch {
 	case utf8.RuneCountInString(t.Name) < 1 || utf8.RuneCountInString(t.Name) > 120:
 		return invalid("invalid_name", "Give the ticket type a name of up to 120 characters.")
@@ -109,11 +112,16 @@ func ttDBError(err error) error {
 	return err
 }
 
-// lockEvent locks the scoped organizer's event row, so creates, deletes and
-// going live line up one behind the other. Another tenant's event is
-// ErrNotFound.
+// lockEvent locks the scoped organizer's event row, so child writes (ticket
+// types, quotas, promo codes, questions, reorders) line up one behind the other
+// and behind going live. Another tenant's event is ErrNotFound.
+//
+// FOR NO KEY UPDATE, not FOR UPDATE: the child writes never change the event's
+// keys, and holds and orders (P3) take FOR KEY SHARE on the event through their
+// foreign keys, which FOR UPDATE would block. UpdateEvent and DeleteEvent keep
+// FOR UPDATE, since the slug is a unique key and a delete removes the row.
 func lockEvent(ctx context.Context, tx pgx.Tx, id uuid.UUID) (Event, error) {
-	return scan(tx.QueryRow(ctx, `select `+cols+` from events where id = $1 for update`, id))
+	return scan(tx.QueryRow(ctx, `select `+cols+` from events where id = $1 for no key update`, id))
 }
 
 // CreateTicketType adds a ticket type at the end of the event's list and
@@ -290,11 +298,20 @@ func DeleteTicketType(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, 
 			return ErrConflict{"last_ticket_type_live", "Move the event back to draft before removing its last ticket type."}
 		}
 	}
+	var quotas []uuid.UUID
+	if err := tx.QueryRow(ctx, `select coalesce(array_agg(quota_id order by quota_id), '{}') from quota_ticket_types where ticket_type_id = $1`, id).Scan(&quotas); err != nil {
+		return err
+	}
 	// ponytail: P3 must guard this once tickets are sold.
 	if _, err := tx.Exec(ctx, `delete from ticket_types where id = $1`, id); err != nil {
 		return err
 	}
-	return audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "ticket_type.deleted", EntityType: "ticket_type", EntityID: id, Before: before})
+	// Before lists the quotas it was in, as ticket_type.created's After does.
+	b := struct {
+		TicketType
+		QuotaIDs []uuid.UUID `json:"quota_ids"`
+	}{before, quotas}
+	return audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "ticket_type.deleted", EntityType: "ticket_type", EntityID: id, Before: b})
 }
 
 // ReorderTicketTypes gives the event's ticket types positions 1..n in the

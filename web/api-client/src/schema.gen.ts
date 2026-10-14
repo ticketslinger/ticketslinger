@@ -310,7 +310,7 @@ export interface paths {
         /** @description Any member, or any API key. Soonest first. */
         get: operations["listEvents"];
         put?: never;
-        /** @description Owners and admins, or a write API key. The event starts as a draft. */
+        /** @description Owners and admins, or a write API key. The event starts as a draft. starts_at and ends_at are required (422 missing_field). */
         post: operations["createEvent"];
         delete?: never;
         options?: never;
@@ -333,7 +333,7 @@ export interface paths {
         delete: operations["deleteEvent"];
         options?: never;
         head?: never;
-        /** @description Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed). */
+        /** @description Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed). Going live is refused with 422 event_over once ends_at has passed (an event that has started but not ended can go live), 422 no_ticket_types without a ticket type, and 422 unquotaed_ticket_type while a ticket type has no quota. A live event's ends_at can still change. The slug changes only on a draft (409 slug_locked). */
         patch: operations["updateEvent"];
         trace?: never;
     };
@@ -515,7 +515,7 @@ export interface paths {
         delete: operations["deleteQuestion"];
         options?: never;
         head?: never;
-        /** @description Owners and admins, or a write API key. Send only what changes. Turning a question into a select needs options in the same request (422 options_required_with_kind); turning a select into anything else clears its options. applies_to replaces the whole set when sent. Changing position moves only this question; the others keep theirs. */
+        /** @description Owners and admins, or a write API key. Send only what changes. Turning a question into a select needs options in the same request (422 options_required_with_kind); turning a select into anything else clears its options. applies_to replaces the whole set when sent. Order changes only through the order endpoint. */
         patch: operations["updateQuestion"];
         trace?: never;
     };
@@ -737,7 +737,7 @@ export interface components {
             kind?: "percent" | "amount";
             /**
              * Format: int64
-             * @description percent: basis points, 1 to 10000 (1000 is 10%). amount: cents, up to 10000000 ($100,000).
+             * @description percent: basis points, 0 to 10000 (1000 is 10%). amount: cents, 0 to 10000000 ($100,000). 0 makes an access code: no discount, so unlocks must not be empty (422 bad_discount), on create and on any patch that sends value or unlocks.
              */
             value?: number;
             /** @description null means unlimited. */
@@ -805,8 +805,6 @@ export interface components {
             applies_to_all?: boolean;
             /** @description Ticket types the question covers when applies_to_all is false. On a patch the list replaces the current one. */
             applies_to?: string[];
-            /** @description Patch only. Moves this question; the others keep their positions. */
-            position?: number;
         };
         CreateQuestion: components["schemas"]["QuestionFields"] & {
             label: string;
@@ -829,7 +827,7 @@ export interface components {
             scope: "order" | "ticket";
             applies_to_all: boolean;
             applies_to: string[];
-            /** @description 1 is first. Change it with a PATCH, or all at once with the order endpoint. */
+            /** @description 1 is first. Change it with the order endpoint. */
             position: number;
             /** Format: date-time */
             created_at: string;
@@ -1556,6 +1554,7 @@ export interface operations {
             };
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };

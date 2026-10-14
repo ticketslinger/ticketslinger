@@ -214,10 +214,15 @@ func sameEvent(a, b Event) bool {
 	return a == b
 }
 
-// goLive decides whether a draft may go on sale: it needs at least one
-// ticket type, and every ticket type needs a quota. It runs in the transaction that holds the event's row lock,
-// so a ticket type or quota can't change between the check and the status change.
+// goLive decides whether a draft may go on sale: it must not have ended yet
+// (one that has started is fine), it needs at least one ticket type, and every
+// ticket type needs a quota. It runs in the transaction that holds the event's
+// row lock, so a ticket type or quota can't change between the check and the
+// status change.
 func goLive(ctx context.Context, tx pgx.Tx, e Event) error {
+	if !e.EndsAt.After(time.Now()) {
+		return invalid("event_over", "This event has already ended, so it can't go on sale.")
+	}
 	var n int
 	if err := tx.QueryRow(ctx, `select count(*) from ticket_types where event_id = $1`, e.ID).Scan(&n); err != nil {
 		return err
