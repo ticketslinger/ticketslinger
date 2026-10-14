@@ -2,12 +2,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"net/url"
 	"os"
@@ -16,6 +19,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stripe/stripe-go/v87"
+	"github.com/stripe/stripe-go/v87/webhook"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
 	"github.com/ticketslinger/ticketslinger/api/internal/config"
@@ -83,7 +88,7 @@ func serve() error {
 		return err
 	}
 	defer pool.Close()
-	handler, err := newHandler(cfg, pool, os.Getenv("TS_TEST_MODE") == "1")
+	handler, worker, err := newHandler(cfg, pool, os.Getenv("TS_TEST_MODE") == "1")
 	if err != nil {
 		return err
 	}
@@ -96,7 +101,7 @@ func serve() error {
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
 	workerDone := make(chan struct{})
-	go func() { newWorker(pool, mailer.Log{}, cfg).Run(ctx); close(workerDone) }()
+	go func() { worker.Run(ctx); close(workerDone) }()
 	select {
 	case err := <-errc:
 		return err
@@ -112,48 +117,54 @@ func serve() error {
 	return err
 }
 
-// newWorker is the job worker with every handler registered.
-func newWorker(pool *pgxpool.Pool, m mailer.Mailer, cfg config.Config) *jobs.Worker {
-	// Order emails only read orders and rebuild links: no fee or provider needed.
-	shop := &sales.Service{Pool: pool, StorefrontURL: cfg.StorefrontURL, SecretKey: cfg.SecretKey}
+// newWorker is the job worker with every handler registered. It sends mail
+// through m and refunds through pay, the same ones the API uses.
+func newWorker(pool *pgxpool.Pool, m mailer.Mailer, cfg config.Config, pay plugin.PaymentProvider) *jobs.Worker {
+	// Order emails only read orders and rebuild links; refunds need the provider.
+	shop := &sales.Service{Pool: pool, StorefrontURL: cfg.StorefrontURL, SecretKey: cfg.SecretKey, Payments: pay}
 	return &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{
 		"send_email":               jobs.SendEmail(m),
 		sales.OrderConfirmationJob: shop.OrderConfirmation(m),
+		sales.RefundPaymentJob:     sales.RefundPayment(shop),
 	}}
 }
 
-// newHandler builds the API. In test mode it sends mail to memory and adds
-// GET /__test/last-email for the end-to-end suite, and only on a loopback address.
-func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Handler, error) {
+// newHandler builds the API and its job worker, which share one mailer and
+// one payment provider. In test mode both send mail to memory, and the API
+// adds GET /__test/last-email and POST /__test/stripe/pay-latest for the
+// end-to-end suite, and only on a loopback address.
+func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Handler, *jobs.Worker, error) {
 	var mail mailer.Mailer = mailer.Log{}
 	mem := &mailer.Memory{}
 	if testMode {
 		// A same-host reverse proxy also reaches the API on loopback, so the
 		// public URLs have to be local too; production's https URLs fail here.
 		if host, _, err := net.SplitHostPort(cfg.HTTPAddr); err != nil || !isLocal(host) {
-			return nil, fmt.Errorf("TS_TEST_MODE needs a loopback TS_HTTP_ADDR, not %q", cfg.HTTPAddr)
+			return nil, nil, fmt.Errorf("TS_TEST_MODE needs a loopback TS_HTTP_ADDR, not %q", cfg.HTTPAddr)
 		}
 		for name, v := range map[string]string{"TS_PUBLIC_URL": cfg.PublicURL, "TS_DASHBOARD_ORIGIN": cfg.DashboardOrigin} {
 			if u, err := url.Parse(v); err != nil || u.Scheme != "http" || !isLocal(u.Hostname()) {
-				return nil, fmt.Errorf("TS_TEST_MODE needs an http://localhost or loopback %s, not %q", name, v)
+				return nil, nil, fmt.Errorf("TS_TEST_MODE needs an http://localhost or loopback %s, not %q", name, v)
 			}
 		}
 		// Test mode never touches real money, even by mistake.
 		for name, key := range map[string]string{"TS_STRIPE_SECRET_KEY": cfg.StripeSecretKey, "TS_STRIPE_PUBLISHABLE_KEY": cfg.StripePublishableKey} {
 			if mode, _ := config.StripeMode(key, "sk_", "rk_", "pk_"); mode == "live" {
-				return nil, fmt.Errorf("TS_TEST_MODE refuses a live %s; use a test key or none", name)
+				return nil, nil, fmt.Errorf("TS_TEST_MODE refuses a live %s; use a test key or none", name)
 			}
 		}
 		mail = mem
 	}
+	pay := paymentProvider(cfg, testMode)
 	ts := &turnstile.Verifier{Secret: cfg.TurnstileSecret, URL: cfg.TurnstileVerifyURL, Client: &http.Client{Timeout: 2 * time.Second}}
 	h := httpapi.New(httpapi.Deps{Pool: pool, Auth: auth.NewService(pool, mail, auth.Options{RPID: cfg.WebAuthnRPID, Origin: cfg.DashboardOrigin, SecretKey: cfg.SecretKey,
 		Turnstile: ts}),
-		Config: cfg, Payments: paymentProvider(cfg, testMode), Turnstile: ts})
+		Config: cfg, Payments: pay, Turnstile: ts})
 	if testMode {
-		h = testMail(h, mem)
+		fake, _ := pay.(*payments.Fake)
+		h = testRoutes(h, mem, fake, cfg.StripeWebhookSecret)
 	}
-	return h, nil
+	return h, newWorker(pool, mail, cfg, pay), nil
 }
 
 // paymentProvider is the fake in test mode, Stripe when a secret key is set,
@@ -168,26 +179,59 @@ func paymentProvider(cfg config.Config, testMode bool) plugin.PaymentProvider {
 	return nil
 }
 
-// testMail serves the link in the newest message to ?to=, so a browser test
-// can follow the verification email. Anything that came through a proxy gets
-// the same 404 as when the route isn't mounted.
-func testMail(api http.Handler, m *mailer.Memory) http.Handler {
+// testRoutes adds the end-to-end suite's helpers to api. Anything that came
+// through a proxy gets the same 404 as when they aren't mounted.
+//
+// GET /__test/last-email serves the link in the newest message to ?to=, so
+// a browser test can follow an email.
+//
+// POST /__test/stripe/pay-latest is what Stripe would send when the fake's
+// newest payment succeeds, signed with our own webhook secret and served
+// through the real webhook route.
+func testRoutes(api http.Handler, m *mailer.Memory, fake *payments.Fake, webhookSecret string) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/", api)
 	mux.HandleFunc("GET /__test/last-email", func(w http.ResponseWriter, r *http.Request) {
-		proxied := false
-		for _, h := range []string{"X-Real-IP", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded"} {
-			proxied = proxied || r.Header.Get(h) != ""
-		}
 		link := m.LastLink(r.URL.Query().Get("to"))
-		if proxied || link == "" {
+		if proxied(r) || link == "" {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = fmt.Fprint(w, link)
 	})
+	mux.HandleFunc("POST /__test/stripe/pay-latest", func(w http.ResponseWriter, r *http.Request) {
+		var pi plugin.PaymentIntent
+		ok := fake != nil
+		if ok {
+			pi, ok = fake.Latest()
+		}
+		if proxied(r) || !ok {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := json.Marshal(map[string]any{
+			"id": "evt_test_" + pi.ID, "object": "event", "type": "payment_intent.succeeded", "api_version": stripe.APIVersion,
+			"account": pi.Account, "created": time.Now().Unix(),
+			"data": map[string]any{"object": map[string]any{"id": pi.ID, "object": "payment_intent", "amount": pi.AmountCents,
+				"currency": "usd", "status": "succeeded"}},
+		})
+		signed := webhook.GenerateTestSignedPayload(&webhook.UnsignedPayload{Payload: body, Secret: webhookSecret})
+		req := httptest.NewRequestWithContext(r.Context(), http.MethodPost, "/v1/webhooks/stripe", bytes.NewReader(signed.Payload))
+		req.Header.Set("Stripe-Signature", signed.Header)
+		api.ServeHTTP(w, req)
+	})
 	return mux
+}
+
+// proxied reports whether r came through a reverse proxy.
+func proxied(r *http.Request) bool {
+	for _, h := range []string{"X-Real-IP", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded"} {
+		if r.Header.Get(h) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // isLocal reports whether host is "localhost" or a loopback IP.

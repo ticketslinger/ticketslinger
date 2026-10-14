@@ -285,3 +285,27 @@ func (s *server) PayCheckout(ctx context.Context, req PayCheckoutRequestObject) 
 	}
 	return out, nil
 }
+
+// GetOrder counts the read against the caller's address, then shows the
+// order to whoever holds its token. privateAnswers sets the no-store and
+// no-referrer headers.
+func (s *server) GetOrder(ctx context.Context, req GetOrderRequestObject) (GetOrderResponseObject, error) {
+	if err := allow(ctx, s.orderLimit); err != nil {
+		return nil, err
+	}
+	o, err := s.Sales.Order(ctx, req.Code, req.Params.Token)
+	if err != nil {
+		return nil, salesError(err)
+	}
+	out := Order{Code: o.Code, Status: OrderStatus(o.Status), Email: o.Email, Tickets: []OrderTicket{}}
+	e := o.Event
+	out.Event.Name, out.Event.StartsAt, out.Event.EndsAt, out.Event.Timezone = e.Name, e.StartsAt, e.EndsAt, e.Timezone
+	out.Event.VenueName, out.Event.VenueAddress, out.Event.OrganizerName = e.VenueName, e.VenueAddress, e.Organizer
+	out.Totals.SubtotalCents, out.Totals.DiscountCents, out.Totals.TaxCents = o.SubtotalCents, o.DiscountCents, o.TaxCents
+	out.Totals.FeeCents, out.Totals.TotalCents = o.FeeCents, o.TotalCents
+	for _, t := range o.Tickets {
+		out.Tickets = append(out.Tickets, OrderTicket{Id: t.ID, TicketTypeName: t.TicketTypeName, AttendeeName: t.AttendeeName,
+			Status: OrderTicketStatus(t.Status), Qr: t.QR})
+	}
+	return GetOrder200JSONResponse(out), nil
+}

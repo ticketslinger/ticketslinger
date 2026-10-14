@@ -296,3 +296,41 @@ func TestSystemCanLockButNotResizeQuotas(t *testing.T) {
 		t.Fatalf("system resizing a quota: %v, want 42501", err)
 	}
 }
+
+// The system appends audit rows of its own, for the organizer it acts for,
+// naming nobody; it still can't read the log.
+func TestSystemAppendsOnlyItsOwnAuditRows(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	a, _, _ := seedOrganizer(t, pool, "org-a")
+	b, _, _ := seedOrganizer(t, pool, "org-b")
+	insert := func(org uuid.UUID, system bool, user string) error {
+		return systemRun(ctx, pool, a, `insert into audit_log(organizer_id, actor_system, actor_user_id, action, entity_type, entity_id)
+			values ($1, $2, $3::uuid, 'order.cancelled_late', 'order', $1)`, org, system, user)
+	}
+	if err := insert(a, true, ""); err != nil {
+		t.Fatalf("system row for A: %v", err)
+	}
+	var pg *pgconn.PgError
+	for name, err := range map[string]error{
+		"for another organizer": insert(b, true, ""),
+		"not marked as its own": insert(a, false, ""),
+		"naming a user":         insert(a, true, "0190a0a0-0000-7000-8000-000000000001"),
+	} {
+		if !errors.As(err, &pg) || pg.Code != "42501" && pg.Code != "23514" {
+			t.Errorf("system audit row %s: %v, want refused", name, err)
+		}
+	}
+}
+
+func systemRun(ctx context.Context, pool *pgxpool.Pool, org uuid.UUID, sql string, args ...any) error {
+	for i, a := range args {
+		if a == "" {
+			args[i] = nil
+		}
+	}
+	return system.Run(ctx, pool, org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, sql, args...)
+		return err
+	})
+}

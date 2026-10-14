@@ -2,14 +2,22 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/stripe/stripe-go/v87"
+	"github.com/stripe/stripe-go/v87/webhook"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/config"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
+	"github.com/ticketslinger/ticketslinger/api/internal/payments"
+	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 )
 
 func TestVersionIsSet(t *testing.T) {
@@ -36,7 +44,7 @@ func get(t *testing.T, h http.Handler, path string, header ...string) (int, stri
 }
 
 func TestTestMailEndpointIsAbsentWithoutTestMode(t *testing.T) {
-	h, err := newHandler(config.Config{HTTPAddr: "127.0.0.1:3000"}, nil, false)
+	h, _, err := newHandler(config.Config{HTTPAddr: "127.0.0.1:3000"}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,12 +55,12 @@ func TestTestMailEndpointIsAbsentWithoutTestMode(t *testing.T) {
 
 func TestTestModeRefusesNonLoopbackAddress(t *testing.T) {
 	for _, addr := range []string{"0.0.0.0:3000", ":3000", "[::]:3000", "192.168.1.5:3000", "example.com:3000"} {
-		if _, err := newHandler(local(addr), nil, true); err == nil {
+		if _, _, err := newHandler(local(addr), nil, true); err == nil {
 			t.Errorf("%s: test mode started on a non-loopback address", addr)
 		}
 	}
 	for _, addr := range []string{"127.0.0.1:3000", "[::1]:3000", "localhost:3000"} {
-		if _, err := newHandler(local(addr), nil, true); err != nil {
+		if _, _, err := newHandler(local(addr), nil, true); err != nil {
 			t.Errorf("%s: %v", addr, err)
 		}
 	}
@@ -70,7 +78,7 @@ func TestTestModeRefusesPublicURLs(t *testing.T) {
 	} {
 		c := local("127.0.0.1:3001")
 		mod(&c)
-		if _, err := newHandler(c, nil, true); err == nil {
+		if _, _, err := newHandler(c, nil, true); err == nil {
 			t.Errorf("%s: test mode started", name)
 		}
 	}
@@ -79,7 +87,7 @@ func TestTestModeRefusesPublicURLs(t *testing.T) {
 func TestTestMailRefusesProxiedRequests(t *testing.T) {
 	m := &mailer.Memory{}
 	_ = m.Send(context.Background(), "a@example.com", "Confirm", "Open http://localhost:3002/verify-email?token=t")
-	h := testMail(http.NotFoundHandler(), m)
+	h := testRoutes(http.NotFoundHandler(), m, nil, "")
 	for _, hdr := range []string{"X-Real-IP", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded"} {
 		if code, body := get(t, h, "/__test/last-email?to=a@example.com", hdr, "203.0.113.9"); code != 404 {
 			t.Errorf("%s: got %d %q, want 404", hdr, code, body)
@@ -93,7 +101,7 @@ func TestTestMailReturnsTheNewestLinkForThatAddress(t *testing.T) {
 	_ = m.Send(ctx, "a@example.com", "Confirm", "Open http://localhost:3002/verify-email?token=old to confirm.")
 	_ = m.Send(ctx, "a@example.com", "Confirm", "Open http://localhost:3002/verify-email?token=new to confirm.")
 	_ = m.Send(ctx, "b@example.com", "Confirm", "Open http://localhost:3002/verify-email?token=bee to confirm.")
-	h := testMail(http.NotFoundHandler(), m)
+	h := testRoutes(http.NotFoundHandler(), m, nil, "")
 
 	if code, body := get(t, h, "/__test/last-email?to=a@example.com"); code != 200 || body != "http://localhost:3002/verify-email?token=new" {
 		t.Fatalf("got %d %q", code, body)
@@ -105,13 +113,86 @@ func TestTestMailReturnsTheNewestLinkForThatAddress(t *testing.T) {
 
 func TestWorkerSendsQueuedEmail(t *testing.T) {
 	m := &mailer.Memory{}
-	w := newWorker(nil, m, config.Config{})
+	w := newWorker(nil, m, config.Config{}, nil)
 	h := w.Handlers["send_email"]
-	if h == nil || w.Handlers["order_confirmation"] == nil {
-		t.Fatal("serve's worker is missing the send_email or order_confirmation handler")
+	if h == nil || w.Handlers["order_confirmation"] == nil || w.Handlers["refund_payment"] == nil {
+		t.Fatal("serve's worker is missing the send_email, order_confirmation or refund_payment handler")
 	}
 	if err := h(context.Background(), []byte(`{"to":"a@example.com","subject":"Hi","text":"Hello"}`)); err != nil || len(m.Sent) != 1 {
 		t.Fatalf("err=%v sent=%d", err, len(m.Sent))
+	}
+}
+
+// In test mode the worker mails through the memory /__test/last-email reads,
+// so the end-to-end suite sees order emails too.
+func TestTestModeWorkerMailIsVisible(t *testing.T) {
+	h, w, err := newHandler(local("127.0.0.1:3001"), nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Handlers["send_email"](context.Background(),
+		[]byte(`{"to":"b@example.com","subject":"Tickets","text":"Here: http://localhost:3001/orders/TS-7K2QF?t=abc"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := get(t, h, "/__test/last-email?to=b@example.com"); code != 200 || body != "http://localhost:3001/orders/TS-7K2QF?t=abc" {
+		t.Fatalf("got %d %q, want the worker's link", code, body)
+	}
+}
+
+// pay-latest signs what Stripe would send for the fake's newest intent and
+// serves it through the API's own webhook route.
+func TestPayLatestSignsTheNewestIntent(t *testing.T) {
+	fake := payments.NewFake()
+	if _, err := fake.CreatePaymentIntent(context.Background(), plugin.PaymentIntentInput{Account: "acct_fake1", AmountCents: 2600, IdempotencyKey: "pi-1"}); err != nil {
+		t.Fatal(err)
+	}
+	pi, _ := fake.Latest()
+	var got stripe.Event
+	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		ev, err := webhook.ConstructEventWithOptions(body, r.Header.Get("Stripe-Signature"), "whsec_e2e", webhook.ConstructEventOptions{Tolerance: 5 * time.Minute})
+		if err != nil || r.Method != "POST" || r.URL.Path != "/v1/webhooks/stripe" {
+			http.Error(w, fmt.Sprint(err), 400)
+			return
+		}
+		got = ev
+	})
+	h := testRoutes(api, &mailer.Memory{}, fake, "whsec_e2e")
+	post := func(header ...string) int {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/__test/stripe/pay-latest", nil)
+		for i := 0; i+1 < len(header); i += 2 {
+			req.Header.Set(header[i], header[i+1])
+		}
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for _, hdr := range []string{"X-Real-IP", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded"} {
+		if code := post(hdr, "203.0.113.9"); code != 404 {
+			t.Errorf("%s: got %d, want 404", hdr, code)
+		}
+	}
+	if code := post(); code != 200 {
+		t.Fatalf("pay-latest: %d, want 200", code)
+	}
+	var obj struct {
+		ID       string `json:"id"`
+		Amount   int64  `json:"amount"`
+		Currency string `json:"currency"`
+		Status   string `json:"status"`
+	}
+	_ = json.Unmarshal(got.Data.Raw, &obj)
+	if got.Type != "payment_intent.succeeded" || got.Account != "acct_fake1" || obj.ID != pi.ID || obj.Amount != 2600 || obj.Currency != "usd" || obj.Status != "succeeded" {
+		t.Fatalf("event = %+v %+v", got, obj)
+	}
+	if code := post(); code != 200 {
+		t.Fatal("pay-latest twice")
+	}
+	// Before any payment there's nothing to pay.
+	rec := httptest.NewRecorder()
+	testRoutes(api, &mailer.Memory{}, payments.NewFake(), "whsec_e2e").ServeHTTP(rec, httptest.NewRequest("POST", "/__test/stripe/pay-latest", nil))
+	if rec.Code != 404 {
+		t.Fatalf("pay-latest with no payment: %d, want 404", rec.Code)
 	}
 }
 
@@ -123,18 +204,18 @@ func TestTestModeRefusesLiveStripeKeys(t *testing.T) {
 	} {
 		cfg := local("127.0.0.1:3001")
 		cfg.StripeSecretKey, cfg.StripePublishableKey, cfg.StripeWebhookSecret = c.StripeSecretKey, c.StripePublishableKey, c.StripeWebhookSecret
-		if _, err := newHandler(cfg, nil, true); err == nil {
+		if _, _, err := newHandler(cfg, nil, true); err == nil {
 			t.Errorf("%+v: test mode started with a live key", c)
 		} else if strings.Contains(err.Error(), "_abc") {
 			t.Errorf("error %q repeats the key", err)
 		}
-		if _, err := newHandler(cfg, nil, false); err != nil {
+		if _, _, err := newHandler(cfg, nil, false); err != nil {
 			t.Errorf("%+v outside test mode: %v", c, err)
 		}
 	}
 	cfg := local("127.0.0.1:3001")
 	cfg.StripeSecretKey, cfg.StripePublishableKey, cfg.StripeWebhookSecret = "sk_test_abc", "pk_test_abc", "whsec_e2e"
-	if _, err := newHandler(cfg, nil, true); err != nil {
+	if _, _, err := newHandler(cfg, nil, true); err != nil {
 		t.Fatalf("test keys in test mode: %v", err)
 	}
 }
