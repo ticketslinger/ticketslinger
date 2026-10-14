@@ -36,7 +36,7 @@ func TestCreateListResolveAudit(t *testing.T) {
 	if err != nil || o.Role != "owner" || o.ID == uuid.Nil {
 		t.Fatalf("create: %+v %v", o, err)
 	}
-	if _, err := svc.Create(ctx, bob, "Other", "ACME"); !errors.Is(err, organizers.ErrSlugTaken) {
+	if _, err := svc.Create(ctx, bob, "Other", "acme"); !errors.Is(err, organizers.ErrSlugTaken) {
 		t.Fatalf("duplicate slug: %v", err)
 	}
 	if l, err := svc.ListForUser(ctx, ann); err != nil || len(l) != 1 || l[0].Slug != "acme" || l[0].Role != "owner" {
