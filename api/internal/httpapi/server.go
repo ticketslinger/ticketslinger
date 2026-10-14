@@ -47,8 +47,9 @@ type Deps struct {
 type server struct {
 	Deps
 	public map[string]bool // mux patterns ("POST /v1/auth/login") whose spec says security: []
-	// Per client address (ratelimit.AddrKey): checkouts created, and pay calls.
-	checkoutLimit, payLimit *ratelimit.Limiter
+	// Per client address (ratelimit.AddrKey): checkouts created, pay calls,
+	// and storefront reads that try a code.
+	checkoutLimit, payLimit, codeLimit *ratelimit.Limiter
 }
 
 func New(d Deps) http.Handler {
@@ -63,7 +64,8 @@ func New(d Deps) http.Handler {
 			Payments: d.Payments, StorefrontURL: d.Config.StorefrontURL, SecretKey: d.Config.SecretKey}
 	}
 	noStore := noStoreRoutes()
-	s := &server{Deps: d, public: publicRoutes(), checkoutLimit: ratelimit.New(10, time.Minute), payLimit: ratelimit.New(20, time.Minute)}
+	s := &server{Deps: d, public: publicRoutes(), checkoutLimit: ratelimit.New(10, time.Minute), payLimit: ratelimit.New(20, time.Minute),
+		codeLimit: ratelimit.New(30, time.Minute)}
 	strict := NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc:  func(w http.ResponseWriter, r *http.Request, err error) { writeBadRequest(w, r, err) },
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) { writeError(w, err) },

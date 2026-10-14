@@ -56,7 +56,6 @@ type pendingOrder struct {
 	ID                   uuid.UUID
 	Code, Account        string
 	TotalCents, FeeCents int64
-	EventName            string
 	Tickets              int
 	Payment              *payment // set when an earlier call made the intent
 }
@@ -91,21 +90,21 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 		if err != nil {
 			return err
 		}
-		if q.TotalCents > 0 && q.TotalCents < pricing.MinimumChargeCents {
-			return errBelowMinimum
-		}
-		account := ""
-		if q.TotalCents > 0 {
-			// Stripe can switch charges off after the hold (account.updated).
-			if account, err = s.paymentsReady(ctx, tx, org); err != nil {
-				return err
-			}
-		}
 		order, err = upsertPendingOrder(ctx, tx, org, c, q, clean)
 		if err != nil {
 			return err
 		}
-		order.Account, order.EventName = account, c.eventName
+		// Every decision from here on is the stored order's, the amount the
+		// intent was (or will be) made for. Refusing rolls the order back.
+		if order.TotalCents > 0 && order.TotalCents < pricing.MinimumChargeCents {
+			return errBelowMinimum
+		}
+		if order.TotalCents > 0 {
+			// Stripe can switch charges off after the hold (account.updated).
+			if order.Account, err = s.paymentsReady(ctx, tx, org); err != nil {
+				return err
+			}
+		}
 		for _, it := range items {
 			order.Tickets += it.Quantity
 		}
@@ -114,7 +113,7 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 			extended_at = coalesce(extended_at, statement_timestamp()) where id = $1`, c.id); err != nil {
 			return err
 		}
-		if q.TotalCents == 0 {
+		if order.TotalCents == 0 {
 			if _, err := s.confirmOrder(ctx, tx, org, order.ID); err != nil {
 				return err
 			}
@@ -131,7 +130,7 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 	// Outside the transaction: never hold quota or checkout locks across a network call.
 	pi, err := s.Payments.CreatePaymentIntent(ctx, plugin.PaymentIntentInput{
 		Account: order.Account, AmountCents: order.TotalCents, ApplicationFeeCents: order.FeeCents,
-		Description:    order.EventName + ": " + plural(order.Tickets, "ticket"),
+		Description:    "Order " + order.Code + ": " + plural(order.Tickets, "ticket"), // stable, like the key
 		IdempotencyKey: "pi-" + order.ID.String(),
 		Metadata:       map[string]string{"order_id": order.ID.String(), "order_code": order.Code},
 	})
@@ -139,16 +138,24 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 		slog.ErrorContext(ctx, "payment intent", "order", order.ID, "err", err)
 		return PaymentStart{}, ErrPaymentsUnavailable
 	}
+	// A Pay running alongside may have stored its intent first: answer with
+	// whatever the row holds, so every caller gets the same payment.
+	var p payment
 	err = system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `insert into payments (organizer_id, order_id, provider, stripe_account_id, payment_intent_id, client_secret, amount_cents, application_fee_cents)
-			values ($1, $2, $3, $4, $5, $6, $7, $8) on conflict (order_id) do nothing`,
-			org, order.ID, s.Payments.Name(), pi.Account, pi.ID, pi.ClientSecret, order.TotalCents, order.FeeCents)
+		err := tx.QueryRow(ctx, `insert into payments (organizer_id, order_id, provider, stripe_account_id, payment_intent_id, client_secret, amount_cents, application_fee_cents)
+			values ($1, $2, $3, $4, $5, $6, $7, $8) on conflict (order_id) do nothing
+			returning payment_intent_id, client_secret, stripe_account_id`,
+			org, order.ID, s.Payments.Name(), pi.Account, pi.ID, pi.ClientSecret, order.TotalCents, order.FeeCents).Scan(&p.IntentID, &p.ClientSecret, &p.Account)
+		if errors.Is(err, pgx.ErrNoRows) {
+			err = tx.QueryRow(ctx, `select payment_intent_id, client_secret, stripe_account_id from payments where order_id = $1`, order.ID).
+				Scan(&p.IntentID, &p.ClientSecret, &p.Account)
+		}
 		return err
 	})
 	if err != nil {
 		return PaymentStart{}, err
 	}
-	return s.start(order, payment{IntentID: pi.ID, ClientSecret: pi.ClientSecret, Account: pi.Account}), nil
+	return s.start(order, p), nil
 }
 
 func plural(n int, word string) string {
@@ -191,9 +198,9 @@ func goodEmail(e string) bool {
 }
 
 type lockedCheckout struct {
-	id, event          uuid.UUID
-	promo              *promo
-	feeMode, eventName string
+	id, event uuid.UUID
+	promo     *promo
+	feeMode   string
 }
 
 // lockCheckout locks the open checkout with this token hash.
@@ -204,11 +211,11 @@ func lockCheckout(ctx context.Context, tx pgx.Tx, hash []byte) (lockedCheckout, 
 	var status, code string
 	var expired bool
 	err := tx.QueryRow(ctx, `select c.id, c.event_id, c.status, c.expires_at <= statement_timestamp(), c.promo_code_id,
-			coalesce(p.code, ''), coalesce(p.kind, ''), coalesce(p.value, 0), e.fee_mode, e.name,
+			coalesce(p.code, ''), coalesce(p.kind, ''), coalesce(p.value, 0), e.fee_mode,
 			coalesce((select o.code from orders o where o.checkout_id = c.id), '')
 		from checkouts c join events e on e.id = c.event_id left join promo_codes p on p.id = c.promo_code_id
 		where c.token_hash = $1 for update of c`, hash).
-		Scan(&c.id, &c.event, &status, &expired, &promoID, &p.code, &p.kind, &p.value, &c.feeMode, &c.eventName, &code)
+		Scan(&c.id, &c.event, &status, &expired, &promoID, &p.code, &p.kind, &p.value, &c.feeMode, &code)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return c, catalogue.ErrNotFound // purged since checkout_scope looked
@@ -369,6 +376,10 @@ func upsertPendingOrder(ctx context.Context, tx pgx.Tx, org uuid.UUID, c lockedC
 	err = tx.QueryRow(ctx, `update orders set email = $2, details = $3 where checkout_id = $1 returning id, code, total_cents, fee_cents`,
 		c.id, d.Email, details).Scan(&o.ID, &o.Code, &o.TotalCents, &o.FeeCents)
 	switch {
+	case err == nil && (o.TotalCents != q.TotalCents || o.FeeCents != q.FeeCents):
+		// The catalogue's guards should make this impossible; never charge,
+		// or confirm as free, an amount the buyer wasn't shown.
+		return o, errPriceChanged
 	case err == nil:
 		var p payment
 		err := tx.QueryRow(ctx, `select payment_intent_id, client_secret, stripe_account_id from payments where order_id = $1`, o.ID).

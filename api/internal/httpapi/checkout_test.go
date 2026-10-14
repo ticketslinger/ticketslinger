@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -173,27 +174,108 @@ func TestCheckoutNeedsTurnstileWhenConfigured(t *testing.T) {
 	}
 }
 
-func TestCheckoutIdempotencyKeyGivesOneCheckout(t *testing.T) {
+// createCheckout keeps no response: the body holds the plaintext token. A
+// duplicate in flight is still refused, and a retry later runs again.
+func TestCheckoutTokensAreNeverKept(t *testing.T) {
 	s := newShop(t, nil)
+	ctx := context.Background()
+	owner := testdb.Owner(t, s.pool)
+	// Hold Hall's lock so the first checkout waits inside the handler.
+	lock, err := owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lock.Exec(ctx, `select 1 from quotas for update`); err != nil {
+		t.Fatal(err)
+	}
 	key := uuid.NewString()
-	first := s.must(s.send("", key, "POST", "/v1/checkouts", s.cart(s.f["ticketType"], 1, "")), 201)
-	second := s.must(s.send("", key, "POST", "/v1/checkouts", s.cart(s.f["ticketType"], 1, "")), 201)
-	if first["token"] != second["token"] || first["id"] != second["id"] {
-		t.Fatalf("same key, two checkouts: %v / %v", first["token"], second["token"])
+	type answer struct {
+		status int
+		body   map[string]any
+	}
+	done := make(chan answer, 1)
+	go func() {
+		req, _ := http.NewRequest("POST", s.srv.URL+"/v1/checkouts", strings.NewReader(s.cart(s.f["ticketType"], 1, "")))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", key)
+		res, err := s.client.Do(req)
+		if err != nil {
+			done <- answer{}
+			return
+		}
+		defer func() { _ = res.Body.Close() }()
+		var b map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&b)
+		done <- answer{res.StatusCode, b}
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		var waiting int
+		if err := owner.QueryRow(ctx, `select count(*) from pg_locks where not granted`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the first checkout never waited on the quota lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if res := s.send("", key, "POST", "/v1/checkouts", s.cart(s.f["ticketType"], 1, "")); res.StatusCode != 409 || s.errorCode(res) != "idempotency_in_progress" {
+		t.Fatalf("duplicate in flight: %d %q, want 409 idempotency_in_progress", res.StatusCode, s.errorCode(res))
+	}
+	_ = lock.Rollback(ctx)
+	first := <-done
+	token, _ := first.body["token"].(string)
+	if first.status != 201 || token == "" {
+		t.Fatalf("first checkout: %d %v", first.status, first.body)
+	}
+	again := s.must(s.send("", key, "POST", "/v1/checkouts", s.cart(s.f["ticketType"], 1, "")), 201)
+	if again["token"] == token {
+		t.Fatal("a retry replayed the first checkout's token")
 	}
 	var n int
-	if err := testdb.Owner(t, s.pool).QueryRow(context.Background(), `select count(*) from checkouts`).Scan(&n); err != nil || n != 1 {
-		t.Fatalf("%d checkouts (%v), want 1", n, err)
+	if err := owner.QueryRow(ctx, `select count(*) from idempotency_keys
+		where convert_from(coalesce(body, ''), 'UTF8') like '%' || $1 || '%' or convert_from(coalesce(body, ''), 'UTF8') like '%' || $2 || '%'`,
+		token, again["token"]).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("%d kept responses hold a checkout token (%v), want none", n, err)
 	}
-	// Pay keeps nothing: its answer carries the client secret.
-	token := first["token"].(string)
+	// Pay keeps nothing either: its answer carries the client secret.
 	payKey := uuid.NewString()
 	a := s.must(s.send("", payKey, "POST", "/v1/checkouts/"+token+"/pay", `{"email":"buyer@example.com"}`), 200)
 	res := s.send("", payKey, "POST", "/v1/checkouts/"+token+"/pay", `{"email":"buyer@example.com"}`)
 	if b := s.must(res, 200); res.Header.Get("Idempotent-Replayed") != "" || b["client_secret"] != a["client_secret"] {
 		t.Fatalf("pay retried with its key: replayed %q, %v", res.Header.Get("Idempotent-Replayed"), b)
 	}
-	if err := testdb.Owner(t, s.pool).QueryRow(context.Background(), `select count(*) from idempotency_keys where convert_from(coalesce(body, ''), 'UTF8') like '%secret%'`).Scan(&n); err != nil || n != 0 {
+	if err := owner.QueryRow(ctx, `select count(*) from idempotency_keys where convert_from(coalesce(body, ''), 'UTF8') like '%secret%'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("%d kept responses carry a secret (%v), want none", n, err)
 	}
+}
+
+func TestStorefrontCodeGuessesAreRateLimited(t *testing.T) {
+	s := newShop(t, nil)
+	for i := 0; i < 30; i++ {
+		s.must(s.send("203.0.113.5", "", "GET", fmt.Sprintf("/v1/storefront/acme/gala?code=GUESS%d", i), ""), 200)
+	}
+	if res := s.send("203.0.113.5", "", "GET", "/v1/storefront/acme/gala?code=EARLY", ""); res.StatusCode != 429 || s.errorCode(res) != "rate_limited" {
+		t.Fatalf("31st code from one address: %d %q, want 429", res.StatusCode, s.errorCode(res))
+	}
+	s.must(s.send("203.0.113.5", "", "GET", "/v1/storefront/acme/gala", ""), 200) // no code, no limit
+	if b := s.must(s.send("198.51.100.4", "", "GET", "/v1/storefront/acme/gala?code=early", ""), 200); b["promo"] == nil {
+		t.Fatalf("another address with a good code: %v", b["promo"])
+	}
+}
+
+func TestPaysAreRateLimitedPerAddress(t *testing.T) {
+	s := newShop(t, nil)
+	token := s.must(s.send("", "", "POST", "/v1/checkouts", s.cart(s.f["ticketType"], 1, "")), 201)["token"].(string)
+	for i := 0; i < 20; i++ {
+		if res := s.send("203.0.113.6", "", "POST", "/v1/checkouts/"+token+"/pay", `{"email":"nope"}`); res.StatusCode != 422 {
+			t.Fatalf("pay %d: %d, want 422", i+1, res.StatusCode)
+		}
+	}
+	if res := s.send("203.0.113.6", "", "POST", "/v1/checkouts/"+token+"/pay", `{"email":"buyer@example.com"}`); res.StatusCode != 429 || s.errorCode(res) != "rate_limited" {
+		t.Fatalf("21st pay from one address: %d %q, want 429", res.StatusCode, s.errorCode(res))
+	}
+	s.must(s.send("198.51.100.4", "", "POST", "/v1/checkouts/"+token+"/pay", `{"email":"buyer@example.com"}`), 200)
 }

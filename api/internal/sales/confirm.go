@@ -13,7 +13,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
+	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/pricing"
+	"github.com/ticketslinger/ticketslinger/api/internal/system"
 )
 
 // confirmOrder turns a pending order into a paid one if its tickets still
@@ -23,7 +25,8 @@ import (
 // tickets from orders.quote (16 random bytes each), write answers and
 // attendee names from orders.details, used_count + 1 on the promo, delete the
 // holds, checkout completed, order paid with paid_at and magic_token_hash =
-// sha256(orderToken(...)), and a send_email job with the link. An order that
+// sha256(orderToken(...)), and an order_confirmation job that names the
+// order (never the link: see OrderConfirmation). An order that
 // isn't pending is a no-op. Task 11 adds the branch for "doesn't fit".
 func (s *Service) confirmOrder(ctx context.Context, tx pgx.Tx, org, orderID uuid.UUID) (paid bool, err error) {
 	var checkout *uuid.UUID
@@ -38,16 +41,13 @@ func (s *Service) confirmOrder(ctx context.Context, tx pgx.Tx, org, orderID uuid
 		}
 	}
 	var o struct {
-		status, email, code string
-		event               uuid.UUID
-		promo               *uuid.UUID
-		quote, details      []byte
-		eventName, zone     string
-		startsAt            time.Time
+		status         string
+		event          uuid.UUID
+		promo          *uuid.UUID
+		quote, details []byte
 	}
-	if err := tx.QueryRow(ctx, `select o.status, o.email, o.code, o.event_id, o.promo_code_id, o.quote, o.details, e.name, e.timezone, e.starts_at
-		from orders o join events e on e.id = o.event_id where o.id = $1 for update of o`, orderID).
-		Scan(&o.status, &o.email, &o.code, &o.event, &o.promo, &o.quote, &o.details, &o.eventName, &o.zone, &o.startsAt); err != nil {
+	if err := tx.QueryRow(ctx, `select status, event_id, promo_code_id, quote, details from orders where id = $1 for update`, orderID).
+		Scan(&o.status, &o.event, &o.promo, &o.quote, &o.details); err != nil {
 		return false, err
 	}
 	if o.status != "pending" {
@@ -134,11 +134,44 @@ func (s *Service) confirmOrder(ctx context.Context, tx pgx.Tx, org, orderID uuid
 	if _, err := tx.Exec(ctx, `update orders set status = 'paid', paid_at = statement_timestamp(), magic_token_hash = $2 where id = $1`, orderID, hash[:]); err != nil {
 		return false, err
 	}
-	link := s.orderURL(o.code, orderID)
-	return true, jobs.Enqueue(ctx, tx, "send_email", map[string]string{
-		"to":      o.email,
-		"subject": "Your tickets for " + o.eventName,
-		"text": "You're going to " + o.eventName + " on " + when(o.startsAt, o.zone) +
-			". Your tickets are here, and this link is the only key to them, so keep it to yourself: " + link,
-	})
+	return true, jobs.Enqueue(ctx, tx, OrderConfirmationJob, confirmation{Order: orderID, Organizer: org})
+}
+
+// OrderConfirmationJob emails a paid order's link to its buyer.
+const OrderConfirmationJob = "order_confirmation"
+
+// confirmation is the job's whole payload. The link is the only key to the
+// tickets, so it is rebuilt at send time and never stored: not in jobs (no
+// RLS, readable by the app role, in every backup), not anywhere.
+type confirmation struct {
+	Order     uuid.UUID `json:"order_id"`
+	Organizer uuid.UUID `json:"organizer_id"`
+}
+
+// OrderConfirmation handles OrderConfirmationJob. It reads the order as
+// ts_system for the named organizer and sends outside the transaction. An
+// order that is gone or not paid sends nothing. Delivery is at least once,
+// as for every job.
+func (s *Service) OrderConfirmation(m mailer.Mailer) jobs.Handler {
+	return func(ctx context.Context, payload []byte) error {
+		var c confirmation
+		if err := json.Unmarshal(payload, &c); err != nil {
+			return err
+		}
+		var email, code, name, zone string
+		var starts time.Time
+		err := system.Run(ctx, s.Pool, c.Organizer, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `select o.email, o.code, e.name, e.timezone, e.starts_at
+				from orders o join events e on e.id = o.event_id where o.id = $1 and o.status = 'paid'`, c.Order).
+				Scan(&email, &code, &name, &zone, &starts)
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return m.Send(ctx, email, "Your tickets for "+name, "You're going to "+name+" on "+when(starts, zone)+
+			". Your tickets are here, and this link is the only key to them, so keep it to yourself: "+s.orderURL(code, c.Order))
+	}
 }

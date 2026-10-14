@@ -45,6 +45,10 @@ var (
 var errPaymentsNotReady error = catalogue.ErrConflict{Code: "payments_not_ready",
 	Message: "This organizer can't take card payments right now, so paid tickets aren't on sale. Free ones still are."}
 
+// errPriceChanged: the order's stored totals no longer match its tickets.
+var errPriceChanged error = catalogue.ErrConflict{Code: "price_changed",
+	Message: "The price of these tickets changed after you started paying, so we've stopped here. Start a new checkout to see the new total."}
+
 func invalid(code, field, msg string) error {
 	return catalogue.ErrInvalid{Code: code, Field: field, Message: msg}
 }

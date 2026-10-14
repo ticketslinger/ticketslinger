@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/payments"
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 	"github.com/ticketslinger/ticketslinger/api/internal/sales"
@@ -106,11 +107,11 @@ func TestPayCreatesOnePendingOrderAndIntent(t *testing.T) {
 		t.Fatalf("start = %+v, want a test intent on acct_fake1 for %d", ps, c.Quote.TotalCents)
 	}
 	var order uuid.UUID
-	var status, feeMode, email string
+	var status, feeMode, email, code string
 	var sub, disc, tax, fee, total int64
 	var details []byte
-	f.must(t, f.owner.QueryRow(ctx, `select id, status, fee_mode, email, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents, details
-		from orders where checkout_id = $1`, c.ID).Scan(&order, &status, &feeMode, &email, &sub, &disc, &tax, &fee, &total, &details))
+	f.must(t, f.owner.QueryRow(ctx, `select id, code, status, fee_mode, email, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents, details
+		from orders where checkout_id = $1`, c.ID).Scan(&order, &code, &status, &feeMode, &email, &sub, &disc, &tax, &fee, &total, &details))
 	q := c.Quote
 	if status != "pending" || feeMode != "pass" || email != "buyer@example.com" ||
 		sub != q.SubtotalCents || disc != q.DiscountCents || tax != q.TaxCents || fee != q.FeeCents || total != q.TotalCents {
@@ -127,7 +128,7 @@ func TestPayCreatesOnePendingOrderAndIntent(t *testing.T) {
 	}
 	in := calls[0]
 	if in.AmountCents != q.TotalCents || in.ApplicationFeeCents != q.FeeCents || in.IdempotencyKey != "pi-"+order.String() ||
-		in.Metadata["order_id"] != order.String() || in.Account != "acct_fake1" {
+		in.Metadata["order_id"] != order.String() || in.Account != "acct_fake1" || in.Description != "Order "+code+": 2 tickets" {
 		t.Fatalf("intent input = %+v, want total %d, fee %d, key pi-%s", in, q.TotalCents, q.FeeCents, order)
 	}
 	var secret, provider string
@@ -235,13 +236,35 @@ func TestFreeOrderEmailsItsLink(t *testing.T) {
 	if got.Status != "completed" || got.OrderCode != ps.OrderCode || got.OrderURL != ps.OrderURL {
 		t.Fatalf("GetCheckout = %s %s %s, want completed with %s", got.Status, got.OrderCode, got.OrderURL, ps.OrderURL)
 	}
+	// The job names the order; the link exists only in the email itself.
+	u, err := url.Parse(got.OrderURL)
+	f.must(t, err)
+	token := u.Query().Get("t")
+	if n := f.count(t, `select count(*) from jobs where payload::text like '%' || $1 || '%' or payload::text like '%?t=%'`, token); n != 0 || token == "" {
+		t.Fatalf("%d jobs hold the order link or its token %q, want none", n, token)
+	}
 	var payload []byte
-	f.must(t, f.owner.QueryRow(ctx, `select payload from jobs where kind = 'send_email'`).Scan(&payload))
-	var mail struct{ To, Subject, Text string }
-	f.must(t, json.Unmarshal(payload, &mail))
+	f.must(t, f.owner.QueryRow(ctx, `select payload from jobs where kind = 'order_confirmation'`).Scan(&payload))
+	var job map[string]string
+	f.must(t, json.Unmarshal(payload, &job))
+	if len(job) != 2 || job["organizer_id"] != f.org.String() || job["order_id"] == "" {
+		t.Fatalf("job payload = %s, want only order_id and organizer_id", payload)
+	}
+	m := &mailer.Memory{}
+	f.must(t, s.OrderConfirmation(m)(ctx, payload))
+	if len(m.Sent) != 1 {
+		t.Fatalf("%d emails sent, want 1", len(m.Sent))
+	}
+	mail := m.Sent[0]
 	if mail.To != "buyer@example.com" || mail.Subject != "Your tickets for Gala" ||
 		!strings.HasPrefix(mail.Text, "You're going to Gala on ") || !strings.HasSuffix(mail.Text, ": "+got.OrderURL) {
 		t.Fatalf("email = %+v, want the link %s", mail, got.OrderURL)
+	}
+	// An order that isn't paid sends nothing.
+	f.exec(t, `update orders set status = 'cancelled'`)
+	f.must(t, s.OrderConfirmation(m)(ctx, payload))
+	if len(m.Sent) != 1 {
+		t.Fatal("a cancelled order was emailed")
 	}
 	if !strings.HasPrefix(got.OrderURL, "https://tickets.example/orders/") {
 		t.Fatalf("link %s isn't on the storefront", got.OrderURL)
@@ -400,5 +423,50 @@ func TestStripeDownLeavesTheHold(t *testing.T) {
 	calls := rec.calls()
 	if len(calls) != 2 || calls[0].IdempotencyKey != calls[1].IdempotencyKey {
 		t.Fatalf("intent requests %+v, want two with one idempotency key", calls)
+	}
+}
+
+func TestConcurrentPaysShareOnePayment(t *testing.T) {
+	s, f, _ := payService(t, seedOpts{quota: 10, price: 2500})
+	c := f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
+	var wg sync.WaitGroup
+	starts := make([]sales.PaymentStart, 2)
+	errs := make([]error, 2)
+	for i := range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			starts[i], errs[i] = s.Pay(context.Background(), c.Token, sales.Details{Email: "buyer@example.com"})
+		}()
+	}
+	wg.Wait()
+	if errs[0] != nil || errs[1] != nil || starts[0].ClientSecret == "" || starts[0].ClientSecret != starts[1].ClientSecret {
+		t.Fatalf("two Pays at once: %v %v, secrets %q %q; want one shared payment", errs[0], errs[1], starts[0].ClientSecret, starts[1].ClientSecret)
+	}
+	if o, p := f.count(t, `select count(*) from orders`), f.count(t, `select count(*) from payments`); o != 1 || p != 1 {
+		t.Fatalf("%d orders, %d payments; want 1 and 1", o, p)
+	}
+}
+
+// The stored order is what gets charged or confirmed. If its totals stop
+// matching the tickets, Pay refuses rather than charging (or giving away)
+// an amount the buyer wasn't shown.
+func TestPayRefusesWhenTheStoredTotalsDrift(t *testing.T) {
+	s, f, rec := payService(t, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	c := f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
+	f.exec(t, `update organizers set stripe_charges_enabled = false`)
+	if _, err := s.Pay(ctx, c.Token, sales.Details{Email: "buyer@example.com"}); conflictCode(err) != "payments_not_ready" {
+		t.Fatalf("setup: %v", err)
+	}
+	f.exec(t, `update organizers set stripe_charges_enabled = true`)
+	_, err := s.Pay(ctx, c.Token, sales.Details{Email: "buyer@example.com"})
+	f.must(t, err)
+	f.exec(t, `update orders set total_cents = 0, fee_cents = 0`)
+	if _, err := s.Pay(ctx, c.Token, sales.Details{Email: "buyer@example.com"}); conflictCode(err) != "price_changed" {
+		t.Fatalf("drifted totals: %v, want price_changed", err)
+	}
+	if n := f.count(t, `select count(*) from orders where status = 'pending'`) + f.count(t, `select count(*) from tickets`); n != 1 || len(rec.calls()) != 1 {
+		t.Fatalf("order still pending with no tickets and one intent? got %d, %d intents", n, len(rec.calls()))
 	}
 }

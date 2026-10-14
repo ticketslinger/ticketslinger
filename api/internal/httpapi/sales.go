@@ -149,12 +149,12 @@ func salesError(err error) error {
 	return catalogueError(err)
 }
 
-var errTooManyCheckouts = &apiError{429, "rate_limited", "That's a lot of checkouts from one connection. Give it a minute, then try again."}
+var errTooManyTries = &apiError{429, "rate_limited", "That's a lot of tries from one connection. Give it a minute, then try again."}
 
 // allow counts one request from the caller's address against l.
 func allow(ctx context.Context, l *ratelimit.Limiter) error {
 	if !l.Allow(ratelimit.AddrKey(clientFrom(ctx).ip), time.Now()) {
-		return errTooManyCheckouts
+		return errTooManyTries
 	}
 	return nil
 }
@@ -163,6 +163,13 @@ func (s *server) GetStorefrontEvent(ctx context.Context, req GetStorefrontEventR
 	code := ""
 	if req.Params.Code != nil {
 		code = *req.Params.Code
+	}
+	// Each read with a code is a guess at one: count them, so codes can't be
+	// tried at speed.
+	if code != "" {
+		if err := allow(ctx, s.codeLimit); err != nil {
+			return nil, err
+		}
 	}
 	ev, err := s.Sales.StorefrontEvent(ctx, req.Organizer, req.EventSlug, code)
 	if err != nil {
