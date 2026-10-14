@@ -1,0 +1,126 @@
+package httpapi_test
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/ticketslinger/ticketslinger/api/internal/auth"
+	"github.com/ticketslinger/ticketslinger/api/internal/httpapi"
+	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
+	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
+)
+
+func newAuthServer(t *testing.T) (*httptest.Server, *mailer.Memory) {
+	pool := testdb.New(t)
+	m := &mailer.Memory{}
+	svc := auth.NewService(pool, m, auth.Options{Origin: "http://localhost:5173"})
+	srv := httptest.NewServer(httpapi.New(httpapi.Deps{Pool: pool, Auth: svc}))
+	t.Cleanup(srv.Close)
+	return srv, m
+}
+
+func do(t *testing.T, method, url, token, body string) (int, map[string]any) {
+	t.Helper()
+	req, _ := http.NewRequest(method, url, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	var out map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return res.StatusCode, out
+}
+
+func errCode(body map[string]any) string {
+	e, _ := body["error"].(map[string]any)
+	c, _ := e["code"].(string)
+	return c
+}
+
+func TestSignupMeLogout(t *testing.T) {
+	srv, m := newAuthServer(t)
+	code, body := do(t, "POST", srv.URL+"/v1/auth/signup", "", `{"email":"Ann@Example.com","password":"a long passphrase","name":"Ann"}`)
+	if code != 201 {
+		t.Fatalf("signup: %d %v", code, body)
+	}
+	tok, _ := body["session_token"].(string)
+
+	if code, body = do(t, "GET", srv.URL+"/v1/me", tok, ""); code != 200 || body["email"] != "ann@example.com" || body["email_verified"] != false {
+		t.Fatalf("me: %d %v", code, body)
+	}
+	if code, body = do(t, "GET", srv.URL+"/v1/me", "", ""); code != 401 || errCode(body) != "unauthorized" {
+		t.Fatalf("me without token: %d %v", code, body)
+	}
+	if code, _ = do(t, "GET", srv.URL+"/v1/me", "not-a-token", ""); code != 401 {
+		t.Fatalf("me with bad token: %d", code)
+	}
+
+	if code, _ = do(t, "POST", srv.URL+"/v1/auth/verify-email", "", `{"token":"`+m.LastToken()+`"}`); code != 204 {
+		t.Fatalf("verify: %d", code)
+	}
+	if code, body = do(t, "POST", srv.URL+"/v1/auth/verify-email", "", `{"token":"`+m.LastToken()+`"}`); code != 400 || errCode(body) != "bad_token" {
+		t.Fatalf("verify reuse: %d %v", code, body)
+	}
+
+	if code, _ = do(t, "POST", srv.URL+"/v1/auth/logout", tok, ""); code != 204 {
+		t.Fatalf("logout: %d", code)
+	}
+	if code, _ = do(t, "GET", srv.URL+"/v1/me", tok, ""); code != 401 {
+		t.Fatalf("me after logout: %d", code)
+	}
+}
+
+func TestSignupAndLoginErrors(t *testing.T) {
+	srv, _ := newAuthServer(t)
+	signup := `{"email":"a@example.com","password":"a long passphrase","name":"A"}`
+	if code, _ := do(t, "POST", srv.URL+"/v1/auth/signup", "", signup); code != 201 {
+		t.Fatalf("signup: %d", code)
+	}
+	cases := []struct {
+		name, path, body string
+		status           int
+		code             string
+	}{
+		{"taken", "/v1/auth/signup", signup, 409, "email_taken"},
+		{"short", "/v1/auth/signup", `{"email":"b@example.com","password":"short","name":"B"}`, 422, "password_too_short"},
+		{"bad email", "/v1/auth/signup", `{"email":"nope","password":"a long passphrase","name":"B"}`, 400, "bad_request"},
+		{"wrong password", "/v1/auth/login", `{"email":"a@example.com","password":"wrong one"}`, 401, "bad_credentials"},
+		{"no such user", "/v1/auth/login", `{"email":"z@example.com","password":"wrong one"}`, 401, "bad_credentials"},
+	}
+	for _, c := range cases {
+		code, body := do(t, "POST", srv.URL+c.path, "", c.body)
+		if code != c.status || errCode(body) != c.code {
+			t.Errorf("%s: got %d %v, want %d %s", c.name, code, body, c.status, c.code)
+		}
+	}
+	code, body := do(t, "POST", srv.URL+"/v1/auth/login", "", `{"email":"A@example.com","password":"a long passphrase"}`)
+	if user, _ := body["user"].(map[string]any); code != 200 || body["session_token"] == "" || user["mfa"] != false {
+		t.Fatalf("login: %d %v", code, body)
+	}
+}
+
+func TestBadPathParamIs400(t *testing.T) {
+	srv := httptest.NewServer(httpapi.New(httpapi.Deps{}))
+	defer srv.Close()
+	code, body := do(t, "POST", srv.URL+"/v1/auth/passkeys/login/not-a-uuid", "", `{}`)
+	if code != 400 || errCode(body) != "bad_request" || body["error"].(map[string]any)["message"] != "That request couldn't be read." {
+		t.Fatalf("got %d %v", code, body)
+	}
+}
+
+func TestOversizedBodyIs400(t *testing.T) {
+	srv := httptest.NewServer(httpapi.New(httpapi.Deps{}))
+	defer srv.Close()
+	big := `{"email":"a@example.com","password":"` + strings.Repeat("x", 2<<20) + `","name":"A"}`
+	if code, body := do(t, "POST", srv.URL+"/v1/auth/signup", "", big); code != 400 || errCode(body) != "bad_request" {
+		t.Fatalf("got %d %v", code, body)
+	}
+}

@@ -41,7 +41,7 @@ func TestUnknownRouteIsJSONError(t *testing.T) {
 func TestUnbuiltOperationIs501JSON(t *testing.T) {
 	srv := httptest.NewServer(httpapi.New(httpapi.Deps{}))
 	defer srv.Close()
-	res, err := http.Post(srv.URL+"/v1/auth/login", "application/json", strings.NewReader(`{"email":"a@b.co","password":"x"}`))
+	res, err := http.Post(srv.URL+"/v1/auth/passkeys/login", "application/json", strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
