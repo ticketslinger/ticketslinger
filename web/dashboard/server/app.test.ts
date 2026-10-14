@@ -40,6 +40,7 @@ function fakeApi(opts: { loginFails?: boolean } = {}) {
         return Response.json({ session_token: "SECRET", user: { id: "u1" } });
       if (u.pathname === "/v1/auth/signup")
         return Response.json({ session_token: "SECRET", user: { id: "u1" } }, { status: 201 });
+      if (u.pathname === "/v1/leaky") return Response.json({ session_token: "SECRET", ok: true });
       return Response.json({ ok: true });
     },
   });
@@ -284,4 +285,33 @@ test("only allowlisted request headers reach the API", async () => {
     expect(h[k]).toBeUndefined();
   expect(h.accept).toBe("application/json");
   expect(h.authorization).toBe("Bearer abc");
+});
+
+test("the proxy refuses the API's session-creating routes, however the path is spelled", async () => {
+  const api = fakeApi();
+  const app = mk(api);
+  const t = await csrf(app);
+  for (const p of [
+    "/api/auth/login",
+    "/api/auth/signup",
+    "/api/auth/passkeys/login/0197a2b4-0000-7000-8000-000000000000",
+    "/api/auth/%6cogin",
+    "/api/auth//login",
+    "/api/auth/login/",
+    "/api/auth/signup?x=1",
+  ]) {
+    const res = await app.request(p, post(t));
+    expect(res.status, p).toBe(404);
+    expect(await res.text(), p).not.toContain("SECRET");
+  }
+  expect(api.calls.length).toBe(0);
+  // Starting a passkey sign-in creates no session, so it still goes through.
+  expect((await app.request("/api/auth/passkeys/login", post(t))).status).toBe(200);
+});
+
+test("the proxy strips a session_token from any JSON response", async () => {
+  const app = mk(fakeApi());
+  const res = await app.request("/api/leaky");
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ ok: true });
 });

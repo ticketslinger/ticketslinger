@@ -44,6 +44,14 @@ const safeEqual = (a: string, b: string) => {
   return x.length > 0 && x.length === y.length && timingSafeEqual(x, y);
 };
 
+// API routes that answer with a session_token. Sessions are only made through
+// /session/*, which moves the token into an HttpOnly cookie; through the
+// generic proxy page script would see it. Matched on the decoded path with
+// repeated and trailing slashes folded, as the API's router would see it.
+const SESSION_ROUTES = /^\/api\/auth\/(login|signup|passkeys\/login\/.+)$/i;
+const createsSession = (pathname: string) =>
+  SESSION_ROUTES.test(decodeURIComponent(pathname).replace(/\/+/g, "/").replace(/\/$/, ""));
+
 function hasDotSegment(path: string, only: (s: string) => boolean): boolean {
   let decoded: string;
   try {
@@ -94,9 +102,24 @@ export function createApp(opts: AppOptions): Hono {
     return fetch(url, init);
   }
 
-  function relay(res: Response, body: BodyInit | null = res.body): Response {
+  // Passes an API response back, minus hop-by-hop headers. A JSON object's
+  // top-level session_token is dropped, so no route can hand one to page script.
+  async function relay(res: Response): Promise<Response> {
     const headers = new Headers();
     for (const [k, v] of res.headers) if (!DROP_RES.has(k)) headers.set(k, v);
+    let body: BodyInit | null = res.body;
+    if (/^application\/json\b/i.test(res.headers.get("content-type") ?? "")) {
+      body = await res.text();
+      try {
+        const v = JSON.parse(body);
+        if (v && typeof v === "object" && !Array.isArray(v) && "session_token" in v) {
+          delete v.session_token;
+          body = JSON.stringify(v);
+        }
+      } catch {
+        // Not JSON after all: pass it on as it came.
+      }
+    }
     return new Response(body, { status: res.status, headers });
   }
 
@@ -176,7 +199,7 @@ export function createApp(opts: AppOptions): Hono {
     } catch {
       res = new Response(null, { status: 204 });
     }
-    c.res = relay(res);
+    c.res = await relay(res);
     deleteCookie(c, SESSION, cookieBase);
     return c.res;
   });
@@ -187,6 +210,7 @@ export function createApp(opts: AppOptions): Hono {
     if (hasDotSegment(pathname, (s) => s === "." || s === "..")) {
       return err(c, 400, "bad_path", "Invalid path.");
     }
+    if (createsSession(pathname)) return err(c, 404, "not_found", "Not found.");
     try {
       return relay(await upstream(c, `${apiUrl}${pathname.slice(4)}${search}`, true));
     } catch {
