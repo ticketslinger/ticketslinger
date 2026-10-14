@@ -54,8 +54,13 @@ func TestAPIKeyActsOnlyWithinItsOrganizer(t *testing.T) {
 	res = h.do(owner, "GET", "/v1/organizers/acme/audit", "")
 	var rows []map[string]any
 	_ = json.NewDecoder(res.Body).Decode(&rows)
-	if len(rows) < 2 || rows[0]["action"] != "api_key.revoked" || rows[1]["action"] != "api_key.created" || rows[0]["actor_user_id"] == nil {
+	if len(rows) < 2 || rows[0]["action"] != "api_key.revoked" || rows[1]["action"] != "api_key.created" {
 		t.Fatalf("audit: %v", rows)
+	}
+	for _, r := range rows[:2] {
+		if r["actor_user_id"] == nil || r["actor_api_key_id"] != nil {
+			t.Errorf("%v: want actor_user_id set and actor_api_key_id absent", r)
+		}
 	}
 }
 

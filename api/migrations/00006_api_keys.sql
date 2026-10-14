@@ -34,8 +34,17 @@ CREATE OR REPLACE FUNCTION app_organizer() RETURNS uuid LANGUAGE sql STABLE SECU
                  AND k.organizer_id = s.o AND k.revoked_at IS NULL)) $$;
 
 ALTER TABLE api_keys ENABLE ROW LEVEL SECURITY;
-CREATE POLICY api_keys_scope ON api_keys
-  USING (organizer_id = (SELECT app_organizer())) WITH CHECK (organizer_id = (SELECT app_organizer()));
+-- Any principal in scope may read its organizer's keys; only a user may
+-- create, change or delete one. Keys never manage keys, even with raw SQL.
+CREATE POLICY api_keys_read ON api_keys FOR SELECT
+  USING (organizer_id = (SELECT app_organizer()));
+CREATE POLICY api_keys_insert ON api_keys FOR INSERT
+  WITH CHECK (organizer_id = (SELECT app_organizer()) AND (SELECT app_user()) IS NOT NULL);
+CREATE POLICY api_keys_update ON api_keys FOR UPDATE
+  USING (organizer_id = (SELECT app_organizer()) AND (SELECT app_user()) IS NOT NULL)
+  WITH CHECK (organizer_id = (SELECT app_organizer()) AND (SELECT app_user()) IS NOT NULL);
+CREATE POLICY api_keys_delete ON api_keys FOR DELETE
+  USING (organizer_id = (SELECT app_organizer()) AND (SELECT app_user()) IS NOT NULL);
 
 -- Key lookup by hash before any scope exists: owner-run, returns only what
 -- authentication needs, never the hash.
@@ -65,7 +74,10 @@ GRANT EXECUTE ON FUNCTION touch_api_key(uuid) TO ts_app;
 -- +goose Down
 DROP FUNCTION touch_api_key(uuid);
 DROP FUNCTION lookup_api_key(bytea);
-DROP POLICY api_keys_scope ON api_keys;
+DROP POLICY api_keys_delete ON api_keys;
+DROP POLICY api_keys_update ON api_keys;
+DROP POLICY api_keys_insert ON api_keys;
+DROP POLICY api_keys_read ON api_keys;
 CREATE OR REPLACE FUNCTION app_organizer() RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp AS
   $$ SELECT m.organizer_id FROM public.memberships m

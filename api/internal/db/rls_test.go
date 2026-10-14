@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -410,5 +411,68 @@ func TestAuditRowWrittenByKeyNamesTheKey(t *testing.T) {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
 		t.Fatalf("two actors in the database: err=%v, want check violation", err)
+	}
+}
+
+// Keys never manage keys, even with raw SQL inside their own scope: they may
+// read their organizer's keys but not mint, upgrade, un-revoke or delete one.
+// A user scope still can.
+func TestKeyScopeCannotManageKeys(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	ua, oa := seedOrg(t, pool, "a@example.com", "org-a")
+	key := seedKey(t, pool, oa, "read", false)
+	revoked := seedKey(t, pool, oa, "write", true)
+	p := db.Principal{KeyID: key, KeyOrg: oa, KeyScope: "read"}
+	inKeyScope := func(q string, args ...any) (int64, error) {
+		var n int64
+		err := db.WithPrincipal(ctx, pool, p, oa, func(tx pgx.Tx, _ string) error {
+			tag, err := tx.Exec(ctx, q, args...)
+			n = tag.RowsAffected()
+			return err
+		})
+		return n, err
+	}
+	_, err := inKeyScope(`insert into api_keys(organizer_id, name, key_hash, prefix, scope)
+		values ($1, 'evil', sha256('x'::bytea), 'abcdefgh', 'write')`, oa)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+		t.Errorf("key inserting a key: err=%v, want 42501", err)
+	}
+	for name, q := range map[string]string{
+		"upgrade own scope": `update api_keys set scope = 'write' where id = '` + key.String() + `'`,
+		"un-revoke a key":   `update api_keys set revoked_at = null where id = '` + revoked.String() + `'`,
+		"delete a key":      `delete from api_keys where id = '` + revoked.String() + `'`,
+	} {
+		n, err := inKeyScope(q)
+		if err != nil || n != 0 {
+			t.Errorf("%s: rows=%d err=%v, want 0 rows", name, n, err)
+		}
+	}
+	var scope string
+	var rev *time.Time
+	if err := testdb.Owner(t, pool).QueryRow(ctx, `select (select scope from api_keys where id = $1), (select revoked_at from api_keys where id = $2)`, key, revoked).Scan(&scope, &rev); err != nil || scope != "read" || rev == nil {
+		t.Fatalf("after the attempts: scope=%q revoked_at=%v err=%v", scope, rev, err)
+	}
+	// Control: the key can still read, and a user scope can still manage.
+	var seen int
+	if err := db.WithPrincipal(ctx, pool, p, oa, func(tx pgx.Tx, _ string) error {
+		return tx.QueryRow(ctx, `select count(*) from api_keys`).Scan(&seen)
+	}); err != nil || seen != 2 {
+		t.Fatalf("key reading keys: n=%d err=%v, want 2", seen, err)
+	}
+	err = db.WithOrganizer(ctx, pool, ua, oa, func(tx pgx.Tx, _ string) error {
+		if _, err := tx.Exec(ctx, `insert into api_keys(organizer_id, name, key_hash, prefix, scope)
+			values ($1, 'ok', sha256('y'::bytea), 'abcdefgh', 'read')`, oa); err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, `update api_keys set revoked_at = now() where id = $1`, key)
+		if err == nil && tag.RowsAffected() != 1 {
+			t.Errorf("user revoking: rows=%d, want 1", tag.RowsAffected())
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatalf("user managing keys: %v", err)
 	}
 }

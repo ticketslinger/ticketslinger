@@ -128,6 +128,19 @@ func TestAuthenticate(t *testing.T) {
 		t.Fatalf("last_used_at moved within a minute: %v -> %v", used, again)
 	}
 
+	// Over a minute later, the next use moves it.
+	if _, err := testdb.Owner(t, pool).Exec(ctx, `update api_keys set last_used_at = now() - interval '2 minutes' where id = $1`, k.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Authenticate(ctx, plain); err != nil {
+		t.Fatal(err)
+	}
+	var later *time.Time
+	_ = testdb.Owner(t, pool).QueryRow(ctx, `select last_used_at from api_keys where id = $1`, k.ID).Scan(&later)
+	if later == nil || time.Since(*later) > 30*time.Second {
+		t.Fatalf("last_used_at after a stale use: %v, want about now", later)
+	}
+
 	for _, bad := range []string{"", "tsk_", plain + "x", "tsk_" + strings.Repeat("A", 43), "not-a-key"} {
 		if _, err := s.Authenticate(ctx, bad); !errors.Is(err, apikeys.ErrBadKey) {
 			t.Errorf("Authenticate(%q): err=%v, want ErrBadKey", bad, err)
