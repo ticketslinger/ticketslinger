@@ -60,6 +60,9 @@ func serve() error {
 	if err != nil {
 		return err
 	}
+	if cfg.SecretKey == nil {
+		return errors.New("TS_SECRET_KEY is required (base64 of 32 random bytes, e.g. `openssl rand -base64 32`)")
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
 	pool, err := db.Open(ctx, cfg.DatabaseURL)
@@ -69,7 +72,7 @@ func serve() error {
 	defer pool.Close()
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.New(httpapi.Deps{Pool: pool, Auth: auth.NewService(pool, mailer.Log{}, auth.Options{RPID: cfg.WebAuthnRPID, Origin: cfg.DashboardOrigin}), Organizers: &organizers.Service{}, Config: cfg}),
+		Handler:           httpapi.New(httpapi.Deps{Pool: pool, Auth: auth.NewService(pool, mailer.Log{}, auth.Options{RPID: cfg.WebAuthnRPID, Origin: cfg.DashboardOrigin, SecretKey: cfg.SecretKey}), Organizers: &organizers.Service{}, Config: cfg}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}

@@ -61,6 +61,8 @@ type User struct {
 type Options struct {
 	RPID   string // WebAuthn relying party ID
 	Origin string // dashboard origin, used for links in email
+	// SecretKey is the 32-byte AES-256 key that encrypts TOTP secrets at rest.
+	SecretKey []byte
 }
 
 type Service struct {
@@ -167,13 +169,15 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, ip, ua s
 		u      User
 		hash   *string
 		totpOn bool
+		sealed []byte
+		last   *int64
 		locked bool
 	)
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, email, name, email_verified_at IS NOT NULL, totp_enabled_at IS NOT NULL,
-		        password_hash, coalesce(locked_until > now(), false)
+		        password_hash, coalesce(locked_until > now(), false), totp_secret, totp_last_step
 		   FROM users WHERE email = $1`, email).
-		Scan(&u.ID, &u.Email, &u.Name, &u.EmailVerified, &totpOn, &hash, &locked)
+		Scan(&u.ID, &u.Email, &u.Name, &u.EmailVerified, &totpOn, &hash, &locked, &sealed, &last)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && hash == nil) {
 		_, _ = checkPassword(ctx, dummyHash(), password)
 		return Session{}, User{}, ErrBadCredentials
@@ -196,17 +200,40 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, ip, ua s
 		if totpCode == "" {
 			return Session{}, User{}, ErrTOTPRequired
 		}
-		// TOTP verification arrives with the TOTP endpoints; until then no code passes.
-		return Session{}, User{}, s.recordFailure(ctx, u.ID)
+	}
+	var step int64
+	if totpOn {
+		var ok bool
+		if step, ok, err = s.checkTOTP(u.ID, sealed, last, totpCode); err != nil {
+			return Session{}, User{}, err
+		}
+		if !ok {
+			return Session{}, User{}, s.recordFailure(ctx, u.ID)
+		}
 	}
 	var sess Session
+	replay := false
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if totpOn {
+			// Conditional update: of two logins racing with one code, only one gets a row.
+			ok, err := recordTOTPStep(ctx, tx, u.ID, step, false)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				replay = true
+				return nil
+			}
+		}
 		if _, err := tx.Exec(ctx, `UPDATE users SET failed_logins = 0 WHERE id = $1`, u.ID); err != nil {
 			return err
 		}
-		sess, err = createSession(ctx, tx, u.ID, false, ip, ua)
+		sess, err = createSession(ctx, tx, u.ID, totpOn, ip, ua)
 		return err
 	})
+	if err == nil && replay {
+		return Session{}, User{}, s.recordFailure(ctx, u.ID)
+	}
 	return sess, u, err
 }
 

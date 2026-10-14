@@ -12,9 +12,12 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
 )
 
+// testKey is a fixed 32-byte AES key for tests.
+var testKey = []byte("0123456789abcdef0123456789abcdef")
+
 func newSvc(t *testing.T) (*auth.Service, *mailer.Memory) {
 	m := &mailer.Memory{}
-	return auth.NewService(testdb.New(t), m, auth.Options{RPID: "localhost", Origin: "http://localhost:5173"}), m
+	return auth.NewService(testdb.New(t), m, auth.Options{RPID: "localhost", Origin: "http://localhost:5173", SecretKey: testKey}), m
 }
 
 func TestSignupThenLogin(t *testing.T) {

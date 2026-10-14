@@ -50,8 +50,10 @@ paths:
   /auth/totp:
     post:
       operationId: startTotp
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [password], properties: { password: { type: string } } } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TotpSetup" } } } }
+        "401": { $ref: "#/components/responses/Error" }
   /auth/totp/confirm:
     post:
       operationId: confirmTotp
