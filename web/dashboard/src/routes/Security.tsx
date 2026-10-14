@@ -260,7 +260,7 @@ export function Security({
                 Save these now. Each code works once, and we won't show them again. Making new codes
                 switches these off.
               </p>
-              <ul className="codes">
+              <ul className="codes" aria-label="Your recovery codes">
                 {recovery.map((c) => (
                   <li key={c}>
                     <code className="secret">{c}</code>

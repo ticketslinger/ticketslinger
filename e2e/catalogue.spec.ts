@@ -7,6 +7,7 @@ const DESKTOP = { width: 1280, height: 900 };
 test("build a sellable event, reach it with an API key, then get back in with a recovery code", async ({
   page,
   context,
+  request,
 }) => {
   await virtualAuthenticator(page, context);
   const email = `e2e-catalogue-${Date.now()}@example.com`;
@@ -53,7 +54,7 @@ test("build a sellable event, reach it with an API key, then get back in with a 
   await page.getByRole("checkbox", { name: "General" }).check();
   await page.getByRole("checkbox", { name: "VIP" }).check();
   await page.getByRole("button", { name: "Add capacity" }).click();
-  await expect(page.getByRole("cell", { name: "120" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "120", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Add a capacity" }).click();
   await page.getByLabel("Name").fill("VIP");
@@ -91,6 +92,8 @@ test("build a sellable event, reach it with an API key, then get back in with a 
 
   await page.getByRole("button", { name: "Go live" }).click();
   await expect(page.getByRole("button", { name: "Back to draft" })).toBeVisible();
+  // The pill reads "On sale" in the dashboard; the API calls it live.
+  await expect(page.locator(".pill.live")).toHaveText("On sale");
 
   // On a phone, the read views still show what was built.
   await page.setViewportSize(PHONE);
@@ -111,22 +114,66 @@ test("build a sellable event, reach it with an API key, then get back in with a 
   const auth = { Authorization: `Bearer ${key}` };
   const events = `${API}/v1/organizers/social-club/events`;
 
-  const listed = await context.request.get(events, { headers: auth });
-  expect(listed.status()).toBe(200);
-  expect(await listed.json()).toContainEqual(expect.objectContaining({ name: "Spring Social" }));
-  const posted = await context.request.post(events, { headers: auth, data: {} });
+  const get = async (path: string) => {
+    const res = await request.get(`${events}${path}`, { headers: auth });
+    expect(res.status()).toBe(200);
+    return res.json();
+  };
+  const list = await get("");
+  expect(list).toContainEqual(expect.objectContaining({ name: "Spring Social" }));
+  const ev = list.find((e: { name: string }) => e.name === "Spring Social");
+  expect(ev).toMatchObject({
+    status: "live",
+    timezone: "America/Denver",
+  });
+  // The API writes the instants in the event's own offset (-06:00 in May); compare the moments.
+  expect(Date.parse(ev.starts_at)).toBe(Date.parse("2026-05-03T01:00:00Z"));
+  expect(Date.parse(ev.ends_at)).toBe(Date.parse("2026-05-03T05:00:00Z"));
+  const base = `/${ev.id}`;
+  const types: { id: string; name: string; hidden: boolean }[] = await get(`${base}/ticket-types`);
+  const id = (name: string) => types.find((t) => t.name === name)?.id;
+  expect(types.map((t) => [t.name, t.hidden])).toEqual([
+    ["General", false],
+    ["VIP", true],
+  ]);
+  const quotas: { name: string; size: number; ticket_type_ids: string[] }[] = await get(
+    `${base}/quotas`,
+  );
+  const quota = (name: string) => quotas.find((q) => q.name === name);
+  expect(quota("Venue")?.size).toBe(120);
+  expect([...(quota("Venue")?.ticket_type_ids ?? [])].sort()).toEqual(
+    [id("General"), id("VIP")].sort(),
+  );
+  expect(quota("VIP")?.size).toBe(20);
+  expect(quota("VIP")?.ticket_type_ids).toEqual([id("VIP")]);
+  expect(await get(`${base}/promo-codes`)).toEqual([
+    expect.objectContaining({
+      code: "FRIENDS",
+      kind: "percent",
+      value: 1000,
+      applies_to_all: false,
+      applies_to: [id("General")],
+      unlocks: [id("VIP")],
+    }),
+  ]);
+  const posted = await request.post(events, { headers: auth, data: {} });
   expect(posted.status()).toBe(403);
   expect(await posted.json()).toMatchObject({ error: { code: "scope_read_only" } });
 
   await page.getByRole("button", { name: "Revoke Box office laptop" }).click();
   await page.getByRole("button", { name: "Revoke Box office laptop" }).click();
   await expect(page.getByText("No keys yet")).toBeVisible();
-  expect((await context.request.get(events, { headers: auth })).status()).toBe(401);
+  expect((await request.get(events, { headers: auth })).status()).toBe(401);
 
   // Recovery codes: make them, sign out, and come back through a deep link.
   await page.goto("/security");
   await page.getByRole("button", { name: "Create recovery codes" }).click();
-  const code = (await page.locator("ul.codes code").first().textContent()) ?? "";
+  const code =
+    (await page
+      .getByRole("list", { name: "Your recovery codes" })
+      .getByRole("listitem")
+      .first()
+      .textContent()) ?? "";
   expect(code).toMatch(/^[A-Z0-9]{4}(-[A-Z0-9]{4}){2}$/);
   await page.goto("/");
   await page.getByRole("button", { name: "Sign out" }).click();
