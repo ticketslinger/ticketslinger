@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -251,5 +252,150 @@ func TestSendEmailHandler(t *testing.T) {
 	}
 	if err := jobs.SendEmail(m)(context.Background(), []byte(`{`)); err == nil {
 		t.Fatal("bad payload accepted")
+	}
+}
+
+func TestCrashedPoisonJobIsParkedNotRun(t *testing.T) {
+	pool := testdb.New(t)
+	ran := false
+	w := &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{"p": func(context.Context, []byte) error { ran = true; return nil }}}
+	enqueue(t, pool, "p", 1)
+	if _, err := pool.Exec(context.Background(), `update jobs set attempts = 10, locked_until = now() - interval '1 minute'`); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := w.RunOnce(context.Background()); err != nil || got || ran {
+		t.Fatalf("RunOnce = %v, %v, ran=%v; a job at 10 attempts must not run", got, err, ran)
+	}
+	if n := count(t, pool, `select count(*) from jobs where run_at = 'infinity' and locked_until is null and last_error = 'gave up after a crash'`); n != 1 {
+		t.Fatal("poison job was not parked")
+	}
+}
+
+func TestShutdownReleasesTheJob(t *testing.T) {
+	pool := testdb.New(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{"s": func(context.Context, []byte) error {
+		cancel()
+		return context.Canceled
+	}}}
+	enqueue(t, pool, "s", 1)
+	if got, err := w.RunOnce(ctx); err != nil || !got {
+		t.Fatalf("RunOnce = %v, %v", got, err)
+	}
+	if n := count(t, pool, `select count(*) from jobs where attempts = 0 and locked_until is null and last_error is null and run_at <= now()`); n != 1 {
+		t.Fatal("job was not released for the next worker")
+	}
+}
+
+func TestPanicRecordsNoValue(t *testing.T) {
+	pool := testdb.New(t)
+	w := &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{"x": func(context.Context, []byte) error { panic("secret@example.com") }}}
+	enqueue(t, pool, "x", 1)
+	if got, err := w.RunOnce(context.Background()); err != nil || !got {
+		t.Fatalf("RunOnce = %v, %v", got, err)
+	}
+	var msg string
+	if err := pool.QueryRow(context.Background(), `select last_error from jobs`).Scan(&msg); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(msg, "secret") || !strings.HasPrefix(msg, "handler panicked") {
+		t.Fatalf("last_error = %q", msg)
+	}
+}
+
+func TestSweepClearsMoreThanOneBatch(t *testing.T) {
+	pool := testdb.New(t)
+	owner := testdb.Owner(t, pool)
+	ctx := context.Background()
+	if _, err := owner.Exec(ctx, `insert into users(email, name) values ('a@example.com', 'A')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Exec(ctx, `insert into sessions(user_id, token_hash, mfa, expires_at)
+		select (select id from users), decode(md5(i::text), 'hex'), true, now() - interval '1 hour' from generate_series(1, 2500) i`); err != nil {
+		t.Fatal(err)
+	}
+	if err := jobs.Sweep(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, owner, `select count(*) from sessions`); n != 0 {
+		t.Fatalf("%d expired sessions survived the sweep", n)
+	}
+}
+
+func TestPurgeHonoursItsBatchLimit(t *testing.T) {
+	pool := testdb.New(t)
+	owner := testdb.Owner(t, pool)
+	ctx := context.Background()
+	var org, event string
+	if err := owner.QueryRow(ctx, `insert into organizers(name, slug) values ('Acme', 'acme') returning id`).Scan(&org); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.QueryRow(ctx, `insert into events(organizer_id, slug, name, timezone, starts_at, ends_at, status)
+		values ($1, 'gala', 'Gala', 'America/New_York', now() + interval '6 days', now() + interval '7 days', 'live') returning id`, org).Scan(&event); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Exec(ctx, `insert into checkouts(organizer_id, event_id, token_hash, expires_at)
+		select $1, $2, decode(md5(i::text) || md5(i::text), 'hex'), now() - interval '8 days' from generate_series(1, 3) i`, org, event); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `select purge_expired_checkouts(2)`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("purge(2) = %d, %v, want 2", n, err)
+	}
+	if got := count(t, owner, `select count(*) from checkouts`); got != 1 {
+		t.Fatalf("%d checkouts left, want 1", got)
+	}
+}
+
+func TestSweepRunsAtStartup(t *testing.T) {
+	pool := testdb.New(t)
+	owner := testdb.Owner(t, pool)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := owner.Exec(ctx, `with u as (insert into users(email, name) values ('a@example.com', 'A') returning id)
+		insert into email_tokens(token_hash, user_id, purpose, expires_at) select '\x01', id, 'verify', now() - interval '1 hour' from u`); err != nil {
+		t.Fatal(err)
+	}
+	w := &jobs.Worker{Pool: pool, Poll: 10 * time.Millisecond}
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for count(t, owner, `select count(*) from email_tokens`) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("no sweep within 5s of starting")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+}
+
+func TestJobsTableGrants(t *testing.T) {
+	pool := testdb.New(t)
+	for _, c := range []struct {
+		role, priv string
+		want       bool
+	}{
+		{"ts_system", "INSERT", true}, {"ts_system", "SELECT", false}, {"ts_system", "UPDATE", false}, {"ts_system", "DELETE", false},
+		{"ts_public", "INSERT", false}, {"ts_public", "SELECT", false}, {"ts_public", "UPDATE", false}, {"ts_public", "DELETE", false},
+	} {
+		var got bool
+		if err := pool.QueryRow(context.Background(), `select has_table_privilege($1, 'jobs', $2)`, c.role, c.priv).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != c.want {
+			t.Errorf("%s %s on jobs = %v, want %v", c.role, c.priv, got, c.want)
+		}
+	}
+}
+
+func TestSweepPredicatesAreIndexed(t *testing.T) {
+	pool := testdb.New(t)
+	for _, tbl := range []string{"sessions", "email_tokens", "webauthn_challenges"} {
+		n := count(t, pool, `select count(*) from pg_indexes where tablename = '`+tbl+`' and indexdef ~ '\(expires_at\)'`)
+		if n != 1 {
+			t.Errorf("%s has %d indexes on expires_at, want 1", tbl, n)
+		}
 	}
 }
