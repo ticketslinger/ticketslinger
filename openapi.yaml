@@ -1,0 +1,203 @@
+openapi: 3.1.0
+info:
+  title: TicketSlinger API
+  version: 0.1.0
+  license: { name: AGPL-3.0-only, identifier: AGPL-3.0-only }
+servers:
+  - url: https://api.ticketslinger.com/v1
+security:
+  - session: []
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      security: []
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Health" } } } }
+  /auth/signup:
+    post:
+      operationId: signup
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SignupRequest" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SessionCreated" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /auth/login:
+    post:
+      operationId: login
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LoginRequest" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SessionCreated" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "423": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /auth/logout:
+    post:
+      operationId: logout
+      responses:
+        "204": { description: Signed out }
+  /auth/verify-email:
+    post:
+      operationId: verifyEmail
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [token], properties: { token: { type: string } } } } } }
+      responses:
+        "204": { description: Verified }
+        "400": { $ref: "#/components/responses/Error" }
+  /auth/totp:
+    post:
+      operationId: startTotp
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TotpSetup" } } } }
+  /auth/totp/confirm:
+    post:
+      operationId: confirmTotp
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code], properties: { code: { type: string, pattern: "^[0-9]{6}$" } } } } } }
+      responses:
+        "204": { description: Enabled }
+        "400": { $ref: "#/components/responses/Error" }
+  /auth/passkeys/register:
+    post:
+      operationId: beginPasskeyRegistration
+      responses:
+        "200": { description: Options, content: { application/json: { schema: { $ref: "#/components/schemas/WebAuthnChallenge" } } } }
+  /auth/passkeys/register/{challengeId}:
+    post:
+      operationId: finishPasskeyRegistration
+      parameters: [{ name: challengeId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Passkey" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /auth/passkeys/login:
+    post:
+      operationId: beginPasskeyLogin
+      security: []
+      responses:
+        "200": { description: Options, content: { application/json: { schema: { $ref: "#/components/schemas/WebAuthnChallenge" } } } }
+  /auth/passkeys/login/{challengeId}:
+    post:
+      operationId: finishPasskeyLogin
+      security: []
+      parameters: [{ name: challengeId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SessionCreated" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+  /me:
+    get:
+      operationId: getMe
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+  /organizers:
+    get:
+      operationId: listOrganizers
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Organizer" } } } } }
+    post:
+      operationId: createOrganizer
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateOrganizer" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Organizer" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}:
+    get:
+      operationId: getOrganizer
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Organizer" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/audit:
+    get:
+      operationId: listAudit
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AuditEntry" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    session: { type: http, scheme: bearer }
+  parameters:
+    OrganizerPath: { name: organizer, in: path, required: true, schema: { type: string } }
+  responses:
+    Error: { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties: { code: { type: string }, message: { type: string } }
+    Health: { type: object, required: [status], properties: { status: { type: string } } }
+    SignupRequest:
+      type: object
+      required: [email, password, name]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 12, maxLength: 256 }
+        name: { type: string, minLength: 1, maxLength: 120 }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+        totp_code: { type: string, pattern: "^[0-9]{6}$" }
+    SessionCreated:
+      type: object
+      required: [session_token, user]
+      properties: { session_token: { type: string }, user: { $ref: "#/components/schemas/Me" } }
+    Me:
+      type: object
+      required: [id, email, name, email_verified, totp_enabled, mfa]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        name: { type: string }
+        email_verified: { type: boolean }
+        totp_enabled: { type: boolean }
+        mfa: { type: boolean, description: Whether this session passed a second factor or a passkey. }
+    TotpSetup:
+      type: object
+      required: [secret, otpauth_url]
+      properties: { secret: { type: string }, otpauth_url: { type: string } }
+    WebAuthnChallenge:
+      type: object
+      required: [challenge_id, options]
+      properties: { challenge_id: { type: string, format: uuid }, options: { type: object, additionalProperties: true } }
+    Passkey:
+      type: object
+      required: [id, name, created_at]
+      properties: { id: { type: string, format: uuid }, name: { type: string }, created_at: { type: string, format: date-time } }
+    CreateOrganizer:
+      type: object
+      required: [name, slug]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        slug: { type: string, pattern: "^[a-z0-9](-?[a-z0-9])*$", minLength: 3, maxLength: 40 }
+    Organizer:
+      type: object
+      required: [id, name, slug, role]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        role: { type: string, enum: [owner, admin, checkin] }
+    AuditEntry:
+      type: object
+      required: [id, action, entity_type, entity_id, at]
+      properties:
+        id: { type: string, format: uuid }
+        action: { type: string }
+        entity_type: { type: string }
+        entity_id: { type: string, format: uuid }
+        actor_user_id: { type: string, format: uuid }
+        at: { type: string, format: date-time }
