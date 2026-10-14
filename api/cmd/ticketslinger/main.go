@@ -15,6 +15,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/config"
 	"github.com/ticketslinger/ticketslinger/api/internal/db"
 	"github.com/ticketslinger/ticketslinger/api/internal/httpapi"
+	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/organizers"
 )
 
@@ -68,8 +69,9 @@ func serve() error {
 	defer pool.Close()
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.New(httpapi.Deps{Pool: pool, Auth: &auth.Service{}, Organizers: &organizers.Service{}, Config: cfg}),
+		Handler:           httpapi.New(httpapi.Deps{Pool: pool, Auth: auth.NewService(pool, mailer.Log{}, auth.Options{RPID: cfg.WebAuthnRPID, Origin: cfg.DashboardOrigin}), Organizers: &organizers.Service{}, Config: cfg}),
 		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()

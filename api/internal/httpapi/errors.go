@@ -14,12 +14,24 @@ type apiError struct {
 
 func (e *apiError) Error() string { return e.Code }
 
-func badRequest(msg string) error { return &apiError{400, "bad_request", msg} }
+func unauthorized() error {
+	return &apiError{401, "unauthorized", "Please sign in to continue."}
+}
+func tooManyAttempts() error {
+	return &apiError{429, "rate_limited", "Too many attempts. Try again in a few minutes."}
+}
 func notFound() error {
 	return &apiError{404, "not_found", "That doesn't exist, or you don't have access to it."}
 }
 
 var errNotImplemented = &apiError{501, "not_implemented", "This isn't available yet."}
+
+// writeBadRequest answers a request that couldn't be decoded. The decoder's
+// detail goes to the log, not the caller.
+func writeBadRequest(w http.ResponseWriter, r *http.Request, err error) {
+	slog.InfoContext(r.Context(), "bad request", "path", r.URL.Path, "err", err)
+	writeError(w, &apiError{400, "bad_request", "That request couldn't be read."})
+}
 
 func writeError(w http.ResponseWriter, err error) {
 	var ae *apiError
