@@ -260,3 +260,75 @@ func TestPasskeyLoginIsRateLimitedPerIP(t *testing.T) {
 		t.Fatalf("another IP: %v", err)
 	}
 }
+
+// The mfa=true claim rests on user verification and on these option sets.
+func TestPasskeyOptionsRequireResidentKeyAndUV(t *testing.T) {
+	s, _ := newSvcPool(t)
+	ctx := context.Background()
+	u := signup(t, s, "a@example.com")
+	_, ropts, err := s.BeginPasskeyRegistration(ctx, u.ID, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reg struct {
+		PublicKey struct {
+			AuthenticatorSelection struct{ ResidentKey, UserVerification string }
+		}
+	}
+	b, _ := json.Marshal(ropts)
+	_ = json.Unmarshal(b, &reg)
+	if sel := reg.PublicKey.AuthenticatorSelection; sel.ResidentKey != "required" || sel.UserVerification != "required" {
+		t.Fatalf("registration authenticatorSelection = %+v in %s", sel, b)
+	}
+	_, lopts, err := s.BeginPasskeyLogin(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var login struct{ PublicKey struct{ UserVerification string } }
+	b, _ = json.Marshal(lopts)
+	_ = json.Unmarshal(b, &login)
+	if login.PublicKey.UserVerification != "required" {
+		t.Fatalf("login userVerification = %q in %s", login.PublicKey.UserVerification, b)
+	}
+}
+
+func TestPasskeyWithoutUserVerificationIsRefused(t *testing.T) {
+	s, _ := newSvcPool(t)
+	ctx := context.Background()
+	u := signup(t, s, "a@example.com")
+
+	noUV := newDevice(u.ID)
+	noUV.authr.Options.UserNotVerified = true
+	id, opts, _ := s.BeginPasskeyRegistration(ctx, u.ID, true, "")
+	if _, err := s.FinishPasskeyRegistration(ctx, u.ID, id, noUV.attest(t, opts), ""); !errors.Is(err, auth.ErrBadPasskey) {
+		t.Fatalf("registration without UV: got %v, want ErrBadPasskey", err)
+	}
+
+	d := newDevice(u.ID)
+	register(t, s, u, d)
+	d.authr.Options.UserNotVerified = true
+	lid, lopts, _ := s.BeginPasskeyLogin(ctx, "")
+	if _, _, err := s.FinishPasskeyLogin(ctx, lid, d.assert(t, lopts), "", ""); !errors.Is(err, auth.ErrBadCredentials) {
+		t.Fatalf("login without UV: got %v, want ErrBadCredentials", err)
+	}
+}
+
+func TestPasskeyLoginFromAnotherOriginIsRefused(t *testing.T) {
+	s, _ := newSvcPool(t)
+	ctx := context.Background()
+	u := signup(t, s, "a@example.com")
+	d := newDevice(u.ID)
+	register(t, s, u, d)
+
+	lid, lopts, _ := s.BeginPasskeyLogin(ctx, "")
+	b, _ := json.Marshal(lopts)
+	o, err := virtualwebauthn.ParseAssertionOptions(string(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	evil := virtualwebauthn.RelyingParty{Name: "TicketSlinger", ID: "localhost", Origin: "https://evil.example"}
+	asr := virtualwebauthn.CreateAssertionResponse(evil, d.authr, d.cred, *o)
+	if _, _, err := s.FinishPasskeyLogin(ctx, lid, []byte(asr), "", ""); !errors.Is(err, auth.ErrBadCredentials) {
+		t.Fatalf("assertion from another origin: got %v, want ErrBadCredentials", err)
+	}
+}

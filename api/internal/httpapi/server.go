@@ -328,7 +328,7 @@ func (s *server) FinishPasskeyLogin(ctx context.Context, req FinishPasskeyLoginR
 	}
 	sess, u, err := s.Auth.FinishPasskeyLogin(ctx, req.ChallengeId, body, c.ip, c.ua)
 	if err != nil {
-		return nil, passkeyError(err, "That passkey isn't set up for any account here. Try another, or sign in with your password.")
+		return nil, passkeyError(err, "We couldn't sign you in with that passkey. Try another, or use your password.")
 	}
 	return FinishPasskeyLogin200JSONResponse{SessionToken: sess.Token, User: me(u, sess)}, nil
 }
