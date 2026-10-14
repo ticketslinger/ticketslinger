@@ -293,9 +293,9 @@ func TestEveryBoundAnswers422(t *testing.T) {
 					res := h.do(token, method, "/v1"+target, string(b))
 					e, _ := h.json(res)["error"].(map[string]any)
 					code, _ := e["code"].(string)
-					msg, _ := e["message"].(string)
-					if res.StatusCode != http.StatusUnprocessableEntity || !names(name, code+" "+msg) {
-						t.Errorf("%s /v1%s with %s=%.20v: got %d %q %q, want a 422 that names %s", method, target, name, bad, res.StatusCode, code, msg, name)
+					field, _ := e["field"].(string)
+					if res.StatusCode != http.StatusUnprocessableEntity || field != name {
+						t.Errorf("%s /v1%s with %s=%.20v: got %d %q field %q, want a 422 with field %s", method, target, name, bad, res.StatusCode, code, field, name)
 					}
 					checked++
 				}
@@ -307,23 +307,6 @@ func TestEveryBoundAnswers422(t *testing.T) {
 	}
 	t.Logf("%d bounds checked", checked)
 }
-
-// names reports whether an error's code or message is about the property: it
-// mentions one of the words in the property's name (tax_rate_bp: tax, rate),
-// or an alias where the API says it differently.
-func names(prop, text string) bool {
-	text = strings.ToLower(text)
-	words := append(strings.Split(prop, "_"), aliases[prop]...)
-	for _, w := range words {
-		if len(w) >= 3 && strings.Contains(text, w) {
-			return true
-		}
-	}
-	return false
-}
-
-// aliases are the words the API uses for a property whose name it avoids.
-var aliases = map[string][]string{"value": {"discount"}}
 
 // The test files must not reach the server around the validating client, or
 // their responses go unchecked. A line that has to may end in "// raw: why".

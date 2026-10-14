@@ -58,9 +58,9 @@ func validateQuota(name *string, size int) error {
 	*name = strings.TrimSpace(*name)
 	switch {
 	case utf8.RuneCountInString(*name) < 1 || utf8.RuneCountInString(*name) > 120:
-		return invalid("invalid_name", "Give the quota a name of up to 120 characters.")
+		return invalid("invalid_name", "name", "Give the quota a name of up to 120 characters.")
 	case size < 0 || size > 1000000:
-		return invalid("bad_quota_size", "A quota holds from 0 to 1,000,000 tickets.")
+		return invalid("bad_quota_size", "size", "A quota holds from 0 to 1,000,000 tickets.")
 	}
 	return nil
 }
@@ -72,9 +72,9 @@ func quotaDBError(err error) error {
 	if errors.As(err, &pg) {
 		switch pg.Code {
 		case "23514":
-			return ErrInvalid{"invalid_quota", "Something in that quota isn't allowed. Check the name, the size and the ticket types."}
+			return ErrInvalid{Code: "invalid_quota", Message: "Something in that quota isn't allowed. Check the name, the size and the ticket types."}
 		case "23503":
-			return ErrInvalid{"invalid_quota", "One of those ticket types isn't part of this event any more. Reload and try again."}
+			return ErrInvalid{Code: "invalid_quota", Field: "ticket_type_ids", Message: "One of those ticket types isn't part of this event any more. Reload and try again."}
 		}
 	}
 	return err
@@ -88,15 +88,15 @@ func dedupe(ids []uuid.UUID) []uuid.UUID {
 }
 
 // linkSet dedupes ids, then checks inside the locked transaction that they
-// are all ticket types of this event.
-func linkSet(ctx context.Context, tx pgx.Tx, event uuid.UUID, ids []uuid.UUID) ([]uuid.UUID, error) {
+// are all ticket types of this event. field names the property they came in.
+func linkSet(ctx context.Context, tx pgx.Tx, event uuid.UUID, ids []uuid.UUID, field string) ([]uuid.UUID, error) {
 	ids = dedupe(ids)
 	var n int
 	if err := tx.QueryRow(ctx, `select count(*) from ticket_types where event_id = $1 and id = any($2)`, event, ids).Scan(&n); err != nil {
 		return nil, err
 	}
 	if n != len(ids) {
-		return nil, invalid("unknown_ticket_type", "One of those ticket types isn't part of this event.")
+		return nil, invalid("unknown_ticket_type", field, "One of those ticket types isn't part of this event.")
 	}
 	return ids, nil
 }
@@ -128,7 +128,7 @@ func liveNeedsCapacity(ctx context.Context, tx pgx.Tx, ev Event) error {
 		return err
 	}
 	if n > 0 {
-		return ErrConflict{"live_needs_capacity", "Every ticket on a live event needs a capacity. Move the event back to draft first."}
+		return ErrConflict{"live_needs_capacity", "ticket_type_ids", "Every ticket on a live event needs a capacity. Move the event back to draft first."}
 	}
 	return nil
 }
@@ -142,7 +142,7 @@ func CreateQuota(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor aud
 	if _, err := lockEvent(ctx, tx, event); err != nil {
 		return Quota{}, err
 	}
-	ids, err := linkSet(ctx, tx, event, in.TicketTypeIDs)
+	ids, err := linkSet(ctx, tx, event, in.TicketTypeIDs, "ticket_type_ids")
 	if err != nil {
 		return Quota{}, err
 	}
@@ -204,7 +204,7 @@ func UpdateQuota(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 		return Quota{}, err
 	}
 	if p.TicketTypeIDs != nil {
-		if q.TicketTypeIDs, err = linkSet(ctx, tx, event, *p.TicketTypeIDs); err != nil {
+		if q.TicketTypeIDs, err = linkSet(ctx, tx, event, *p.TicketTypeIDs, "ticket_type_ids"); err != nil {
 			return Quota{}, err
 		}
 	}

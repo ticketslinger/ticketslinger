@@ -33,6 +33,8 @@ export class ApiFailure extends Error {
     readonly code: string,
     message: string,
     readonly status: number,
+    /** The request property the error is about, when the API names one (price_cents, options[2]). */
+    readonly field = "",
   ) {
     super(message);
   }
@@ -45,7 +47,7 @@ const fallback = (status: number) =>
 
 function failure(status: number, body: unknown): ApiFailure {
   const e = (body as Partial<ApiError> | undefined)?.error;
-  return new ApiFailure(e?.code ?? "unknown", e?.message || fallback(status), status);
+  return new ApiFailure(e?.code ?? "unknown", e?.message || fallback(status), status, e?.field);
 }
 
 /** Unwraps an openapi-fetch result, throwing ApiFailure on any non-2xx. */

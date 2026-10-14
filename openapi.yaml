@@ -559,7 +559,10 @@ components:
         error:
           type: object
           required: [code, message]
-          properties: { code: { type: string }, message: { type: string } }
+          properties:
+            code: { type: string }
+            message: { type: string }
+            field: { type: string, description: "The request property this error is about, when there is one (e.g. price_cents, applies_to, options[2])." }
     Health: { type: object, required: [status], properties: { status: { type: string } } }
     SignupRequest:
       type: object

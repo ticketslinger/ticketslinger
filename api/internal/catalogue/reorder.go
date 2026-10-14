@@ -33,7 +33,7 @@ func reorder(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor audit.A
 		return s
 	}
 	if !slices.Equal(sorted(ids), sorted(current)) {
-		return invalid("order_mismatch", "Send every id in this event exactly once. The list is out of date, has a repeat, or has one that isn't here. Reload and try again.")
+		return invalid("order_mismatch", "ids", "Send every id in this event exactly once. The list is out of date, has a repeat, or has one that isn't here. Reload and try again.")
 	}
 	if slices.Equal(ids, current) {
 		return nil

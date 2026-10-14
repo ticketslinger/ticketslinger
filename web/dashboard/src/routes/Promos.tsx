@@ -25,31 +25,16 @@ const MAX_USES = 1_000_000_000;
 /** What the API stores: trimmed and upper-case, so spring and SPRING are one code. */
 export const normalizeCode = (s: string) => s.trim().toUpperCase();
 
-/** Which form field an API error code is about; "" when it's about the form as a whole. */
-export function promoFieldFor(code: string, message: string): string {
-  switch (code) {
-    case "bad_code":
-    case "code_taken":
-      return "code";
-    case "bad_discount":
-    case "value_required_with_kind":
-      return "value";
-    case "bad_max_uses":
-      return "max";
-    case "bad_validity":
-      return "until";
-    case "applies_to_conflict":
-    case "applies_to_required":
-    case "unknown_ticket_type":
-      return "types";
-    case "unlock_not_hidden":
-      return "unlocks";
-    case "missing_field":
-      return message.includes("value") ? "value" : message.includes("code") ? "code" : "";
-    default:
-      return "";
-  }
-}
+/** The form field for each request property the API can name. */
+export const promoFields: Record<string, string> = {
+  code: "code",
+  value: "value",
+  max_uses: "max",
+  valid_from: "from",
+  valid_until: "until",
+  applies_to: "types",
+  unlocks: "unlocks",
+};
 
 export type PromoDraft = {
   code: string;
@@ -191,8 +176,8 @@ function PromoDialog({
   const start = promo ? promoDraftOf(promo, event.timezone) : emptyPromo;
   const [d, setD] = useState(start);
   const [local, setLocal] = useState<Problem | null>(null);
-  const { busy, error, code, clear, run } = useAction();
-  const p = useProblem("pc", local, error, code, promoFieldFor);
+  const { busy, error, field, clear, run } = useAction();
+  const p = useProblem("pc", local, error, field, promoFields);
   const set = (patch: Partial<PromoDraft>) => {
     setLocal(null);
     clear();

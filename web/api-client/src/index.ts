@@ -1,9 +1,9 @@
 import createClient from "openapi-fetch";
-import type { paths } from "./schema.gen";
+import type { components, paths } from "./schema.gen";
 
 export type { components, paths } from "./schema.gen";
 
-export type ApiError = { error: { code: string; message: string } };
+export type ApiError = components["schemas"]["Error"];
 
 export function createApi(baseUrl: string, fetchImpl: (req: Request) => Promise<Response> = fetch) {
   return createClient<paths>({ baseUrl, fetch: fetchImpl });

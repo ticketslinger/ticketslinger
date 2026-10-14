@@ -10,28 +10,14 @@ import { addOption, duplicateAt, moveOption, removeOption, renameOption } from "
 type Question = components["schemas"]["Question"];
 type TicketType = components["schemas"]["TicketType"];
 
-/** Which form field an API error code is about; "" when it's about the form as a whole. */
-export function questionFieldFor(code: string, message: string): string {
-  switch (code) {
-    case "bad_label":
-      return "label";
-    case "bad_kind":
-      return "kind";
-    case "bad_scope":
-      return "scope";
-    case "bad_options":
-    case "options_required_with_kind":
-      return "options";
-    case "applies_to_conflict":
-    case "applies_to_required":
-    case "unknown_ticket_type":
-      return "types";
-    case "missing_field":
-      return message.includes("label") ? "label" : message.includes("scope") ? "scope" : "";
-    default:
-      return "";
-  }
-}
+/** The form field for each request property the API can name. */
+export const questionFields: Record<string, string> = {
+  label: "label",
+  kind: "kind",
+  scope: "scope",
+  options: "options",
+  applies_to: "types",
+};
 
 export type QuestionDraft = {
   label: string;
@@ -223,8 +209,8 @@ function QuestionDialog({
   const start = question ? draftOf(question) : emptyQuestion;
   const [d, setD] = useState(start);
   const [local, setLocal] = useState<Problem | null>(null);
-  const { busy, error, code, clear, run } = useAction();
-  const p = useProblem("qn", local, error, code, questionFieldFor);
+  const { busy, error, field, clear, run } = useAction();
+  const p = useProblem("qn", local, error, field, questionFields);
   const set = (patch: Partial<QuestionDraft>) => {
     setLocal(null);
     clear();

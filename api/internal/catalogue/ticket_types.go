@@ -83,17 +83,19 @@ func validateTT(t *TicketType) error {
 	t.Name = strings.TrimSpace(t.Name)
 	switch {
 	case utf8.RuneCountInString(t.Name) < 1 || utf8.RuneCountInString(t.Name) > 120:
-		return invalid("invalid_name", "Give the ticket type a name of up to 120 characters.")
+		return invalid("invalid_name", "name", "Give the ticket type a name of up to 120 characters.")
 	case utf8.RuneCountInString(t.Description) > 2000:
-		return invalid("invalid_description", "The description can run to 2,000 characters. This one is longer.")
+		return invalid("invalid_description", "description", "The description can run to 2,000 characters. This one is longer.")
 	case t.PriceCents < 0 || t.PriceCents > 10000000:
-		return invalid("bad_price", "A price runs from $0 to $100,000. Send it in cents: $25 is 2500.")
+		return invalid("bad_price", "price_cents", "A price runs from $0 to $100,000. Send it in cents: $25 is 2500.")
 	case t.TaxRateBP != nil && (*t.TaxRateBP < 0 || *t.TaxRateBP > 10000):
-		return invalid("invalid_tax_rate", "Tax is in basis points, from 0 to 10000. For 8.25%, send 825.")
-	case t.MinPerOrder < 1 || t.MaxPerOrder < 1 || t.MinPerOrder > 100 || t.MaxPerOrder > 100 || t.MinPerOrder > t.MaxPerOrder:
-		return invalid("bad_limits", "Per-order limits run from 1 to 100, and the minimum can't be above the maximum.")
+		return invalid("invalid_tax_rate", "tax_rate_bp", "Tax is in basis points, from 0 to 10000. For 8.25%, send 825.")
+	case t.MinPerOrder < 1 || t.MinPerOrder > 100:
+		return invalid("bad_limits", "min_per_order", "Per-order limits run from 1 to 100, and the minimum can't be above the maximum.")
+	case t.MaxPerOrder < 1 || t.MaxPerOrder > 100 || t.MinPerOrder > t.MaxPerOrder:
+		return invalid("bad_limits", "max_per_order", "Per-order limits run from 1 to 100, and the minimum can't be above the maximum.")
 	case t.SalesStart != nil && t.SalesEnd != nil && !t.SalesEnd.After(*t.SalesStart):
-		return invalid("bad_sales_window", "Sales have to end after they start.")
+		return invalid("bad_sales_window", "sales_end", "Sales have to end after they start.")
 	}
 	return nil
 }
@@ -104,9 +106,9 @@ func ttDBError(err error) error {
 	if errors.As(err, &pg) {
 		switch pg.Code {
 		case "23514":
-			return ErrInvalid{"invalid_ticket_type", "Something in that ticket type isn't allowed. Check the lengths, price, limits and dates."}
+			return ErrInvalid{Code: "invalid_ticket_type", Message: "Something in that ticket type isn't allowed. Check the lengths, price, limits and dates."}
 		case "23505":
-			return ErrConflict{"ticket_type_exists", "That ticket type already exists."}
+			return ErrConflict{"ticket_type_exists", "", "That ticket type already exists."}
 		}
 	}
 	return err
@@ -144,14 +146,14 @@ func CreateTicketType(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, acto
 	}
 	quotas := dedupe(in.QuotaIDs)
 	if ev.Status == "live" && len(quotas) == 0 {
-		return TicketType{}, ErrConflict{"live_needs_capacity", "Every ticket on a live event needs a capacity. Move the event back to draft first, or pass quota_ids."}
+		return TicketType{}, ErrConflict{"live_needs_capacity", "quota_ids", "Every ticket on a live event needs a capacity. Move the event back to draft first, or pass quota_ids."}
 	}
 	var n int
 	if err := tx.QueryRow(ctx, `select count(*) from quotas where event_id = $1 and id = any($2)`, event, quotas).Scan(&n); err != nil {
 		return TicketType{}, err
 	}
 	if n != len(quotas) {
-		return TicketType{}, invalid("unknown_quota", "One of those quotas isn't part of this event.")
+		return TicketType{}, invalid("unknown_quota", "quota_ids", "One of those quotas isn't part of this event.")
 	}
 	t, err = scanTT(tx.QueryRow(ctx, `insert into ticket_types(organizer_id, event_id, name, description, price_cents, tax_rate_bp, prices_include_tax,
 			sales_start, sales_end, min_per_order, max_per_order, hidden, position)
@@ -232,7 +234,7 @@ func UpdateTicketType(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, 
 		err := tx.QueryRow(ctx, `select p.code from promo_unlocks u join promo_codes p on p.id = u.promo_code_id
 			where u.ticket_type_id = $1 order by p.code limit 1`, id).Scan(&code)
 		if err == nil {
-			return TicketType{}, ErrConflict{"unlocked_by_promo", "Remove it from promo code " + code + " first, or keep it hidden."}
+			return TicketType{}, ErrConflict{"unlocked_by_promo", "", "Remove it from promo code " + code + " first, or keep it hidden."}
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return TicketType{}, err
@@ -295,7 +297,7 @@ func DeleteTicketType(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, 
 			return err
 		}
 		if n == 1 {
-			return ErrConflict{"last_ticket_type_live", "Move the event back to draft before removing its last ticket type."}
+			return ErrConflict{"last_ticket_type_live", "", "Move the event back to draft before removing its last ticket type."}
 		}
 	}
 	var quotas []uuid.UUID

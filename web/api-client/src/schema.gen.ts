@@ -527,6 +527,8 @@ export interface components {
             error: {
                 code: string;
                 message: string;
+                /** @description The request property this error is about, when there is one (e.g. price_cents, applies_to, options[2]). */
+                field?: string;
             };
         };
         Health: {

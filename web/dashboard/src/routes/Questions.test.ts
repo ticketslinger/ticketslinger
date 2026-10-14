@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { emptyQuestion, questionBody, questionFieldFor } from "./Questions";
+import { emptyQuestion, questionBody } from "./Questions";
 
 const ok = { ...emptyQuestion, label: "Dietary needs?" };
 const field = (d: Partial<typeof ok>) => (questionBody({ ...ok, ...d }) as { field: string }).field;
@@ -41,13 +41,4 @@ test("label, and which tickets", () => {
   ).toMatchObject({
     body: { applies_to_all: false, applies_to: ["a"], scope: "ticket", required: true },
   });
-});
-
-test("API error codes point at fields", () => {
-  expect(questionFieldFor("bad_label", "")).toBe("label");
-  expect(questionFieldFor("bad_options", "")).toBe("options");
-  expect(questionFieldFor("options_required_with_kind", "")).toBe("options");
-  expect(questionFieldFor("applies_to_conflict", "")).toBe("types");
-  expect(questionFieldFor("missing_field", "Send “label”")).toBe("label");
-  expect(questionFieldFor("x", "")).toBe("");
 });

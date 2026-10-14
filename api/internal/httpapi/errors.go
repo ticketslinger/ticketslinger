@@ -14,6 +14,20 @@ type apiError struct {
 
 func (e *apiError) Error() string { return e.Code }
 
+// fieldError is an apiError about one request property: the body names it as
+// "field" (price_cents, options[2]).
+type fieldError struct {
+	*apiError
+	Field string
+}
+
+func (e fieldError) Unwrap() error { return e.apiError }
+
+// invalidField is a 422 about the request property field.
+func invalidField(code, field, msg string) error {
+	return fieldError{&apiError{422, code, msg}, field}
+}
+
 func unauthorized() error {
 	return &apiError{401, "unauthorized", "Please sign in to continue."}
 }
@@ -40,7 +54,12 @@ func writeError(w http.ResponseWriter, err error) {
 		slog.Error("unhandled error", "err", err)
 		ae = &apiError{500, "internal", "Something went wrong on our side. Please try again."}
 	}
-	writeJSON(w, ae.Status, map[string]any{"error": map[string]string{"code": ae.Code, "message": ae.Message}})
+	body := map[string]string{"code": ae.Code, "message": ae.Message}
+	var fe fieldError
+	if errors.As(err, &fe) {
+		body["field"] = fe.Field
+	}
+	writeJSON(w, ae.Status, map[string]any{"error": body})
 }
 
 func recoverer(next http.Handler) http.Handler {
