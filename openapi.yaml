@@ -412,6 +412,63 @@ paths:
         "204": { description: Deleted }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/questions:
+    get:
+      operationId: listQuestions
+      description: Any member, or any API key. In position order.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Question" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createQuestion
+      description: "Owners and admins, or a write API key. label, kind and scope are required (422 missing_field). The question goes at the end of the list. Every id in applies_to must be a ticket type of this event (422 unknown_ticket_type)."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateQuestion" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Question" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/questions/{question}:
+    get:
+      operationId: getQuestion
+      description: Any member, or any API key.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/QuestionPath" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Question" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateQuestion
+      description: "Owners and admins, or a write API key. Send only what changes. Turning a question into a select needs options in the same request (422 options_required_with_kind); turning a select into anything else clears its options. applies_to replaces the whole set when sent. Changing position moves only this question; the others keep theirs."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/QuestionPath" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/QuestionFields" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Question" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteQuestion
+      description: Owners and admins, or a write API key.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/QuestionPath" }
+      responses:
+        "204": { description: Deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     session: { type: http, scheme: bearer, description: "A session token, or an organizer API key (tsk_...). A key acts only within its own organizer, and gets 403 session_required on anything that needs a person: your account, your organizer list, the audit log and key management. A read key gets 403 scope_read_only on writes." }
@@ -419,6 +476,7 @@ components:
     OrganizerPath: { name: organizer, in: path, required: true, schema: { type: string } }
     QuotaPath: { name: quota, in: path, required: true, schema: { type: string, format: uuid } }
     PromoCodePath: { name: promoCode, in: path, required: true, schema: { type: string, format: uuid } }
+    QuestionPath: { name: question, in: path, required: true, schema: { type: string, format: uuid } }
     TicketTypePath: { name: ticketType, in: path, required: true, schema: { type: string, format: uuid } }
     EventPath: { name: event, in: path, required: true, schema: { type: string, format: uuid } }
   responses:
@@ -624,6 +682,37 @@ components:
         applies_to_all: { type: boolean }
         applies_to: { type: array, items: { type: string, format: uuid } }
         unlocks: { type: array, items: { type: string, format: uuid } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    QuestionFields:
+      type: object
+      properties:
+        label: { type: string, minLength: 1, maxLength: 200 }
+        kind: { type: string, enum: [text, select, checkbox] }
+        options: { type: array, items: { type: string, minLength: 1, maxLength: 120 }, description: "A select needs 2 to 30, different ignoring capitals (422 bad_options). Text and checkbox questions have none. On a patch the list replaces the current one." }
+        required: { type: boolean, description: Defaults to false. }
+        scope: { type: string, enum: [order, ticket], description: "order: asked once per order. ticket: asked for every ticket." }
+        applies_to_all: { type: boolean, description: "true (the default) asks it for every ticket type; then applies_to must be empty (422 applies_to_conflict). false limits it to applies_to, which must not be empty (422 applies_to_required). If every listed ticket type is later deleted, the question is never asked." }
+        applies_to: { type: array, items: { type: string, format: uuid }, description: "Ticket types the question covers when applies_to_all is false. On a patch the list replaces the current one." }
+        position: { type: integer, minimum: 1, description: "Patch only. Moves this question; the others keep their positions." }
+    CreateQuestion:
+      allOf:
+        - { $ref: "#/components/schemas/QuestionFields" }
+        - { type: object, required: [label, kind, scope], properties: { label: { type: string, x-go-type: "*string" }, kind: { type: string, enum: [text, select, checkbox], x-go-type: "*string" }, scope: { type: string, enum: [order, ticket], x-go-type: "*string" } } }
+    Question:
+      type: object
+      required: [id, event_id, label, kind, options, required, scope, applies_to_all, applies_to, position, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        event_id: { type: string, format: uuid }
+        label: { type: string }
+        kind: { type: string, enum: [text, select, checkbox] }
+        options: { type: array, items: { type: string } }
+        required: { type: boolean }
+        scope: { type: string, enum: [order, ticket] }
+        applies_to_all: { type: boolean }
+        applies_to: { type: array, items: { type: string, format: uuid } }
+        position: { type: integer }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     TicketTypeFields:

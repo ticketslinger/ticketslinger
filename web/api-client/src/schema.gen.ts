@@ -448,6 +448,43 @@ export interface paths {
         patch: operations["updatePromoCode"];
         trace?: never;
     };
+    "/organizers/{organizer}/events/{event}/questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Any member, or any API key. In position order. */
+        get: operations["listQuestions"];
+        put?: never;
+        /** @description Owners and admins, or a write API key. label, kind and scope are required (422 missing_field). The question goes at the end of the list. Every id in applies_to must be a ticket type of this event (422 unknown_ticket_type). */
+        post: operations["createQuestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/questions/{question}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Any member, or any API key. */
+        get: operations["getQuestion"];
+        put?: never;
+        post?: never;
+        /** @description Owners and admins, or a write API key. */
+        delete: operations["deleteQuestion"];
+        options?: never;
+        head?: never;
+        /** @description Owners and admins, or a write API key. Send only what changes. Turning a question into a select needs options in the same request (422 options_required_with_kind); turning a select into anything else clears its options. applies_to replaces the whole set when sent. Changing position moves only this question; the others keep theirs. */
+        patch: operations["updateQuestion"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -713,6 +750,53 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        QuestionFields: {
+            label?: string;
+            /** @enum {string} */
+            kind?: "text" | "select" | "checkbox";
+            /** @description A select needs 2 to 30, different ignoring capitals (422 bad_options). Text and checkbox questions have none. On a patch the list replaces the current one. */
+            options?: string[];
+            /** @description Defaults to false. */
+            required?: boolean;
+            /**
+             * @description order: asked once per order. ticket: asked for every ticket.
+             * @enum {string}
+             */
+            scope?: "order" | "ticket";
+            /** @description true (the default) asks it for every ticket type; then applies_to must be empty (422 applies_to_conflict). false limits it to applies_to, which must not be empty (422 applies_to_required). If every listed ticket type is later deleted, the question is never asked. */
+            applies_to_all?: boolean;
+            /** @description Ticket types the question covers when applies_to_all is false. On a patch the list replaces the current one. */
+            applies_to?: string[];
+            /** @description Patch only. Moves this question; the others keep their positions. */
+            position?: number;
+        };
+        CreateQuestion: components["schemas"]["QuestionFields"] & {
+            label: string;
+            /** @enum {string} */
+            kind: "text" | "select" | "checkbox";
+            /** @enum {string} */
+            scope: "order" | "ticket";
+        };
+        Question: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            event_id: string;
+            label: string;
+            /** @enum {string} */
+            kind: "text" | "select" | "checkbox";
+            options: string[];
+            required: boolean;
+            /** @enum {string} */
+            scope: "order" | "ticket";
+            applies_to_all: boolean;
+            applies_to: string[];
+            position: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
         TicketTypeFields: {
             name?: string;
             description?: string;
@@ -786,6 +870,7 @@ export interface components {
         OrganizerPath: string;
         QuotaPath: string;
         PromoCodePath: string;
+        QuestionPath: string;
         TicketTypePath: string;
         EventPath: string;
     };
@@ -1836,6 +1921,140 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    listQuestions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Question"][];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    createQuestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateQuestion"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Question"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    getQuestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                question: components["parameters"]["QuestionPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Question"];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteQuestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                question: components["parameters"]["QuestionPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    updateQuestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                question: components["parameters"]["QuestionPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuestionFields"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Question"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
