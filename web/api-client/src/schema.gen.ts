@@ -329,11 +329,11 @@ export interface paths {
         get: operations["getEvent"];
         put?: never;
         post?: never;
-        /** @description Owners and admins, or a write API key. Drafts only; a live event answers 409 event_not_draft. */
+        /** @description Owners and admins, or a write API key. Drafts only; a live event answers 409 event_not_draft, and a draft with orders answers 409 has_sales. */
         delete: operations["deleteEvent"];
         options?: never;
         head?: never;
-        /** @description Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed). Going live is refused with 422 event_over once ends_at has passed (an event that has started but not ended can go live), 422 no_ticket_types without a ticket type, and 422 unquotaed_ticket_type while a ticket type has no quota. A live event's ends_at can still change. The slug changes only on a draft (409 slug_locked). Once tickets are sold or held in an open checkout, tax_rate_bp, prices_include_tax, fee_mode and timezone can't change and the event can't go back to draft (409 has_sales); field names the property refused. */
+        /** @description Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed). Going live is refused with 422 event_over once ends_at has passed (an event that has started but not ended can go live), 422 no_ticket_types without a ticket type, and 422 unquotaed_ticket_type while a ticket type has no quota. A live event's ends_at can still change. The slug changes only on a draft (409 slug_locked). Once tickets are sold or held in an open checkout, tax_rate_bp, prices_include_tax, fee_mode and timezone can't change and the event can't go back to draft (409 has_sales; any order counts, even one without tickets); field names the property refused. */
         patch: operations["updateEvent"];
         trace?: never;
     };
@@ -383,7 +383,7 @@ export interface paths {
         get: operations["getTicketType"];
         put?: never;
         post?: never;
-        /** @description Owners and admins, or a write API key. The last ticket type of a live event answers 409 last_ticket_type_live. One that has been sold, or is held by any checkout, answers 409 has_sales. */
+        /** @description Owners and admins, or a write API key. The last ticket type of a live event answers 409 last_ticket_type_live. One that has been sold, or is held in an open checkout, answers 409 has_sales. */
         delete: operations["deleteTicketType"];
         options?: never;
         head?: never;
@@ -401,7 +401,7 @@ export interface paths {
         /** @description Any member, or any API key. Oldest first. */
         get: operations["listQuotas"];
         put?: never;
-        /** @description Owners and admins, or a write API key. size is required (422 missing_field). ticket_type_ids may be empty; every id must belong to this event (422 unknown_ticket_type). */
+        /** @description Owners and admins, or a write API key. size is required (422 missing_field). ticket_type_ids may be empty; every id must belong to this event (422 unknown_ticket_type). A size below what those ticket types have already sold and hold in open checkouts answers 409 quota_below_sales. */
         post: operations["createQuota"];
         delete?: never;
         options?: never;
@@ -424,7 +424,7 @@ export interface paths {
         delete: operations["deleteQuota"];
         options?: never;
         head?: never;
-        /** @description Owners and admins, or a write API key. Send only what changes. A ticket_type_ids list replaces the whole set. On a live event, leaving a ticket type in no quota answers 409 live_needs_capacity. size can grow at any time but can't drop below what is sold and held in open checkouts (409 quota_below_sales), and a ticket type with sales can't leave the set (409 has_sales). */
+        /** @description Owners and admins, or a write API key. Send only what changes. A ticket_type_ids list replaces the whole set. On a live event, leaving a ticket type in no quota answers 409 live_needs_capacity. size can grow at any time but can't drop below what its ticket types have sold and hold in open checkouts, counting any ticket type the patch adds (409 quota_below_sales). A ticket type with sales can't leave the set (409 has_sales). */
         patch: operations["updateQuota"];
         trace?: never;
     };
@@ -1806,6 +1806,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };

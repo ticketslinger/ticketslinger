@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 )
@@ -282,7 +283,12 @@ func DeleteEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 	if before.Status != "draft" {
 		return ErrConflict{"event_not_draft", "", "Only a draft can be deleted. This event has already gone on sale."}
 	}
+	// 23503: an order or ticket still points at it. Those have no cascade.
 	if _, err := tx.Exec(ctx, `delete from events where id = $1`, id); err != nil {
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.Code == "23503" {
+			return errHasSales("", "tickets to this event")
+		}
 		return err
 	}
 	return audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "event.deleted", EntityType: "event", EntityID: id, Before: before})

@@ -35,7 +35,6 @@ type fixture struct {
 func seedLiveEvent(t *testing.T) fixture {
 	t.Helper()
 	pool := testdb.New(t)
-	ctx := context.Background()
 	user, orgs := seed(t, pool)
 	f := fixture{pool: pool, owner: testdb.Owner(t, pool), user: user, org: orgs[0], actor: audit.Actor{User: user}}
 	err := f.inScope(t, func(ctx context.Context, tx pgx.Tx) error {
@@ -71,7 +70,6 @@ func seedLiveEvent(t *testing.T) fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = ctx
 	return f
 }
 
@@ -226,8 +224,8 @@ func TestCapacityCanGrowAndShrinkToSales(t *testing.T) {
 	if err := resize(3); err != nil {
 		t.Fatalf("10 -> 3 with 3 held: %v", err)
 	}
-	if code, _ := conflictOf(resize(2)); code != "quota_below_sales" {
-		t.Fatalf("3 -> 2 with 3 held: %v, want quota_below_sales", resize(2))
+	if err := resize(2); !hasCode(err, "quota_below_sales") {
+		t.Fatalf("3 -> 2 with 3 held: %v, want quota_below_sales", err)
 	}
 	if err := resize(50); err != nil {
 		t.Fatalf("3 -> 50: %v", err)
@@ -246,6 +244,150 @@ func TestExpiredHoldsDontCountAsSales(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// An abandoned cart doesn't pin its ticket type: the type goes, and the
+	// expired hold with it.
+	if err := f.inScope(t, func(ctx context.Context, tx pgx.Tx) error {
+		return catalogue.DeleteTicketType(ctx, tx, f.org, f.event, f.general, f.actor)
+	}); err != nil {
+		t.Fatalf("delete with only an expired hold: %v", err)
+	}
+	var holds int
+	if err := f.owner.QueryRow(context.Background(), `select count(*) from holds`).Scan(&holds); err != nil || holds != 0 {
+		t.Fatalf("holds left: %d %v", holds, err)
+	}
+	// A ticket still pins it.
+	g := seedLiveEvent(t)
+	g.sell(t, "expired", 1)
+	g.sell(t, "ticket", 1)
+	if err := g.inScope(t, func(ctx context.Context, tx pgx.Tx) error {
+		return catalogue.DeleteTicketType(ctx, tx, g.org, g.event, g.general, g.actor)
+	}); !hasCode(err, "has_sales") {
+		t.Fatalf("delete with a ticket: %v, want has_sales", err)
+	}
+}
+
+func hasCode(err error, code string) bool {
+	c, _ := conflictOf(err)
+	return c == code
+}
+
+// Linking a ticket type into a quota brings its sales with it: the quota
+// can't end up smaller than what it now holds, whether it's new or patched.
+func TestLinkChangesRespectSales(t *testing.T) {
+	f := seedLiveEvent(t)
+	f.sell(t, "hold", 3)
+	var tiny catalogue.Quota
+	if err := f.inScope(t, func(ctx context.Context, tx pgx.Tx) (err error) {
+		tiny, err = catalogue.CreateQuota(ctx, tx, f.org, f.event, f.actor, catalogue.QuotaInput{Name: "Tiny", Size: 5, TicketTypeIDs: []uuid.UUID{f.vip}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	patch := func(p catalogue.QuotaPatch) error {
+		return f.inScope(t, func(ctx context.Context, tx pgx.Tx) error {
+			_, err := catalogue.UpdateQuota(ctx, tx, f.org, f.event, tiny.ID, f.actor, p)
+			return err
+		})
+	}
+	create := func(size int) error {
+		return f.inScope(t, func(ctx context.Context, tx pgx.Tx) error {
+			_, err := catalogue.CreateQuota(ctx, tx, f.org, f.event, f.actor, catalogue.QuotaInput{Name: "Small", Size: size, TicketTypeIDs: []uuid.UUID{f.general}})
+			return err
+		})
+	}
+	both := []uuid.UUID{f.general, f.vip}
+	if err := patch(catalogue.QuotaPatch{Size: ptr(2), TicketTypeIDs: &both}); !hasCode(err, "quota_below_sales") {
+		t.Fatalf("shrink to 2 and add General (3 held): %v, want quota_below_sales", err)
+	}
+	if err := patch(catalogue.QuotaPatch{Size: ptr(4), TicketTypeIDs: &both}); err != nil {
+		t.Fatalf("shrink to 4 and add General: %v", err)
+	}
+	if err := patch(catalogue.QuotaPatch{TicketTypeIDs: &[]uuid.UUID{f.general}}); err != nil {
+		t.Fatalf("drop VIP, which has no sales: %v", err)
+	}
+	if err := create(2); !hasCode(err, "quota_below_sales") {
+		t.Fatalf("new quota of 2 over 3 held: %v, want quota_below_sales", err)
+	}
+	if err := create(3); err != nil {
+		t.Fatalf("new quota of 3 over 3 held: %v", err)
+	}
+}
+
+// A quota created while a checkout is holding tickets of its type waits for
+// the checkout and then counts its hold: it can't be born oversold.
+func TestNewQuotaRacesWithAHold(t *testing.T) {
+	f := seedLiveEvent(t)
+	ctx := context.Background()
+	held := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- system.Run(ctx, f.pool, f.org, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `select 1 from quotas where id in (select quota_id from quota_ticket_types where ticket_type_id = $1)
+				order by id for update`, f.general); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `with c as (insert into checkouts(organizer_id, event_id, token_hash, expires_at)
+					values ($1, $2, sha256('race'), now() + interval '15 minutes') returning id)
+				insert into holds(organizer_id, event_id, checkout_id, ticket_type_id, quantity) select $1, $2, id, $3, 3 from c`,
+				f.org, f.event, f.general); err != nil {
+				return err
+			}
+			close(held)
+			time.Sleep(300 * time.Millisecond)
+			return nil
+		})
+	}()
+	select {
+	case <-held:
+	case err := <-done:
+		t.Fatalf("checkout: %v", err)
+	}
+	err := f.inScope(t, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := catalogue.CreateQuota(ctx, tx, f.org, f.event, f.actor, catalogue.QuotaInput{Name: "Small", Size: 2, TicketTypeIDs: []uuid.UUID{f.general}})
+		return err
+	})
+	if err := <-done; err != nil {
+		t.Fatalf("checkout: %v", err)
+	}
+	if !hasCode(err, "quota_below_sales") {
+		t.Fatalf("quota racing a hold: %v, want quota_below_sales", err)
+	}
+}
+
+// An order with no tickets (cancelled before any were cut) still means the
+// event has sold: it can't go back to draft, and a draft with one can't be
+// deleted (409, not a foreign key 500).
+func TestOrdersCountAsSales(t *testing.T) {
+	f := seedLiveEvent(t)
+	ctx := context.Background()
+	order := func(event uuid.UUID, code string) {
+		t.Helper()
+		if _, err := f.owner.Exec(ctx, `insert into orders(organizer_id, event_id, code, email, status, subtotal_cents, discount_cents,
+				tax_cents, fee_cents, total_cents, fee_mode, quote, details)
+			values ($1, $2, $3, 'b@example.com', 'cancelled', 0, 0, 0, 0, 0, 'pass', '{}', '{}')`, f.org, event, code); err != nil {
+			t.Fatal(err)
+		}
+	}
+	order(f.event, "TS-CCCCC")
+	if err := f.inScope(t, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{Status: ptr("draft")})
+		return err
+	}); !hasCode(err, "has_sales") {
+		t.Fatalf("live -> draft with a cancelled order: %v, want has_sales", err)
+	}
+	var draft catalogue.Event
+	if err := f.inScope(t, func(ctx context.Context, tx pgx.Tx) (err error) {
+		draft, err = catalogue.CreateEvent(ctx, tx, f.org, f.actor, in("draft-with-order"))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	order(draft.ID, "TS-DDDDD")
+	if err := f.inScope(t, func(ctx context.Context, tx pgx.Tx) error {
+		return catalogue.DeleteEvent(ctx, tx, f.org, draft.ID, f.actor)
+	}); !hasCode(err, "has_sales") {
+		t.Fatalf("delete a draft with an order: %v, want has_sales", err)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 // salesExist takes the lock every sale takes (the quotas of the ticket types,
 // in id order; all the event's quotas when ticketTypes is nil) and then says
 // whether any ticket was ever cut for them or an open checkout holds them now.
+// For the whole event, any order counts too, even one that never got tickets.
 // Taking the same lock first is what stops a checkout and an edit from
 // passing each other.
 func salesExist(ctx context.Context, tx pgx.Tx, event uuid.UUID, ticketTypes []uuid.UUID) (bool, error) {
@@ -22,7 +23,8 @@ func salesExist(ctx context.Context, tx pgx.Tx, event uuid.UUID, ticketTypes []u
 	err := tx.QueryRow(ctx, `select exists (select 1 from tickets where event_id = $1 and ($2::uuid[] is null or ticket_type_id = any($2)))
 		or exists (select 1 from holds h join checkouts c on c.id = h.checkout_id
 		            where h.event_id = $1 and c.status in ('open', 'paying') and c.expires_at > now()
-		              and ($2::uuid[] is null or h.ticket_type_id = any($2)))`, event, ticketTypes).Scan(&sold)
+		              and ($2::uuid[] is null or h.ticket_type_id = any($2)))
+		or ($2::uuid[] is null and exists (select 1 from orders where event_id = $1))`, event, ticketTypes).Scan(&sold)
 	return sold, err
 }
 

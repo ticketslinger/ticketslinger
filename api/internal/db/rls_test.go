@@ -629,3 +629,76 @@ func TestRLSAppCannotWriteSales(t *testing.T) {
 		t.Fatalf("ts_app insert into tickets: %v, want 42501", err)
 	}
 }
+
+// A ticket, an answer or an order's promo code can't point at a row of
+// another event, even one of the same organizer.
+func TestSalesRowsStayInTheirEvent(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	_, org := seedOrg(t, pool, "a@example.com", "org-a")
+	seedSale(t, pool, org)
+	owner := testdb.Owner(t, pool)
+	if _, err := owner.Exec(ctx, `with e as (insert into events(organizer_id, slug, name, timezone, starts_at, ends_at, status)
+			values ($1, 'other-show', 'Other', 'UTC', now(), now() + interval '1 hour', 'live') returning id),
+		t as (insert into ticket_types(organizer_id, event_id, name, price_cents, position) select $1, id, 'Other', 100, 1 from e)
+		insert into questions(organizer_id, event_id, label, kind, scope, position) select $1, id, 'Other', 'text', 'order', 1 from e`, org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Exec(ctx, `insert into promo_codes(organizer_id, event_id, code, kind, value)
+		select $1, id, 'SOLD', 'percent', 1000 from events where slug = 'sold-show'`, org); err != nil {
+		t.Fatal(err)
+	}
+	other := `(select id from events where slug = 'other-show')`
+	for name, q := range map[string]string{
+		"ticket on another event's order": `insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, secret)
+			select $1, ` + other + `, (select id from orders), (select id from ticket_types where name = 'Other'), 0, 0, 0, 0, decode(md5(random()::text), 'hex')`,
+		"answer on another event's order": `insert into answers(organizer_id, event_id, order_id, question_id, value)
+			select $1, ` + other + `, (select id from orders), (select id from questions where label = 'Other'), 'x'`,
+		"order with another event's code": `insert into orders(organizer_id, event_id, code, email, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents,
+				fee_mode, quote, details, promo_code_id)
+			select $1, ` + other + `, 'TS-ZZZZZ', 'b@example.com', 0, 0, 0, 0, 0, 'pass', '{}', '{}', (select id from promo_codes)`,
+	} {
+		_, err := owner.Exec(ctx, q, org)
+		var pg *pgconn.PgError
+		if !errors.As(err, &pg) || pg.Code != "23503" {
+			t.Errorf("%s: %v, want 23503", name, err)
+		}
+	}
+}
+
+// Members see their payments but never the client secret, which only the
+// buyer's checkout needs.
+func TestAppCannotReadClientSecret(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	ua, oa := seedOrg(t, pool, "a@example.com", "org-a")
+	seedSale(t, pool, oa)
+	read := func(cols string) error {
+		return db.WithOrganizer(ctx, pool, ua, oa, func(tx pgx.Tx, _ string) error {
+			_, err := tx.Exec(ctx, `select `+cols+` from payments`)
+			return err
+		})
+	}
+	if err := read("id, order_id, payment_intent_id, amount_cents, application_fee_cents, status"); err != nil {
+		t.Fatalf("payment columns: %v", err)
+	}
+	var pg *pgconn.PgError
+	if err := read("client_secret"); !errors.As(err, &pg) || pg.Code != "42501" {
+		t.Fatalf("client_secret: %v, want 42501", err)
+	}
+}
+
+// quota_used runs with the caller's rights and only the app and system roles
+// may call it.
+func TestQuotaUsedIsNotPublic(t *testing.T) {
+	pool := testdb.New(t)
+	var public, app, system bool
+	err := testdb.Owner(t, pool).QueryRow(context.Background(), `select
+		exists (select 1 from pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x
+		         where p.oid = 'quota_used(uuid, uuid)'::regprocedure and x.grantee = 0),
+		has_function_privilege('ts_app', 'quota_used(uuid, uuid)', 'EXECUTE'),
+		has_function_privilege('ts_system', 'quota_used(uuid, uuid)', 'EXECUTE')`).Scan(&public, &app, &system)
+	if err != nil || public || !app || !system {
+		t.Fatalf("PUBLIC %v, ts_app %v, ts_system %v, %v", public, app, system, err)
+	}
+}

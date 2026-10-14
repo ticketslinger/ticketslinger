@@ -200,9 +200,10 @@ func UpdateTicketType(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, 
 	if _, err := lockEvent(ctx, tx, event); err != nil {
 		return TicketType{}, err
 	}
-	// FOR NO KEY UPDATE: a hold or ticket going in takes FOR KEY SHARE on this
-	// row through its foreign key while it holds the quotas salesExist waits on.
-	before, err := scanTT(tx.QueryRow(ctx, `select `+ttCols+` from ticket_types where id = $1 and event_id = $2 for no key update`, id, event))
+	// No row lock: the event lock keeps other catalogue writes off this row,
+	// and one order everywhere (event, then quotas, then rows) keeps the
+	// guard's quota locks ahead of the row lock the update takes.
+	before, err := GetTicketType(ctx, tx, event, id)
 	if err != nil {
 		return TicketType{}, err
 	}

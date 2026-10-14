@@ -17,6 +17,7 @@ CREATE TABLE checkouts (
 );
 CREATE INDEX ON checkouts (event_id, expires_at) WHERE status <> 'completed';
 CREATE INDEX ON checkouts (promo_code_id) WHERE status <> 'completed';
+CREATE INDEX ON checkouts (expires_at) WHERE status <> 'completed';
 
 CREATE TABLE holds (
   id             uuid PRIMARY KEY DEFAULT uuidv7(),
@@ -27,8 +28,9 @@ CREATE TABLE holds (
   quantity       int NOT NULL CHECK (quantity BETWEEN 1 AND 100),
   FOREIGN KEY (checkout_id, organizer_id) REFERENCES checkouts (id, organizer_id) ON DELETE CASCADE,
   FOREIGN KEY (checkout_id, event_id) REFERENCES checkouts (id, event_id) ON DELETE CASCADE,
-  -- No cascade: a ticket type someone is holding can't disappear under them.
-  FOREIGN KEY (ticket_type_id, event_id) REFERENCES ticket_types (id, event_id),
+  -- Cascade: the catalogue refuses to delete a ticket type that an open
+  -- checkout holds (under the quota locks), so only expired holds go with it.
+  FOREIGN KEY (ticket_type_id, event_id) REFERENCES ticket_types (id, event_id) ON DELETE CASCADE,
   UNIQUE (checkout_id, ticket_type_id)
 );
 CREATE INDEX ON holds (ticket_type_id);
@@ -57,9 +59,12 @@ CREATE TABLE orders (
   paid_at          timestamptz,
   FOREIGN KEY (event_id, organizer_id) REFERENCES events (id, organizer_id),
   FOREIGN KEY (checkout_id, organizer_id) REFERENCES checkouts (id, organizer_id) ON DELETE SET NULL (checkout_id),
-  UNIQUE (id, organizer_id)
+  FOREIGN KEY (promo_code_id, event_id) REFERENCES promo_codes (id, event_id) ON DELETE SET NULL (promo_code_id),
+  UNIQUE (id, organizer_id),
+  UNIQUE (id, event_id)
 );
 CREATE INDEX ON orders (event_id, created_at DESC);
+CREATE INDEX ON orders (promo_code_id) WHERE promo_code_id IS NOT NULL;
 
 CREATE TABLE tickets (
   id             uuid PRIMARY KEY DEFAULT uuidv7(),
@@ -78,10 +83,12 @@ CREATE TABLE tickets (
   created_at     timestamptz NOT NULL DEFAULT now(),
   FOREIGN KEY (event_id, organizer_id) REFERENCES events (id, organizer_id),
   FOREIGN KEY (order_id, organizer_id) REFERENCES orders (id, organizer_id),
+  FOREIGN KEY (order_id, event_id) REFERENCES orders (id, event_id),
   FOREIGN KEY (ticket_type_id, event_id) REFERENCES ticket_types (id, event_id),
   UNIQUE (id, organizer_id)
 );
 CREATE INDEX ON tickets (ticket_type_id) WHERE status = 'valid';
+CREATE INDEX ON tickets (event_id, ticket_type_id);
 CREATE INDEX ON tickets (order_id);
 
 CREATE TABLE answers (
@@ -93,6 +100,7 @@ CREATE TABLE answers (
   question_id  uuid NOT NULL,
   value        text NOT NULL CHECK (char_length(value) <= 1000),
   FOREIGN KEY (order_id, organizer_id) REFERENCES orders (id, organizer_id) ON DELETE CASCADE,
+  FOREIGN KEY (order_id, event_id) REFERENCES orders (id, event_id) ON DELETE CASCADE,
   FOREIGN KEY (ticket_id, organizer_id) REFERENCES tickets (id, organizer_id) ON DELETE CASCADE,
   FOREIGN KEY (question_id, event_id) REFERENCES questions (id, event_id)
 );
@@ -155,6 +163,10 @@ CREATE POLICY answers_scope ON answers USING (organizer_id = (SELECT app_organiz
 CREATE POLICY payments_scope ON payments USING (organizer_id = (SELECT app_organizer())) WITH CHECK (organizer_id = (SELECT app_organizer()));
 CREATE POLICY refunds_scope ON refunds USING (organizer_id = (SELECT app_organizer())) WITH CHECK (organizer_id = (SELECT app_organizer()));
 REVOKE INSERT, UPDATE, DELETE ON checkouts, holds, orders, tickets, answers, payments, refunds, stripe_events FROM ts_app;
+-- The client secret is for the buyer's checkout only, never the dashboard.
+REVOKE SELECT ON payments FROM ts_app;
+GRANT SELECT (id, organizer_id, order_id, provider, stripe_account_id, payment_intent_id, amount_cents,
+  application_fee_cents, status, created_at, updated_at) ON payments TO ts_app;
 
 CREATE POLICY checkouts_system ON checkouts TO ts_system USING (organizer_id = (SELECT app_scope())) WITH CHECK (organizer_id = (SELECT app_scope()));
 CREATE POLICY holds_system ON holds TO ts_system USING (organizer_id = (SELECT app_scope())) WITH CHECK (organizer_id = (SELECT app_scope()));
@@ -180,7 +192,8 @@ CREATE FUNCTION quota_used(p_quota uuid, p_except uuid) RETURNS bigint LANGUAGE 
             JOIN public.quota_ticket_types x ON x.ticket_type_id = h.ticket_type_id
            WHERE x.quota_id = p_quota AND c.status IN ('open', 'paying') AND c.expires_at > now()
              AND c.id IS DISTINCT FROM p_except) $$;
-GRANT EXECUTE ON FUNCTION quota_used(uuid, uuid) TO ts_system;
+REVOKE ALL ON FUNCTION quota_used(uuid, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION quota_used(uuid, uuid) TO ts_app, ts_system;
 
 -- How many of each ticket type of a live event can still be sold.
 -- +goose StatementBegin
