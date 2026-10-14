@@ -25,15 +25,18 @@ GRANT SELECT ON memberships TO ts_public, ts_system;
 
 -- Storefront reads.
 GRANT SELECT (id, name, slug) ON organizers TO ts_public;
-CREATE POLICY organizers_public ON organizers FOR SELECT TO ts_public USING (true);
 GRANT SELECT ON events, ticket_types, questions, question_applies_to TO ts_public;
 CREATE POLICY events_public ON events FOR SELECT TO ts_public USING (status = 'live');
+-- Only organizers with something on sale.
+CREATE POLICY organizers_public ON organizers FOR SELECT TO ts_public
+  USING (id IN (SELECT organizer_id FROM events));
 CREATE POLICY ticket_types_public ON ticket_types FOR SELECT TO ts_public
   USING (NOT hidden AND event_id IN (SELECT id FROM events));
-CREATE POLICY questions_public ON questions FOR SELECT TO ts_public
-  USING (event_id IN (SELECT id FROM events));
+-- A question asked only of hidden ticket types stays hidden with them.
 CREATE POLICY question_applies_to_public ON question_applies_to FOR SELECT TO ts_public
-  USING (event_id IN (SELECT id FROM events));
+  USING (ticket_type_id IN (SELECT id FROM ticket_types));
+CREATE POLICY questions_public ON questions FOR SELECT TO ts_public
+  USING (event_id IN (SELECT id FROM events) AND (applies_to_all OR id IN (SELECT question_id FROM question_applies_to)));
 
 -- System: one organizer at a time.
 GRANT SELECT ON organizers, events, ticket_types, quotas, quota_ticket_types, promo_codes,
@@ -70,11 +73,11 @@ DROP POLICY organizers_system ON organizers;
 REVOKE UPDATE (used_count) ON promo_codes FROM ts_system;
 REVOKE SELECT ON organizers, events, ticket_types, quotas, quota_ticket_types, promo_codes,
   promo_applies_to, promo_unlocks, questions, question_applies_to FROM ts_system;
-DROP POLICY question_applies_to_public ON question_applies_to;
 DROP POLICY questions_public ON questions;
+DROP POLICY question_applies_to_public ON question_applies_to;
 DROP POLICY ticket_types_public ON ticket_types;
-DROP POLICY events_public ON events;
 DROP POLICY organizers_public ON organizers;
+DROP POLICY events_public ON events;
 REVOKE SELECT ON events, ticket_types, questions, question_applies_to FROM ts_public;
 REVOKE SELECT (id, name, slug) ON organizers FROM ts_public;
 REVOKE SELECT ON memberships FROM ts_public, ts_system;

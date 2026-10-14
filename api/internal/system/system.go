@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const clear = `select set_config('app.user_id', '', true), set_config('app.api_key_id', '', true), set_config('app.organizer_id', $1, true)`
+const resetScope = `select set_config('app.user_id', '', true), set_config('app.api_key_id', '', true), set_config('app.organizer_id', $1, true)`
 
 // Public runs fn read-only as ts_public: live events, their visible ticket
 // types and questions, and organizer names. Nothing else.
@@ -21,7 +21,7 @@ func Public(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) erro
 		if _, err := tx.Exec(ctx, `set local role ts_public`); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, clear, ""); err != nil {
+		if _, err := tx.Exec(ctx, resetScope, ""); err != nil {
 			return err
 		}
 		return fn(tx)
@@ -38,7 +38,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, org uuid.UUID, fn func(pgx.Tx)
 		if _, err := tx.Exec(ctx, `set local role ts_system`); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, clear, org.String()); err != nil {
+		if _, err := tx.Exec(ctx, resetScope, org.String()); err != nil {
 			return err
 		}
 		return fn(tx)

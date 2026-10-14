@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -26,32 +27,63 @@ var callers = map[string]string{
 	"github.com/ticketslinger/ticketslinger/api/internal/sales": "buyers' checkouts, webhooks, storefront reads",
 }
 
+// switchesRole matches any way SQL can change the current role.
+var switchesRole = regexp.MustCompile(`(?i)\b(set\s+(local\s+|session\s+)?role|reset\s+role)\b|set_config\(\s*'role'`)
+
+// TestOnlyListedPackagesUseSystem walks the whole api module: only listed
+// packages import system, and nothing but system (Go or SQL, tests included)
+// switches roles. Migrations grant roles; they never switch to one.
 func TestOnlyListedPackagesUseSystem(t *testing.T) {
-	root := filepath.Join("..")
+	const module = "github.com/ticketslinger/ticketslinger/api/"
+	root := filepath.Join("..", "..")
+	scanned := 0
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return err
-		}
-		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
 		if err != nil {
 			return err
 		}
-		pkg := "github.com/ticketslinger/ticketslinger/api/internal/" + filepath.ToSlash(filepath.Dir(path[len(root)+1:]))
+		if d.IsDir() && d.Name() == "node_modules" {
+			return filepath.SkipDir
+		}
+		if d.IsDir() || filepath.Ext(path) != ".go" && filepath.Ext(path) != ".sql" {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		pkg := module + filepath.ToSlash(filepath.Dir(rel))
+		scanned++
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if pkg != module+"internal/system" && switchesRole.Match(src) {
+			t.Errorf("%s switches roles; only package system may", rel)
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), path, src, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
 		for _, imp := range f.Imports {
-			if strings.Trim(imp.Path.Value, `"`) == "github.com/ticketslinger/ticketslinger/api/internal/system" {
+			if strings.Trim(imp.Path.Value, `"`) == module+"internal/system" {
 				if _, ok := callers[pkg]; !ok {
-					t.Errorf("%s imports system but isn't listed in callers", path)
+					t.Errorf("%s imports system but isn't listed in callers", rel)
 				}
 			}
-		}
-		src, _ := os.ReadFile(path)
-		if pkg != "github.com/ticketslinger/ticketslinger/api/internal/system" && strings.Contains(strings.ToLower(string(src)), "set local role") {
-			t.Errorf("%s switches roles; only package system may", path)
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if scanned < 50 {
+		t.Fatalf("scanned only %d files; is the walk rooted at the api module?", scanned)
+	}
+	if !switchesRole.MatchString("select set_config( 'role', 'ts_system', true)") || !switchesRole.MatchString("RESET ROLE") || !switchesRole.MatchString("set session role x") {
+		t.Fatal("switchesRole misses a form of role switch")
 	}
 }
 
@@ -66,11 +98,20 @@ func TestRolesAreSetOnlyNotInherited(t *testing.T) {
 	if err != nil || n != 2 {
 		t.Fatalf("ts_app should be able to SET ROLE to both (NOLOGIN, NOBYPASSRLS, NOSUPERUSER), inheriting neither: %d %v", n, err)
 	}
+	// Nobody else may become them, and ts_app can't hand them on.
+	var others []string
+	err = testdb.Owner(t, pool).QueryRow(context.Background(), `select coalesce(array_agg(u.rolname || ' in ' || r.rolname || case when m.admin_option then ' with admin' else '' end), '{}')
+		from pg_auth_members m join pg_roles r on r.oid = m.roleid join pg_roles u on u.oid = m.member
+		where r.rolname in ('ts_public', 'ts_system') and (u.rolname <> 'ts_app' or m.admin_option)`).Scan(&others)
+	if err != nil || len(others) != 0 {
+		t.Fatalf("memberships beyond ts_app's SET-only grants: %v %v", others, err)
+	}
 }
 
 // seedOrganizer inserts, as the owner, an organizer with a live event (one
-// visible and one hidden ticket type, a question, a quota and a promo code)
-// and a draft event with one visible ticket type.
+// visible and one hidden ticket type, a question for everyone and one only
+// for the hidden type, a quota and a promo code) and a draft event with one
+// visible ticket type.
 func seedOrganizer(t *testing.T, pool *pgxpool.Pool, slug string) (org, live, draft uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
@@ -93,6 +134,10 @@ func seedOrganizer(t *testing.T, pool *pgxpool.Pool, slug string) (org, live, dr
 	for _, q := range []string{
 		`insert into ticket_types(organizer_id, event_id, name, price_cents, hidden, position) values ($1, $2, 'Crew', 0, true, 2)`,
 		`insert into questions(organizer_id, event_id, label, kind, scope, position) values ($1, $2, 'Name?', 'text', 'order', 1)`,
+		`with q as (insert into questions(organizer_id, event_id, label, kind, scope, position, applies_to_all)
+			values ($1, $2, 'Crew radio channel?', 'text', 'ticket', 2, false) returning id)
+		 insert into question_applies_to(organizer_id, event_id, question_id, ticket_type_id)
+			select $1, $2, q.id, t.id from q, ticket_types t where t.event_id = $2 and t.name = 'Crew'`,
 		`insert into quotas(organizer_id, event_id, name, size) values ($1, $2, 'Room', 100)`,
 		`insert into promo_codes(organizer_id, event_id, code, kind, value) values ($1, $2, 'FRIENDS', 'percent', 1000)`,
 	} {
@@ -107,17 +152,25 @@ func TestPublicSeesOnlyLiveEventsAndVisibleTickets(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
 	seedOrganizer(t, pool, "acme")
+	// An organizer with only a draft event stays invisible.
+	if _, err := testdb.Owner(t, pool).Exec(ctx, `with o as (insert into organizers(name, slug) values ('Drafty', 'drafty') returning id)
+		insert into events(organizer_id, slug, name, timezone, starts_at, ends_at)
+		select id, 'soon', 'Soon', 'UTC', now(), now() + interval '1 hour' from o`); err != nil {
+		t.Fatal(err)
+	}
 	err := system.Public(ctx, pool, func(tx pgx.Tx) error {
-		var events, tts, questions int
-		if err := tx.QueryRow(ctx, `select (select count(*) from events), (select count(*) from ticket_types), (select count(*) from questions)`).Scan(&events, &tts, &questions); err != nil {
+		var events, tts, questions, applies int
+		if err := tx.QueryRow(ctx, `select (select count(*) from events), (select count(*) from ticket_types),
+			(select count(*) from questions), (select count(*) from question_applies_to)`).Scan(&events, &tts, &questions, &applies); err != nil {
 			return err
 		}
-		if events != 1 || tts != 1 || questions != 1 {
-			t.Errorf("public sees %d events, %d ticket types, %d questions; want the live one, its visible type and its question", events, tts, questions)
+		if events != 1 || tts != 1 || questions != 1 || applies != 0 {
+			t.Errorf("public sees %d events, %d ticket types, %d questions, %d question links; want the live one, its visible type, its open question, no links to the hidden type",
+				events, tts, questions, applies)
 		}
-		var name, slug string
-		if err := tx.QueryRow(ctx, `select name, slug from organizers`).Scan(&name, &slug); err != nil || slug != "acme" {
-			t.Errorf("public reads organizer name and slug: %q %q %v", name, slug, err)
+		var slugs []string
+		if err := tx.QueryRow(ctx, `select array_agg(slug::text order by slug) from organizers`).Scan(&slugs); err != nil || len(slugs) != 1 || slugs[0] != "acme" {
+			t.Errorf("public sees organizers %v (%v), want only acme, which has a live event", slugs, err)
 		}
 		var members int
 		if err := tx.QueryRow(ctx, `select count(*) from memberships`).Scan(&members); err != nil || members != 0 {
@@ -133,6 +186,10 @@ func TestPublicSeesOnlyLiveEventsAndVisibleTickets(t *testing.T) {
 		`select created_at from organizers limit 1`, // Task 8 switches this to stripe_account_id
 		`select count(*) from quotas`,
 		`select count(*) from promo_codes`,
+		`select count(*) from api_keys`,
+		`select count(*) from audit_log`,
+		`select count(*) from users`,
+		`select count(*) from sessions`,
 		`insert into events(organizer_id, slug, name, timezone, starts_at, ends_at) select id, 'x-show', 'X', 'UTC', now(), now() + interval '1 hour' from organizers`,
 	} {
 		err := system.Public(ctx, pool, func(tx pgx.Tx) error {
@@ -140,7 +197,9 @@ func TestPublicSeesOnlyLiveEventsAndVisibleTickets(t *testing.T) {
 			return err
 		})
 		var pg *pgconn.PgError
-		if !errors.As(err, &pg) || (pg.Code != "42501" && pg.Code != "25006") {
+		// A write stops at the read-only transaction before privileges are checked.
+		refused := errors.As(err, &pg) && (pg.Code == "42501" || pg.Code == "25006" && strings.HasPrefix(q, "insert"))
+		if !refused {
 			t.Errorf("public %q: %v, want refused", q, err)
 		}
 	}
@@ -152,12 +211,13 @@ func TestSystemIsScopedToOneOrganizer(t *testing.T) {
 	a, _, _ := seedOrganizer(t, pool, "org-a")
 	b, _, _ := seedOrganizer(t, pool, "org-b")
 	err := system.Run(ctx, pool, a, func(tx pgx.Tx) error {
-		var orgs, events int
-		if err := tx.QueryRow(ctx, `select (select count(*) from organizers), (select count(*) from events)`).Scan(&orgs, &events); err != nil {
+		var orgs, events, questions, applies int
+		if err := tx.QueryRow(ctx, `select (select count(*) from organizers), (select count(*) from events),
+			(select count(*) from questions), (select count(*) from question_applies_to)`).Scan(&orgs, &events, &questions, &applies); err != nil {
 			return err
 		}
-		if orgs != 1 || events != 2 {
-			t.Errorf("system scoped to A sees %d organizers, %d events; want 1 and A's 2", orgs, events)
+		if orgs != 1 || events != 2 || questions != 2 || applies != 1 {
+			t.Errorf("system scoped to A sees %d organizers, %d events, %d questions, %d question links; want 1, 2, 2, 1", orgs, events, questions, applies)
 		}
 		var members int
 		if err := tx.QueryRow(ctx, `select count(*) from memberships`).Scan(&members); err != nil || members != 0 {
@@ -189,6 +249,21 @@ func TestSystemIsScopedToOneOrganizer(t *testing.T) {
 	var pg *pgconn.PgError
 	if !errors.As(err, &pg) || pg.Code != "42501" {
 		t.Fatalf("system rewriting a promo code: %v, want 42501", err)
+	}
+	for _, q := range []string{
+		`select count(*) from api_keys`,
+		`select count(*) from audit_log`,
+		`select count(*) from users`,
+		`select count(*) from sessions`,
+		`insert into events(organizer_id, slug, name, timezone, starts_at, ends_at) values ((select app_scope()), 'x-show', 'X', 'UTC', now(), now() + interval '1 hour')`,
+	} {
+		err := system.Run(ctx, pool, a, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, q)
+			return err
+		})
+		if !errors.As(err, &pg) || pg.Code != "42501" {
+			t.Errorf("system %q: %v, want 42501", q, err)
+		}
 	}
 }
 
