@@ -40,8 +40,13 @@ func TestAuditNamesTheActor(t *testing.T) {
 		t.Helper()
 		res := h.do(owner, "GET", "/v1/organizers/acme/audit", "")
 		var rows []map[string]any
+		if res.StatusCode != 200 {
+			t.Fatalf("audit: got %d, want 200", res.StatusCode)
+		}
 		var all []map[string]any
-		_ = json.NewDecoder(res.Body).Decode(&all)
+		if err := json.NewDecoder(res.Body).Decode(&all); err != nil {
+			t.Fatal(err)
+		}
 		for _, r := range all {
 			if r["action"] == "event.created" {
 				rows = append(rows, r)

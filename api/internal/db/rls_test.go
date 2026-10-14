@@ -518,6 +518,24 @@ func TestMemberDirectoryIsTenantScoped(t *testing.T) {
 	if n := count(uuid.Nil, keyID, oa); n != 0 {
 		t.Errorf("API key alone sees %d rows, want 0", n)
 	}
+
+	// Only owners and admins may read colleagues' emails.
+	var uc uuid.UUID
+	root := testdb.Owner(t, pool)
+	if err := root.QueryRow(ctx, `insert into users(email, name) values ('c@example.com', 'C') returning id`).Scan(&uc); err != nil {
+		t.Fatal(err)
+	}
+	for role, want := range map[string]int{"checkin": 0, "admin": 2} {
+		if _, err := root.Exec(ctx, `delete from memberships where user_id = $1`, uc); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := root.Exec(ctx, `insert into memberships(organizer_id, user_id, role) values ($1, $2, $3)`, oa, uc, role); err != nil {
+			t.Fatal(err)
+		}
+		if n := count(uc, uuid.Nil, oa); n != want {
+			t.Errorf("%s sees %d rows, want %d", role, n, want)
+		}
+	}
 }
 
 func nilEmpty(id uuid.UUID) string {
@@ -525,4 +543,24 @@ func nilEmpty(id uuid.UUID) string {
 		return ""
 	}
 	return id.String()
+}
+
+// The definer function is pinned like its siblings and closed to PUBLIC.
+func TestMemberDirectoryIsHardened(t *testing.T) {
+	pool := testdb.New(t)
+	var cfg []string
+	var public, app bool
+	err := pool.QueryRow(context.Background(), `select proconfig,
+		has_function_privilege('public', 'app_member_directory()', 'execute'),
+		has_function_privilege('ts_app', 'app_member_directory()', 'execute')
+		from pg_proc where proname = 'app_member_directory'`).Scan(&cfg, &public, &app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg) != 1 || cfg[0] != "search_path=pg_catalog, public, pg_temp" {
+		t.Errorf("proconfig = %v", cfg)
+	}
+	if public || !app {
+		t.Errorf("execute: public=%v ts_app=%v, want false/true", public, app)
+	}
 }
