@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: ticketslinger
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports: ["54329:5432"]
+    volumes:
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=ts_app psql -h 127.0.0.1 -U ts_app -d ticketslinger -c 'select 1'"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
