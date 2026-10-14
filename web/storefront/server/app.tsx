@@ -1,4 +1,5 @@
 /** @jsxImportSource preact */
+import { isIP } from "node:net";
 import { type components, createApi } from "@ticketslinger/api-client";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -8,6 +9,7 @@ import { render } from "preact-render-to-string";
 import { csp } from "./csp";
 import { EventPage, type EventPageProps, type StorefrontEvent } from "./pages/EventPage";
 import { ErrorPage, NotFound } from "./pages/NotFound";
+import { Recent } from "./recent";
 
 export type StorefrontOptions = {
   apiUrl: string;
@@ -18,6 +20,8 @@ export type StorefrontOptions = {
   peerIp?: (c: Context) => string | undefined;
   /** How we reach the API; tests inject their own. */
   fetch?: (req: Request) => Promise<Response>;
+  /** How long a double tap waits for the first tap's checkout. Tests shorten it. */
+  inProgressWaitMs?: number;
 };
 
 type ApiError = components["schemas"]["Error"]["error"];
@@ -34,6 +38,12 @@ const FORWARD = ["accept-language", "user-agent"];
 
 // What the API takes from callers who aren't signed in (a UUID fits).
 const IDEM = /^[A-Za-z0-9_-]{22,255}$/;
+// The API's checkout tokens are 32 random bytes in base64url; this is looser on length only.
+const TOKEN = /^[A-Za-z0-9_-]{16,128}$/;
+// What the picker can send: 0 to 100, no padding.
+const QTY = /^(0|[1-9][0-9]?|100)$/;
+// More ticket types than any event page shows.
+const MAX_TYPES = 50;
 
 const GENERIC = "Something went wrong on our side. Try again.";
 const NOT_READY = "This event can't take card payments just yet.";
@@ -48,10 +58,11 @@ const CHECKOUT_MESSAGES: Record<string, string> = {
   turnstile_unavailable: BUSY,
   rate_limited: SLOW_DOWN,
   promo_not_applicable: "That code doesn't apply to these tickets.",
-  turnstile_failed: "One quick check that you're a person.",
+  turnstile_failed: "Finish the quick check above Get tickets, then try again.",
 };
+const IN_PROGRESS = CHECKOUT_MESSAGES.idempotency_in_progress;
 
-type Status = 200 | 404 | 409 | 413 | 422 | 429 | 502 | 503;
+type Status = 200 | 400 | 404 | 409 | 413 | 422 | 429 | 500 | 502 | 503;
 
 const isLoopback = (ip: string) => /^127\./.test(ip) || ip === "::1" || /^::ffff:127\./i.test(ip);
 
@@ -69,6 +80,8 @@ export function createApp(opts: StorefrontOptions): Hono {
   const app = new Hono();
   const api = createApi(opts.apiUrl.replace(/\/+$/, ""), opts.fetch ?? ((r) => fetch(r)));
   const siteKey = opts.turnstileSiteKey;
+  const recent = new Recent();
+  const waitMs = opts.inProgressWaitMs ?? 3000;
   const peerIp =
     opts.peerIp ??
     ((c: Context) =>
@@ -78,7 +91,10 @@ export function createApp(opts: StorefrontOptions): Hono {
   // Client IP is X-Real-IP only when the peer is our own reverse proxy (loopback).
   function clientIp(c: Context): string | undefined {
     const peer = peerIp(c);
-    if (peer && isLoopback(peer)) return c.req.header("x-real-ip")?.trim() || peer;
+    if (peer && isLoopback(peer)) {
+      const real = c.req.header("x-real-ip")?.trim() ?? "";
+      return isIP(real) ? real : peer;
+    }
     return peer;
   }
 
@@ -106,9 +122,24 @@ export function createApp(opts: StorefrontOptions): Hono {
   const trouble = (c: Context, status: Status = 502, message = GENERIC) =>
     page(c, status, <ErrorPage message={message} />);
 
-  function eventPage(c: Context, status: Status, p: Omit<EventPageProps, "siteKey" | "idem">) {
+  function eventPage(
+    c: Context,
+    status: Status,
+    p: Omit<EventPageProps, "siteKey" | "idem"> & { idem?: string },
+  ) {
     const form = siteKey !== "" && p.data.event.state === "on_sale";
-    return page(c, status, <EventPage {...p} siteKey={siteKey} idem={crypto.randomUUID()} />, form);
+    const idem = p.idem ?? crypto.randomUUID();
+    return page(c, status, <EventPage {...p} siteKey={siteKey} idem={idem} />, form);
+  }
+
+  // The first tap of a double tap is still running: give it a moment to finish.
+  async function firstTap(idem: string): Promise<string | undefined> {
+    for (let waited = 0; waited < waitMs; waited += 50) {
+      const token = recent.get(idem);
+      if (token) return token;
+      await Bun.sleep(50);
+    }
+    return recent.get(idem);
   }
 
   // Too many code tries from this address still shows the event, just without the code.
@@ -187,20 +218,26 @@ export function createApp(opts: StorefrontOptions): Hono {
     try {
       form = await c.req.parseBody();
     } catch {
-      return trouble(c);
+      return trouble(c, 400, "We couldn't read that form. Go back and try again.");
     }
     const field = (k: string) => {
       const v = form[k];
       return typeof v === "string" ? v : "";
     };
 
-    // Only qty_<id> fields holding a whole number from 1 to 100; the rest is noise.
+    const idem = IDEM.test(field("idem")) ? field("idem") : crypto.randomUUID();
+    // This form already made a checkout: go back to it rather than holding a second one.
+    const made = recent.get(idem);
+    if (made) return c.redirect(`/checkout/${made}`, 303);
+
+    // qty_<id> fields hold what the picker offers, 0 to 100. Anything else wasn't our form.
     const chosen: Record<string, number> = {};
-    for (const [k, v] of Object.entries(form)) {
-      if (!k.startsWith("qty_") || k.length === 4 || typeof v !== "string") continue;
-      if (!/^\d{1,3}$/.test(v)) continue;
-      const n = Number(v);
-      if (n >= 1 && n <= 100) chosen[k.slice(4)] = n;
+    const qty = Object.entries(form).filter(([k]) => k.startsWith("qty_"));
+    const tampered =
+      qty.length > MAX_TYPES ||
+      qty.some(([k, v]) => k.length === 4 || typeof v !== "string" || !QTY.test(v));
+    if (!tampered) {
+      for (const [k, v] of qty) if (v !== "0") chosen[k.slice(4)] = Number(v);
     }
     const items = Object.entries(chosen).map(([ticket_type_id, quantity]) => ({
       ticket_type_id,
@@ -209,7 +246,12 @@ export function createApp(opts: StorefrontOptions): Hono {
     const code = field("code").trim();
 
     // Back to the event page with the buyer's picks and our words for what went wrong.
-    const again = async (status: Status, message?: string, left?: Record<string, number>) => {
+    const again = async (
+      status: Status,
+      message?: string,
+      left?: Record<string, number>,
+      keep?: string,
+    ) => {
       const r = await load(c, organizer, event, code);
       if (r.status === 404) return notFound(c, "event");
       if (!r.data) return trouble(c, status);
@@ -219,12 +261,13 @@ export function createApp(opts: StorefrontOptions): Hono {
         chosen,
         message,
         left,
+        idem: keep,
       });
     };
 
+    if (tampered) return again(422, "Pick your tickets from the lists, then try again.");
     if (items.length === 0) return again(422, "Pick at least one ticket.");
 
-    const idem = IDEM.test(field("idem")) ? field("idem") : crypto.randomUUID();
     const body: components["schemas"]["CreateCheckout"] = { organizer, event, items };
     if (code) body.promo_code = code;
     const turnstile = field("cf-turnstile-response");
@@ -234,8 +277,11 @@ export function createApp(opts: StorefrontOptions): Hono {
       .POST("/checkouts", { body, headers: { ...apiHeaders(c), "Idempotency-Key": idem } })
       .catch(() => null);
     if (!res) return again(502, GENERIC);
-    if (res.data?.token) {
-      return c.redirect(`/checkout/${encodeURIComponent(res.data.token)}`, 303);
+    if (res.response.status === 201) {
+      const token = res.data?.token ?? "";
+      if (!TOKEN.test(token)) return again(502, GENERIC);
+      recent.set(idem, token);
+      return c.redirect(`/checkout/${token}`, 303);
     }
 
     const status = res.response.status;
@@ -246,12 +292,23 @@ export function createApp(opts: StorefrontOptions): Hono {
       for (const a of err.available ?? []) {
         if ((chosen[a.ticket_type_id] ?? 0) > a.remaining) left[a.ticket_type_id] = a.remaining;
       }
-      return again(409, Object.keys(left).length ? undefined : GENERIC, left);
+      const someLeft = Object.values(left).some((n) => n > 0);
+      return again(409, someLeft ? undefined : "Those tickets just sold out.", left);
+    }
+    if (err.code === "idempotency_in_progress") {
+      const token = await firstTap(idem);
+      if (token) return c.redirect(`/checkout/${token}`, 303);
+      // Same key in the new form, so the next tap also finds the first tap's checkout.
+      return again(409, IN_PROGRESS, undefined, idem);
     }
     return again(shown, CHECKOUT_MESSAGES[err.code ?? ""] ?? GENERIC);
   });
 
   app.notFound((c) => notFound(c));
+  app.onError((e, c) => {
+    console.error(e);
+    return trouble(c, 500);
+  });
 
   return app;
 }

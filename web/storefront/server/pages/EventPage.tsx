@@ -75,7 +75,7 @@ function Picker({
   for (let n = Math.max(1, t.min_per_order); n <= max; n++) options.push(n);
   return (
     <div class="picker">
-      <label for={id}>How many?</label>
+      <label for={id}>How many {t.name}?</label>
       <select id={id} name={id}>
         {options.map((n) => (
           <option key={n} value={String(n)} selected={n === pick}>

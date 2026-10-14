@@ -4,6 +4,8 @@
   --muted: #444;
   --bg: #fff;
   --line: #ccc;
+  /* Form-control borders: at least 3:1 against --bg (WCAG 1.4.11). #767676 on #fff is 4.5:1. */
+  --control: #767676;
   --accent: #0b4fd6;
   --accent-text: #fff;
   --alert: #a40e0e;
@@ -16,6 +18,8 @@
     --muted: #c8c8c8;
     --bg: #121212;
     --line: #555;
+    /* #8a8a8a on #121212 is 5.4:1. */
+    --control: #8a8a8a;
     --accent: #7ea6ff;
     --accent-text: #000;
     --alert: #ff8a80;
@@ -115,7 +119,7 @@ button {
   font: inherit;
   color: inherit;
   background: var(--bg);
-  border: 1px solid var(--line);
+  border: 1px solid var(--control);
   border-radius: 6px;
   padding: 8px 12px;
 }

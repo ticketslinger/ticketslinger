@@ -43,6 +43,7 @@ function app(api: Api, opts: { peer?: string; siteKey?: string } = {}) {
     apiUrl: "http://api/v1",
     staticDir: "./dist",
     turnstileSiteKey: opts.siteKey ?? "1x00000000000000000000AA",
+    inProgressWaitMs: 300,
     peerIp: () => opts.peer ?? "127.0.0.1",
     fetch: async (r) => {
       calls.push(r.clone());
@@ -53,12 +54,17 @@ function app(api: Api, opts: { peer?: string; siteKey?: string } = {}) {
 }
 
 const KEY = "0f8fad5b-d9cb-469f-a165-70867728950e";
+// What the API hands out: 32 random bytes, base64url.
+const TOK = "q3Jx0_Vb-8sKd2LmN4pR7tWzYcE1gH5iA9oU6fXnBvM";
+const created = () => Response.json({ token: TOK, status: "open" }, { status: 201 });
+const checkoutCalls = (calls: Request[]) =>
+  calls.filter((c) => new URL(c.url).pathname === "/v1/checkouts").length;
 const apiError = (status: number, code: string, extra: Record<string, unknown> = {}) =>
   Response.json({ error: { code, message: "<b>API words</b>", ...extra } }, { status });
 
 // Answers the storefront read with the event, and createCheckout with `checkout`.
 const routes =
-  (checkout: () => Response, ev: unknown = event): Api =>
+  (checkout: () => Response | Promise<Response>, ev: unknown = event): Api =>
   (r) =>
     new URL(r.url).pathname.startsWith("/v1/storefront/") ? Response.json(ev) : checkout();
 
@@ -206,7 +212,7 @@ test("too many code tries still shows the event, without the code", async () => 
 });
 
 test("buying posts to the API with an idempotency key and the buyer's address, then redirects", async () => {
-  const { a, calls } = app(() => Response.json({ token: "tok", status: "open" }, { status: 201 }));
+  const { a, calls } = app(() => created());
   const body = new URLSearchParams({
     qty_t1: "2",
     idem: KEY,
@@ -218,7 +224,7 @@ test("buying posts to the API with an idempotency key and the buyer's address, t
     headers: { "x-real-ip": "203.0.113.9" },
   });
   expect(res.status).toBe(303);
-  expect(res.headers.get("location")).toBe("/checkout/tok");
+  expect(res.headers.get("location")).toBe(`/checkout/${TOK}`);
   const sent = calls[0];
   expect(new URL(sent.url).pathname).toBe("/v1/checkouts");
   expect(sent.headers.get("idempotency-key")).toBe(KEY);
@@ -233,7 +239,7 @@ test("buying posts to the API with an idempotency key and the buyer's address, t
 
 test("a missing or malformed idem becomes a fresh UUID", async () => {
   for (const idem of [undefined, "k-1", "x".repeat(21), `${"a".repeat(30)}!`]) {
-    const { a, calls } = app(() => Response.json({ token: "tok" }, { status: 201 }));
+    const { a, calls } = app(() => created());
     const f: Record<string, string> = { qty_t1: "1" };
     if (idem !== undefined) f.idem = idem;
     expect((await a.request("/acme/gala/checkout", form(f))).status).toBe(303);
@@ -243,32 +249,129 @@ test("a missing or malformed idem becomes a fresh UUID", async () => {
   }
 });
 
-test("only whole quantities 1-100 are sent, and the code with them", async () => {
-  const { a, calls } = app(() => Response.json({ token: "tok" }, { status: 201 }));
+test("whole quantities 0-100 are sent with the code; other fields are ignored", async () => {
+  const { a, calls } = app(created);
   await a.request(
     "/acme/gala/checkout",
-    form({
-      qty_t1: "2",
-      qty_t2: "0",
-      qty_t3: "1.5",
-      qty_t4: "101",
-      qty_t5: "-1",
-      qty_t6: "abc",
-      other: "9",
-      code: "FRIENDS",
-      idem: KEY,
-    }),
+    form({ qty_t1: "2", qty_t2: "0", qty_t3: "100", other: "9", code: "FRIENDS", idem: KEY }),
   );
   expect(await calls[0].json()).toEqual({
     organizer: "acme",
     event: "gala",
-    items: [{ ticket_type_id: "t1", quantity: 2 }],
+    items: [
+      { ticket_type_id: "t1", quantity: 2 },
+      { ticket_type_id: "t3", quantity: 100 },
+    ],
     promo_code: "FRIENDS",
   });
 });
 
+test("a tampered quantity is refused without trying to buy", async () => {
+  for (const bad of ["1.5", "101", "-1", "abc", "01", "", " 2"]) {
+    const { a, calls } = app(routes(created));
+    const res = await a.request(
+      "/acme/gala/checkout",
+      form({ qty_t1: "2", qty_t2: bad, idem: KEY }),
+    );
+    expect(res.status).toBe(422);
+    expect(await res.text()).toContain("Pick your tickets from the lists, then try again.");
+    expect(checkoutCalls(calls)).toBe(0);
+  }
+});
+
+test("more than 50 ticket types in one form is refused without trying to buy", async () => {
+  const f: Record<string, string> = { idem: KEY };
+  for (let i = 0; i < 51; i++) f[`qty_t${i}`] = "1";
+  const { a, calls } = app(routes(created));
+  const res = await a.request("/acme/gala/checkout", form(f));
+  expect(res.status).toBe(422);
+  expect(checkoutCalls(calls)).toBe(0);
+});
+
+test("a token that doesn't look like ours is never a redirect", async () => {
+  const { a } = app(routes(() => Response.json({ token: "../x" }, { status: 201 })));
+  const res = await a.request("/acme/gala/checkout", form({ qty_t1: "1", idem: KEY }));
+  expect(res.status).toBe(502);
+  expect(res.headers.get("location")).toBeNull();
+  expect(await res.text()).toContain("Something went wrong on our side. Try again.");
+});
+
+test("a double tap waits for the first tap and lands on the same checkout", async () => {
+  let running = false;
+  let made = 0;
+  const { a } = app(
+    routes(async () => {
+      if (running) return apiError(409, "idempotency_in_progress");
+      running = true;
+      await Bun.sleep(100);
+      made++;
+      return created();
+    }),
+  );
+  const tap = () => a.request("/acme/gala/checkout", form({ qty_t1: "2", idem: KEY }));
+  const first = tap();
+  await Bun.sleep(10);
+  const [r1, r2] = await Promise.all([first, tap()]);
+  expect(made).toBe(1);
+  for (const r of [r1, r2]) {
+    expect(r.status).toBe(303);
+    expect(r.headers.get("location")).toBe(`/checkout/${TOK}`);
+  }
+});
+
+test("a later tap of the same form goes to the same checkout without asking again", async () => {
+  const { a, calls } = app(routes(created));
+  const tap = () => a.request("/acme/gala/checkout", form({ qty_t1: "2", idem: KEY }));
+  expect((await tap()).headers.get("location")).toBe(`/checkout/${TOK}`);
+  const again = await tap();
+  expect(again.status).toBe(303);
+  expect(again.headers.get("location")).toBe(`/checkout/${TOK}`);
+  expect(checkoutCalls(calls)).toBe(1);
+});
+
+test("still in progress after the wait: the page keeps the same key", async () => {
+  const { a } = app(routes(() => apiError(409, "idempotency_in_progress")));
+  const res = await a.request("/acme/gala/checkout", form({ qty_t1: "2", idem: KEY }));
+  expect(res.status).toBe(409);
+  const html = await res.text();
+  expect(html).toContain("We're already holding those for you. Give it a second.");
+  expect(html).toContain(`<input type="hidden" name="idem" value="${KEY}"/>`);
+});
+
+test("sold out with nothing left says so", async () => {
+  const ev = structuredClone(event);
+  ev.ticket_types[0].remaining = 0;
+  const { a } = app(
+    routes(
+      () => apiError(409, "sold_out", { available: [{ ticket_type_id: "t1", remaining: 0 }] }),
+      ev,
+    ),
+  );
+  const res = await a.request("/acme/gala/checkout", form({ qty_t1: "2", idem: KEY }));
+  expect(res.status).toBe(409);
+  expect(await res.text()).toContain("Those tickets just sold out.");
+});
+
+test("a form we can't read is a 400", async () => {
+  const { a, calls } = app(routes(created));
+  const res = await a.request("/acme/gala/checkout", {
+    method: "POST",
+    body: "--x\r\nbroken",
+    headers: { "content-type": "multipart/form-data; boundary=y" },
+  });
+  expect(res.status).toBe(400);
+  expect(await res.text()).toContain("We couldn't read that form. Go back and try again.");
+  expect(checkoutCalls(calls)).toBe(0);
+});
+
+test("each picker names its ticket", async () => {
+  const { a } = app(() => Response.json(event));
+  const html = await (await a.request("/acme/gala")).text();
+  expect(html).toContain('<label for="qty_t1">How many General?</label>');
+});
+
 test("no quantities chosen asks for one, without trying to buy", async () => {
-  const { a, calls } = app(routes(() => Response.json({ token: "tok" }, { status: 201 })));
+  const { a, calls } = app(routes(() => created()));
   const res = await a.request("/acme/gala/checkout", form({ qty_t1: "0", idem: KEY }));
   expect(res.status).toBe(422);
   expect(await res.text()).toContain("Pick at least one ticket.");
@@ -300,7 +403,7 @@ const messages: [number, string, string][] = [
   [503, "turnstile_unavailable", "Busy for a moment. Try again."],
   [429, "rate_limited", "That's a lot of tries. Wait a minute and try again."],
   [422, "promo_not_applicable", "That code doesn't apply to these tickets."],
-  [422, "turnstile_failed", "One quick check that you're a person."],
+  [422, "turnstile_failed", "Finish the quick check above Get tickets, then try again."],
   [422, "quantity_out_of_range", "Something went wrong on our side. Try again."],
   [500, "internal", "Something went wrong on our side. Try again."],
 ];
@@ -338,9 +441,20 @@ test("the API being down is a plain error page", async () => {
 });
 
 test("security headers on every response", async () => {
-  const { a } = app(() => Response.json(event));
-  for (const p of ["/acme/gala", "/nope", "/assets/missing.css"]) {
-    const res = await a.request(p);
+  const { a } = app(routes(created));
+  // A timezone Intl doesn't know throws while rendering: our bug, so a 500.
+  const bad = structuredClone(event);
+  bad.event.timezone = "Nowhere/Special";
+  const { a: broken } = app(() => Response.json(bad));
+  const responses = [
+    ...(await Promise.all(["/acme/gala", "/nope", "/assets/missing.css"].map((p) => a.request(p)))),
+    await a.request("/acme/gala/checkout", form({ qty_t1: "1", idem: KEY })),
+    await a.request("/acme/gala/checkout", form({ pad: "x".repeat(70 * 1024) })),
+    await broken.request("/acme/gala"),
+  ];
+  expect(responses.slice(3).map((r) => r.status)).toEqual([303, 413, 500]);
+  expect(await responses[5].text()).toContain("Something went wrong on our side. Try again.");
+  for (const res of responses) {
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
     expect(res.headers.get("x-frame-options")).toBe("DENY");
@@ -358,6 +472,9 @@ test("X-Real-IP counts only from a loopback peer", async () => {
   expect(await send("::1", { "x-real-ip": "203.0.113.9" })).toBe("203.0.113.9");
   expect(await send("198.51.100.7", { "x-real-ip": "203.0.113.9" })).toBe("198.51.100.7");
   expect(await send("127.0.0.1", {})).toBe("127.0.0.1");
+  // Only a single address counts; anything else falls back to the peer.
+  expect(await send("127.0.0.1", { "x-real-ip": "203.0.113.9, 10.0.0.1" })).toBe("127.0.0.1");
+  expect(await send("127.0.0.1", { "x-real-ip": "not-an-ip" })).toBe("127.0.0.1");
 });
 
 test("only the buyer's language and browser reach the API", async () => {
