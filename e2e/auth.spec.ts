@@ -1,35 +1,13 @@
 import { expect, type Page, test } from "@playwright/test";
-
-const API = process.env.E2E_API ?? "http://127.0.0.1:3001";
+import { addPasskey, signUp, virtualAuthenticator } from "./helpers";
 
 test("sign up, verify, create an organizer, then reach its audit log only after a passkey sign-in", async ({
   page,
   context,
 }) => {
-  const cdp = await context.newCDPSession(page);
-  await cdp.send("WebAuthn.enable");
-  await cdp.send("WebAuthn.addVirtualAuthenticator", {
-    options: {
-      protocol: "ctap2",
-      transport: "internal",
-      hasResidentKey: true,
-      hasUserVerification: true,
-      isUserVerified: true,
-    },
-  });
+  await virtualAuthenticator(page, context);
 
-  const email = `e2e-${Date.now()}@example.com`;
-  await page.goto("/signup");
-  await page.getByLabel("Name").fill("Eve");
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill("a long test passphrase");
-  await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page.getByText("Check your inbox")).toBeVisible();
-
-  const mail = await fetch(`${API}/__test/last-email?to=${encodeURIComponent(email)}`);
-  expect(mail.status).toBe(200);
-  await page.goto(await mail.text());
-  await expect(page.getByText("Your email is verified")).toBeVisible();
+  await signUp(page, "Eve", `e2e-${Date.now()}@example.com`);
 
   // Creating an organizer needs only a verified email, but reading its audit
   // log needs a second factor, which this password-only session doesn't have.
@@ -42,10 +20,7 @@ test("sign up, verify, create an organizer, then reach its audit log only after 
   expect(before.body).toMatchObject({ error: { code: "mfa_required" } });
 
   // A password-only session has to confirm the password to add a passkey.
-  await page.goto("/security");
-  await page.getByLabel("Password").fill("a long test passphrase");
-  await page.getByRole("button", { name: "Add a passkey" }).click();
-  await expect(page.getByText("Passkey added")).toBeVisible();
+  await addPasskey(page);
 
   await page.goto("/");
   await page.getByRole("button", { name: "Sign out" }).click();
