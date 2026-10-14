@@ -23,6 +23,7 @@ const ALLOW_REQ = new Set([
   "accept-language",
   "if-none-match",
   "if-modified-since",
+  "idempotency-key",
   "user-agent",
 ]);
 const DROP_RES = new Set([

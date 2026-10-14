@@ -11,6 +11,7 @@ type Call = {
   xff: string | null;
   ua: string | null;
   cookie: string | null;
+  idem: string | null;
 };
 const stops: (() => void)[] = [];
 afterEach(() => {
@@ -30,6 +31,7 @@ function fakeApi(opts: { loginFails?: boolean } = {}) {
         xff: req.headers.get("x-forwarded-for"),
         ua: req.headers.get("user-agent"),
         cookie: req.headers.get("cookie"),
+        idem: req.headers.get("idempotency-key"),
       });
       if (u.pathname === "/v1/auth/login" && opts.loginFails)
         return Response.json(
@@ -314,4 +316,10 @@ test("the proxy strips a session_token from any JSON response", async () => {
   const res = await app.request("/api/leaky");
   expect(res.status).toBe(200);
   expect(await res.json()).toEqual({ ok: true });
+});
+
+test("proxy forwards the Idempotency-Key", async () => {
+  const api = fakeApi();
+  await mk(api).request("/api/organizers", post("a", { "idempotency-key": "k-1" }));
+  expect(api.calls[0]?.idem).toBe("k-1");
 });

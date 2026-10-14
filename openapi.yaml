@@ -3,6 +3,8 @@ info:
   title: TicketSlinger API
   version: 0.1.0
   license: { name: AGPL-3.0-only, identifier: AGPL-3.0-only }
+  description: |
+    Every POST, PUT, PATCH and DELETE accepts an Idempotency-Key header: 1 to 255 printable ASCII characters, a fresh random value per intended action (400 bad_idempotency_key otherwise). Send the same key to retry and nothing happens twice. The first response is kept for 24 hours and replayed with Idempotent-Replayed: true. Keys belong to the caller (the signed-in user, the API key, or nobody for public calls) and to the method and path, so they never cross between callers. The same key with a different body is 422 idempotency_key_reused. The same key while the first request is still running is 409 idempotency_in_progress; wait a moment and retry. Responses with a 5xx status are not kept, so a retry runs fresh. Busy moments on a sale answer 503 try_again with Retry-After: 1.
 servers:
   - url: https://api.ticketslinger.com/v1
 security:
@@ -18,6 +20,7 @@ paths:
     post:
       operationId: signup
       security: []
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SignupRequest" } } } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SessionCreated" } } } }
@@ -30,6 +33,7 @@ paths:
       operationId: login
       description: 401 totp_required means the account has an authenticator app; send totp_code, or a recovery_code instead. A valid recovery code is accepted for any account with a second factor and gives a session that passed it.
       security: []
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LoginRequest" } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SessionCreated" } } } }
@@ -37,55 +41,74 @@ paths:
         "422": { $ref: "#/components/responses/Error" }
         "423": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /auth/logout:
     post:
       operationId: logout
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       responses:
         "204": { description: Signed out }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /auth/verify-email:
     post:
       operationId: verifyEmail
       security: []
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [token], properties: { token: { type: string } } } } } }
       responses:
         "204": { description: Verified }
         "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /auth/totp:
     post:
       operationId: startTotp
       description: Starts setting up an authenticator app. Unless this session passed a second factor, send the current password. Once the account has a passkey or an authenticator app, only a session that passed one may start (403 mfa_required). The setup expires if not confirmed within 10 minutes.
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody: { required: false, content: { application/json: { schema: { type: object, properties: { password: { type: string } } } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TotpSetup" } } } }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /auth/totp/confirm:
     post:
       operationId: confirmTotp
       description: Switches the authenticator app on. Refused (403 mfa_required) if the account gained a passkey since setup started and this session hasn't passed it; a setup older than 10 minutes is 400 totp_not_started.
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code], properties: { code: { type: string, pattern: "^[0-9]{6}$" } } } } } }
       responses:
         "204": { description: Enabled }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /auth/recovery-codes:
     post:
       operationId: createRecoveryCodes
       description: Replaces the account's recovery codes with ten new single-use ones and returns them. They are shown this once. Needs a session that passed a second factor (403 mfa_required) and an account that has one (409 no_second_factor).
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       responses:
         "200": { description: "The new codes, once", content: { application/json: { schema: { type: object, required: [codes], properties: { codes: { type: array, items: { type: string } } } } } } }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /auth/passkeys/register:
     post:
       operationId: beginPasskeyRegistration
       description: Starts adding a passkey. Unless this session passed a second factor, send the current password. Once the account has a passkey or authenticator app, only a session that passed one may add another (403 mfa_required).
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody: { required: false, content: { application/json: { schema: { type: object, properties: { password: { type: string } } } } } }
       responses:
         "200": { description: Options, content: { application/json: { schema: { $ref: "#/components/schemas/WebAuthnChallenge" } } } }
@@ -93,12 +116,16 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "423": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /auth/passkeys/register/{challengeId}:
     post:
       operationId: finishPasskeyRegistration
       parameters:
         - { name: challengeId, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: name, in: query, required: false, schema: { type: string, maxLength: 120 } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Passkey" } } } }
@@ -106,24 +133,31 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /auth/passkeys/login:
     post:
       operationId: beginPasskeyLogin
       security: []
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       responses:
         "200": { description: Options, content: { application/json: { schema: { $ref: "#/components/schemas/WebAuthnChallenge" } } } }
         "429": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /auth/passkeys/login/{challengeId}:
     post:
       operationId: finishPasskeyLogin
       security: []
-      parameters: [{ name: challengeId, in: path, required: true, schema: { type: string, format: uuid } }]
+      parameters: [{ name: challengeId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
       requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SessionCreated" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /me:
     get:
       operationId: getMe
@@ -140,6 +174,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
     post:
       operationId: createOrganizer
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateOrganizer" } } } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Organizer" } } } }
@@ -147,6 +182,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}:
     get:
       operationId: getOrganizer
@@ -178,7 +214,7 @@ paths:
     post:
       operationId: createApiKey
       description: Owners and admins only, from a signed-in session. The token is in this response and nowhere else, ever.
-      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }, { $ref: "#/components/parameters/IdempotencyKey" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateApiKey" } } } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ApiKeyCreated" } } } }
@@ -186,6 +222,8 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/api-keys/{apiKey}:
     delete:
       operationId: revokeApiKey
@@ -193,11 +231,15 @@ paths:
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { name: apiKey, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       responses:
         "204": { description: Revoked }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events:
     get:
       operationId: listEvents
@@ -210,7 +252,7 @@ paths:
     post:
       operationId: createEvent
       description: Owners and admins, or a write API key. The event starts as a draft. starts_at and ends_at are required (422 missing_field).
-      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }, { $ref: "#/components/parameters/IdempotencyKey" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateEvent" } } } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Event" } } } }
@@ -219,6 +261,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}:
     get:
       operationId: getEvent
@@ -236,6 +279,7 @@ paths:
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UpdateEvent" } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Event" } } } }
@@ -244,18 +288,22 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteEvent
       description: Owners and admins, or a write API key. Drafts only; a live event answers 409 event_not_draft, and a draft with orders answers 409 has_sales.
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       responses:
         "204": { description: Deleted }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/ticket-types:
     get:
       operationId: listTicketTypes
@@ -273,6 +321,7 @@ paths:
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateTicketType" } } } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/TicketType" } } } }
@@ -281,6 +330,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/ticket-types/order:
     put:
       operationId: reorderTicketTypes
@@ -288,6 +338,7 @@ paths:
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/OrderIds" } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/TicketType" } } } } }
@@ -295,6 +346,8 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/ticket-types/{ticketType}:
     get:
       operationId: getTicketType
@@ -314,6 +367,7 @@ paths:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
         - { $ref: "#/components/parameters/TicketTypePath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TicketTypeFields" } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TicketType" } } } }
@@ -322,6 +376,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteTicketType
       description: Owners and admins, or a write API key. The last ticket type of a live event answers 409 last_ticket_type_live. One that has been sold, or is held in an open checkout, answers 409 has_sales.
@@ -329,12 +384,15 @@ paths:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
         - { $ref: "#/components/parameters/TicketTypePath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       responses:
         "204": { description: Deleted }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/quotas:
     get:
       operationId: listQuotas
@@ -352,6 +410,7 @@ paths:
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateQuota" } } } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Quota" } } } }
@@ -360,6 +419,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/quotas/{quota}:
     get:
       operationId: getQuota
@@ -379,6 +439,7 @@ paths:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
         - { $ref: "#/components/parameters/QuotaPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/QuotaFields" } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Quota" } } } }
@@ -387,6 +448,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteQuota
       description: Owners and admins, or a write API key. On a live event, a delete that leaves a ticket type in no quota answers 409 live_needs_capacity. A quota whose ticket types have sales, or are held in an open checkout, answers 409 has_sales.
@@ -394,12 +456,15 @@ paths:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
         - { $ref: "#/components/parameters/QuotaPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       responses:
         "204": { description: Deleted }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/promo-codes:
     get:
       operationId: listPromoCodes
@@ -417,6 +482,7 @@ paths:
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreatePromoCode" } } } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/PromoCode" } } } }
@@ -425,6 +491,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/promo-codes/{promoCode}:
     get:
       operationId: getPromoCode
@@ -444,6 +511,7 @@ paths:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
         - { $ref: "#/components/parameters/PromoCodePath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PromoCodeFields" } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PromoCode" } } } }
@@ -452,6 +520,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
     delete:
       operationId: deletePromoCode
       description: Owners and admins, or a write API key. A code an order has used, or an open checkout is using, answers 409 has_sales.
@@ -459,12 +528,15 @@ paths:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
         - { $ref: "#/components/parameters/PromoCodePath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       responses:
         "204": { description: Deleted }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/questions:
     get:
       operationId: listQuestions
@@ -482,6 +554,7 @@ paths:
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateQuestion" } } } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Question" } } } }
@@ -489,6 +562,8 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/questions/order:
     put:
       operationId: reorderQuestions
@@ -496,6 +571,7 @@ paths:
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/OrderIds" } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Question" } } } } }
@@ -503,6 +579,8 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/questions/{question}:
     get:
       operationId: getQuestion
@@ -522,6 +600,7 @@ paths:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
         - { $ref: "#/components/parameters/QuestionPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/QuestionFields" } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Question" } } } }
@@ -529,6 +608,8 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteQuestion
       description: Owners and admins, or a write API key. A question buyers have answered answers 409 has_sales.
@@ -536,16 +617,20 @@ paths:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
         - { $ref: "#/components/parameters/QuestionPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
       responses:
         "204": { description: Deleted }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     session: { type: http, scheme: bearer, description: "A session token, or an organizer API key (tsk_...). A key acts only within its own organizer, and gets 403 session_required on anything that needs a person: your account, your organizer list, the audit log and key management. A read key gets 403 scope_read_only on writes." }
   parameters:
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: false, description: "1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again.", schema: { type: string, minLength: 1, maxLength: 255 } }
     OrganizerPath: { name: organizer, in: path, required: true, schema: { type: string } }
     QuotaPath: { name: quota, in: path, required: true, schema: { type: string, format: uuid } }
     PromoCodePath: { name: promoCode, in: path, required: true, schema: { type: string, format: uuid } }

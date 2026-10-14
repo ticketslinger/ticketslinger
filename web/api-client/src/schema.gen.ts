@@ -910,6 +910,8 @@ export interface components {
         };
     };
     parameters: {
+        /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+        IdempotencyKey: string;
         OrganizerPath: string;
         QuotaPath: string;
         PromoCodePath: string;
@@ -946,7 +948,10 @@ export interface operations {
     signup: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -974,7 +979,10 @@ export interface operations {
     login: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -993,7 +1001,9 @@ export interface operations {
                     "application/json": components["schemas"]["SessionCreated"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
             423: components["responses"]["Error"];
             429: components["responses"]["Error"];
@@ -1002,7 +1012,10 @@ export interface operations {
     logout: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1015,14 +1028,20 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     verifyEmail: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1042,12 +1061,17 @@ export interface operations {
                 content?: never;
             };
             400: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     startTotp: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1068,15 +1092,20 @@ export interface operations {
                     "application/json": components["schemas"]["TotpSetup"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     confirmTotp: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1098,12 +1127,17 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     createRecoveryCodes: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1120,16 +1154,21 @@ export interface operations {
                     };
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
     };
     beginPasskeyRegistration: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1150,8 +1189,11 @@ export interface operations {
                     "application/json": components["schemas"]["WebAuthnChallenge"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             423: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
@@ -1161,7 +1203,10 @@ export interface operations {
             query?: {
                 name?: string;
             };
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 challengeId: string;
             };
@@ -1187,13 +1232,17 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
     beginPasskeyLogin: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1208,13 +1257,19 @@ export interface operations {
                     "application/json": components["schemas"]["WebAuthnChallenge"];
                 };
             };
+            400: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
     };
     finishPasskeyLogin: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 challengeId: string;
             };
@@ -1239,6 +1294,8 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
     };
@@ -1289,7 +1346,10 @@ export interface operations {
     createOrganizer: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1308,6 +1368,7 @@ export interface operations {
                     "application/json": components["schemas"]["Organizer"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             409: components["responses"]["Error"];
@@ -1392,7 +1453,10 @@ export interface operations {
     createApiKey: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
             };
@@ -1413,16 +1477,21 @@ export interface operations {
                     "application/json": components["schemas"]["ApiKeyCreated"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
     revokeApiKey: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 apiKey: string;
@@ -1438,9 +1507,12 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     listEvents: {
@@ -1470,7 +1542,10 @@ export interface operations {
     createEvent: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
             };
@@ -1491,6 +1566,7 @@ export interface operations {
                     "application/json": components["schemas"]["Event"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -1526,7 +1602,10 @@ export interface operations {
     deleteEvent: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1542,16 +1621,21 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     updateEvent: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1573,6 +1657,7 @@ export interface operations {
                     "application/json": components["schemas"]["Event"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -1608,7 +1693,10 @@ export interface operations {
     createTicketType: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1630,6 +1718,7 @@ export interface operations {
                     "application/json": components["schemas"]["TicketType"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -1640,7 +1729,10 @@ export interface operations {
     reorderTicketTypes: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1662,9 +1754,11 @@ export interface operations {
                     "application/json": components["schemas"]["TicketType"][];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
@@ -1697,7 +1791,10 @@ export interface operations {
     deleteTicketType: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1714,16 +1811,21 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     updateTicketType: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1746,6 +1848,7 @@ export interface operations {
                     "application/json": components["schemas"]["TicketType"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -1781,7 +1884,10 @@ export interface operations {
     createQuota: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1803,6 +1909,7 @@ export interface operations {
                     "application/json": components["schemas"]["Quota"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -1839,7 +1946,10 @@ export interface operations {
     deleteQuota: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1856,16 +1966,21 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     updateQuota: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1888,6 +2003,7 @@ export interface operations {
                     "application/json": components["schemas"]["Quota"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -1923,7 +2039,10 @@ export interface operations {
     createPromoCode: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1945,6 +2064,7 @@ export interface operations {
                     "application/json": components["schemas"]["PromoCode"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -1981,7 +2101,10 @@ export interface operations {
     deletePromoCode: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1998,16 +2121,21 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     updatePromoCode: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -2030,6 +2158,7 @@ export interface operations {
                     "application/json": components["schemas"]["PromoCode"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -2065,7 +2194,10 @@ export interface operations {
     createQuestion: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -2087,16 +2219,21 @@ export interface operations {
                     "application/json": components["schemas"]["Question"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
     reorderQuestions: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -2118,9 +2255,11 @@ export interface operations {
                     "application/json": components["schemas"]["Question"][];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
@@ -2153,7 +2292,10 @@ export interface operations {
     deleteQuestion: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -2170,16 +2312,21 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     updateQuestion: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -2202,9 +2349,11 @@ export interface operations {
                     "application/json": components["schemas"]["Question"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
