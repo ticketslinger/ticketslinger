@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { emptyTicket, fieldFor, quotaBody, ticketBody } from "./Tickets";
+import { emptyTicket, fieldFor, needsCapacity, quotaBody, ticketBody } from "./Tickets";
 
 const ok = { ...emptyTicket, name: "General", price: "25" };
 
@@ -53,4 +53,28 @@ test("API error codes point at fields", () => {
   expect(fieldFor("missing_field", "Send “size”: how many")).toBe("size");
   expect(fieldFor("live_needs_capacity", "")).toBe("choices");
   expect(fieldFor("ticket_type_exists", "")).toBe("");
+});
+
+test("grouped quota sizes must be grouped properly", () => {
+  for (const size of ["1,2,3", "12,34", "1,23", ",100"])
+    expect(quotaBody({ name: "A", size, types: [] })).toMatchObject({ field: "size" });
+  expect(quotaBody({ name: "A", size: "1000000", types: [] })).toMatchObject({
+    body: { size: 1000000 },
+  });
+  expect(quotaBody({ name: "A", size: "1000001", types: [] })).toMatchObject({ field: "size" });
+});
+
+test("a sales time in a clock-change gap moves forward, as the event form does", () => {
+  const r = ticketBody(
+    { ...ok, start: "2026-03-08T02:30", end: "2026-03-08T03:45" },
+    "America/New_York",
+  );
+  expect(r).toMatchObject({
+    body: { sales_start: "2026-03-08T07:30:00.000Z", sales_end: "2026-03-08T07:45:00.000Z" },
+  });
+});
+
+test("only a live event insists on a capacity", () => {
+  expect(needsCapacity("live")).toBe(true);
+  for (const s of ["draft", "ended", "cancelled"] as const) expect(needsCapacity(s)).toBe(false);
 });

@@ -13,3 +13,7 @@ export function formatCents(cents: number): string {
   const whole = Math.trunc(abs / 100).toLocaleString("en-US");
   return `${cents < 0 ? "-" : ""}$${whole}.${String(abs % 100).padStart(2, "0")}`;
 }
+
+/** 120050 → "1200.50": what goes back in a price box. No symbol, no commas. */
+export const dollarsInput = (cents: number) =>
+  `${Math.trunc(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;

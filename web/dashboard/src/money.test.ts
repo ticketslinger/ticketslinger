@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { formatCents, parseDollars } from "./money";
+import { dollarsInput, formatCents, parseDollars } from "./money";
 
 test("dollars become cents", () => {
   expect(parseDollars("12")).toBe(1200);
@@ -45,4 +45,15 @@ test("parse and format agree", () => {
   for (const c of [0, 1, 99, 100, 1999, 120000, 10000000]) {
     expect(parseDollars(formatCents(c))).toBe(c);
   }
+});
+
+test("negative cents keep their sign", () => {
+  expect(formatCents(-1250)).toBe("-$12.50");
+  expect(formatCents(-5)).toBe("-$0.05");
+});
+
+test("cents fill a price box without a dollar sign or commas", () => {
+  expect(dollarsInput(0)).toBe("0.00");
+  expect(dollarsInput(120050)).toBe("1200.50");
+  expect(dollarsInput(7)).toBe("0.07");
 });

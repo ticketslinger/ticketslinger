@@ -1,9 +1,17 @@
 import type { components } from "@ticketslinger/api-client";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { api, must } from "../api";
-import { formatCents, parseDollars } from "../money";
+import { dollarsInput, formatCents, parseDollars } from "../money";
 import { formatWhen, fromLocalInput, toLocalInput } from "../time";
-import { ErrorText, Field, focusOnMount, useAction, useLoad, useUnsavedChanges } from "../ui";
+import {
+  askToLeave,
+  ErrorText,
+  Field,
+  focusOnMount,
+  useAction,
+  useLoad,
+  useUnsavedChanges,
+} from "../ui";
 import { bpToPercent, type Event, percentToBp } from "./EventForm";
 import { canEdit, type Org } from "./Organizer";
 
@@ -75,7 +83,7 @@ export const emptyTicket: TicketDraft = {
 export const ticketDraftOf = (t: TicketType, tz: string): TicketDraft => ({
   name: t.name,
   description: t.description,
-  price: formatCents(t.price_cents).replace("$", "").replaceAll(",", ""),
+  price: dollarsInput(t.price_cents),
   min: String(t.min_per_order),
   max: String(t.max_per_order),
   start: t.sales_start ? toLocalInput(t.sales_start, tz) : "",
@@ -146,15 +154,19 @@ export type QuotaDraft = { name: string; size: string; types: string[] };
 
 /** Checks a capacity form and turns it into the API's fields, or says which field is wrong. */
 export function quotaBody(d: QuotaDraft): { body: components["schemas"]["QuotaFields"] } | Problem {
-  const size = /^\d{1,7}$/.test(d.size.trim().replaceAll(",", ""))
-    ? Number(d.size.replaceAll(",", ""))
-    : null;
+  const digits = /^(?:\d{1,3}(?:,\d{3})+|\d+)$/.test(d.size.trim())
+    ? d.size.trim().replaceAll(",", "")
+    : "";
+  const size = digits && digits.length <= 7 ? Number(digits) : null;
   if (!d.name.trim())
     return { field: "name", message: "Give this capacity a name, like General floor." };
   if (size === null || size > 1_000_000)
     return { field: "size", message: "Enter how many tickets it holds, from 0 to 1,000,000." };
   return { body: { name: d.name.trim(), size, ticket_type_ids: d.types } };
 }
+
+/** The API only insists on a capacity while an event is live (ended and cancelled events don't). */
+export const needsCapacity = (status: Event["status"]) => status === "live";
 
 const price = (c: number) => (c === 0 ? "Free" : formatCents(c));
 const toggle = (list: string[], id: string) =>
@@ -184,7 +196,17 @@ function FormDialog({
     if (ref.current && !ref.current.open) ref.current.showModal();
   }, []);
   return (
-    <dialog ref={ref} className="form" aria-labelledby="form-dialog-title" onClose={onClose}>
+    <dialog
+      ref={ref}
+      className="form"
+      aria-labelledby="form-dialog-title"
+      onClose={onClose}
+      onCancel={(e) => {
+        if (!dirty) return;
+        e.preventDefault();
+        askToLeave(() => ref.current?.close());
+      }}
+    >
       <h2 id="form-dialog-title">{title}</h2>
       <form
         onSubmit={(e) => {
@@ -197,7 +219,11 @@ function FormDialog({
           <button type="submit" className="inline" disabled={busy}>
             {submitLabel}
           </button>
-          <button type="button" className="inline secondary" onClick={() => ref.current?.close()}>
+          <button
+            type="button"
+            className="inline secondary"
+            onClick={() => askToLeave(() => ref.current?.close())}
+          >
             Cancel
           </button>
         </div>
@@ -215,7 +241,13 @@ function useProblem(prefix: string, local: Problem | null, error: string, code: 
   useEffect(() => {
     if (field) document.getElementById(`${prefix}-${field}`)?.focus();
   }, [prefix, field, message]);
-  return { message, bad: (f: string) => (field === f ? true : undefined) };
+  return {
+    message,
+    prefix,
+    bad: (f: string) => (field === f ? true : undefined),
+    // For a group of controls, which can't be aria-invalid: point at the message instead.
+    describe: (f: string) => (field === f && message ? `${prefix}-error` : undefined),
+  };
 }
 
 function TicketDialog({
@@ -236,13 +268,14 @@ function TicketDialog({
   const start = ticket ? ticketDraftOf(ticket, event.timezone) : emptyTicket;
   const [d, setD] = useState(start);
   const [local, setLocal] = useState<Problem | null>(null);
-  const { busy, error, code, run } = useAction();
+  const { busy, error, code, clear, run } = useAction();
   const p = useProblem("tt", local, error, code);
   const set = (patch: Partial<TicketDraft>) => {
     setLocal(null);
+    clear();
     setD((old) => ({ ...old, ...patch }));
   };
-  const live = event.status !== "draft";
+  const live = needsCapacity(event.status);
 
   function save() {
     const r = ticketBody(d, event.timezone);
@@ -423,7 +456,7 @@ function TicketDialog({
           </fieldset>
         )}
       </fieldset>
-      <ErrorText>{p.message}</ErrorText>
+      <ErrorText id={`${p.prefix}-error`}>{p.message}</ErrorText>
     </FormDialog>
   );
 }
@@ -448,10 +481,11 @@ function QuotaDialog({
     : { name: "", size: "", types: [] };
   const [d, setD] = useState(start);
   const [local, setLocal] = useState<Problem | null>(null);
-  const { busy, error, code, run } = useAction();
+  const { busy, error, code, clear, run } = useAction();
   const p = useProblem("q", local, error, code);
   const set = (patch: Partial<QuotaDraft>) => {
     setLocal(null);
+    clear();
     setD((old) => ({ ...old, ...patch }));
   };
 
@@ -508,7 +542,12 @@ function QuotaDialog({
           value={d.size}
           onChange={(e) => set({ size: e.target.value })}
         />
-        <fieldset className="choices" id="q-choices" tabIndex={-1} aria-invalid={p.bad("choices")}>
+        <fieldset
+          className="choices"
+          id="q-choices"
+          tabIndex={-1}
+          aria-describedby={p.describe("choices")}
+        >
           <legend>Tickets that draw on it</legend>
           {tickets.length === 0 && (
             <p className="hint">Add a ticket first, then come back to pick it.</p>
@@ -525,7 +564,7 @@ function QuotaDialog({
           ))}
         </fieldset>
       </fieldset>
-      <ErrorText>{p.message}</ErrorText>
+      <ErrorText id={`${p.prefix}-error`}>{p.message}</ErrorText>
     </FormDialog>
   );
 }
@@ -543,7 +582,6 @@ function Remove({ label, noun, run }: { label: string; noun: string; run: () => 
             className="inline"
             ref={focusOnMount}
             disabled={busy}
-            aria-label={`Yes, delete ${label}`}
             onClick={() => go(run)}
           >
             Delete {noun}
