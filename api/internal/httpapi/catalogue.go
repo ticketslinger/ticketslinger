@@ -250,3 +250,78 @@ func (s *server) DeleteTicketType(ctx context.Context, req DeleteTicketTypeReque
 	}
 	return DeleteTicketType204Response{}, nil
 }
+
+func toQuota(q catalogue.Quota) Quota {
+	return Quota{Id: q.ID, EventId: q.EventID, Name: q.Name, Size: q.Size, TicketTypeIds: q.TicketTypeIDs, CreatedAt: q.CreatedAt, UpdatedAt: q.UpdatedAt}
+}
+
+func (s *server) ListQuotas(ctx context.Context, req ListQuotasRequestObject) (ListQuotasResponseObject, error) {
+	out := ListQuotas200JSONResponse{}
+	err := s.inOrganizer(ctx, req.Organizer, catalogueRead, func(_ organizers.Organizer, tx pgx.Tx) error {
+		list, err := catalogue.ListQuotas(ctx, tx, req.Event)
+		for _, q := range list {
+			out = append(out, toQuota(q))
+		}
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) CreateQuota(ctx context.Context, req CreateQuotaRequestObject) (CreateQuotaResponseObject, error) {
+	b := req.Body
+	in := catalogue.QuotaInput{Name: b.Name, Size: b.Size}
+	if b.TicketTypeIds != nil {
+		in.TicketTypeIDs = *b.TicketTypeIds
+	}
+	var out CreateQuota201JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		q, err := catalogue.CreateQuota(ctx, tx, org.ID, req.Event, actorFrom(ctx), in)
+		out = CreateQuota201JSONResponse(toQuota(q))
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) GetQuota(ctx context.Context, req GetQuotaRequestObject) (GetQuotaResponseObject, error) {
+	var out GetQuota200JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, catalogueRead, func(_ organizers.Organizer, tx pgx.Tx) error {
+		q, err := catalogue.GetQuota(ctx, tx, req.Event, req.Quota)
+		out = GetQuota200JSONResponse(toQuota(q))
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) UpdateQuota(ctx context.Context, req UpdateQuotaRequestObject) (UpdateQuotaResponseObject, error) {
+	b := req.Body
+	p := catalogue.QuotaPatch{Name: b.Name, Size: b.Size, TicketTypeIDs: b.TicketTypeIds}
+	var out UpdateQuota200JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		q, err := catalogue.UpdateQuota(ctx, tx, org.ID, req.Event, req.Quota, actorFrom(ctx), p)
+		out = UpdateQuota200JSONResponse(toQuota(q))
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) DeleteQuota(ctx context.Context, req DeleteQuotaRequestObject) (DeleteQuotaResponseObject, error) {
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		return catalogue.DeleteQuota(ctx, tx, org.ID, req.Event, req.Quota, actorFrom(ctx))
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return DeleteQuota204Response{}, nil
+}

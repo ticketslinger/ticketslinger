@@ -293,11 +293,71 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/quotas:
+    get:
+      operationId: listQuotas
+      description: Any member, or any API key. Oldest first.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Quota" } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createQuota
+      description: Owners and admins, or a write API key. ticket_type_ids may be empty; every id must belong to this event (422 unknown_ticket_type).
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateQuota" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Quota" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/quotas/{quota}:
+    get:
+      operationId: getQuota
+      description: Any member, or any API key.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/QuotaPath" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Quota" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateQuota
+      description: "Owners and admins, or a write API key. Send only what changes. A ticket_type_ids list replaces the whole set. On a live event, leaving a ticket type in no quota answers 409 live_needs_capacity."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/QuotaPath" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/QuotaFields" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Quota" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteQuota
+      description: Owners and admins, or a write API key. On a live event, a delete that leaves a ticket type in no quota answers 409 live_needs_capacity.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/QuotaPath" }
+      responses:
+        "204": { description: Deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     session: { type: http, scheme: bearer, description: "A session token, or an organizer API key (tsk_...). A key acts only within its own organizer, and gets 403 session_required on anything that needs a person: your account, your organizer list, the audit log and key management. A read key gets 403 scope_read_only on writes." }
   parameters:
     OrganizerPath: { name: organizer, in: path, required: true, schema: { type: string } }
+    QuotaPath: { name: quota, in: path, required: true, schema: { type: string, format: uuid } }
     TicketTypePath: { name: ticketType, in: path, required: true, schema: { type: string, format: uuid } }
     EventPath: { name: event, in: path, required: true, schema: { type: string, format: uuid } }
   responses:
@@ -448,6 +508,27 @@ components:
         currency: { type: string, enum: [USD] }
         tax_rate_bp: { type: integer }
         prices_include_tax: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    QuotaFields:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        size: { type: integer, minimum: 0, maximum: 1000000, description: How many tickets this capacity holds across all its ticket types. }
+        ticket_type_ids: { type: array, items: { type: string, format: uuid }, description: "The ticket types that draw on this capacity. On a patch the list replaces the current one; leave it out to keep it." }
+    CreateQuota:
+      allOf:
+        - { $ref: "#/components/schemas/QuotaFields" }
+        - { type: object, required: [name, size] }
+    Quota:
+      type: object
+      required: [id, event_id, name, size, ticket_type_ids, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        event_id: { type: string, format: uuid }
+        name: { type: string }
+        size: { type: integer }
+        ticket_type_ids: { type: array, items: { type: string, format: uuid } }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     TicketTypeFields:

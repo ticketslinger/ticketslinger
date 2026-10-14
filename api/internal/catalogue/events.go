@@ -215,9 +215,8 @@ func sameEvent(a, b Event) bool {
 }
 
 // goLive decides whether a draft may go on sale: it needs at least one
-// ticket type. It runs in the transaction that holds the event's row lock,
-// so a ticket type can't be deleted between the check and the status change.
-// The quota rule joins it in the next task.
+// ticket type, and every ticket type needs a quota. It runs in the transaction that holds the event's row lock,
+// so a ticket type or quota can't change between the check and the status change.
 func goLive(ctx context.Context, tx pgx.Tx, e Event) error {
 	var n int
 	if err := tx.QueryRow(ctx, `select count(*) from ticket_types where event_id = $1`, e.ID).Scan(&n); err != nil {
@@ -225,6 +224,15 @@ func goLive(ctx context.Context, tx pgx.Tx, e Event) error {
 	}
 	if n == 0 {
 		return invalid("no_ticket_types", "Add at least one ticket type before you put the event on sale.")
+	}
+	var name string
+	err := tx.QueryRow(ctx, `select name from ticket_types t where event_id = $1
+		and not exists (select 1 from quota_ticket_types where ticket_type_id = t.id) order by position, created_at, id limit 1`, e.ID).Scan(&name)
+	if err == nil {
+		return invalid("unquotaed_ticket_type", "Give \u201c"+name+"\u201d a capacity before going live.")
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return err
 	}
 	return nil
 }

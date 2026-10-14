@@ -239,6 +239,15 @@ func TestEventCannotGoLiveIncomplete(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := goLive(); !invalidCode(err, "unquotaed_ticket_type") {
+		t.Fatalf("no quota: %v", err)
+	}
+	if err := as(t, pool, user, a, func(tx pgx.Tx) error {
+		_, err := catalogue.CreateQuota(ctx, tx, a, ev.ID, actor, catalogue.QuotaInput{Name: "Hall", Size: 50, TicketTypeIDs: []uuid.UUID{made.ID}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if e, err := goLive(); err != nil || e.Status != "live" {
 		t.Fatalf("with a ticket type: %v %+v", err, e)
 	}
@@ -357,7 +366,10 @@ func TestLiveEventNeverEndsWithoutTicketTypes(t *testing.T) {
 			if ev, err = catalogue.CreateEvent(ctx, tx, a, actor, in(slug)); err != nil {
 				return
 			}
-			tk, err = catalogue.CreateTicketType(ctx, tx, a, ev.ID, actor, tt("General"))
+			if tk, err = catalogue.CreateTicketType(ctx, tx, a, ev.ID, actor, tt("General")); err != nil {
+				return
+			}
+			_, err = catalogue.CreateQuota(ctx, tx, a, ev.ID, actor, catalogue.QuotaInput{Name: "Hall", Size: 5, TicketTypeIDs: []uuid.UUID{tk.ID}})
 			return
 		}); err != nil {
 			t.Fatal(err)
