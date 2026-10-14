@@ -5,3 +5,4 @@ ALTER DATABASE ticketslinger OWNER TO ts_owner;
 \connect ticketslinger
 ALTER SCHEMA public OWNER TO ts_owner;
 CREATE EXTENSION IF NOT EXISTS citext;
+ALTER ROLE ts_owner CREATEDB;
