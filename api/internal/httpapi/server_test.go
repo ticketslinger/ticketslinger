@@ -12,9 +12,8 @@ import (
 )
 
 func TestHealth(t *testing.T) {
-	srv := httptest.NewServer(httpapi.New(httpapi.Deps{}))
-	defer srv.Close()
-	res, err := http.Get(srv.URL + "/v1/health")
+	srv := startServer(t, httpapi.New(httpapi.Deps{}))
+	res, err := clientFor(t, srv.URL).Get(srv.URL + "/v1/health")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,9 +26,11 @@ func TestHealth(t *testing.T) {
 }
 
 func TestUnknownRouteIsJSONError(t *testing.T) {
-	srv := httptest.NewServer(httpapi.New(httpapi.Deps{}))
+	// Raw on purpose: /v1/nope isn't in the spec, so the validating client
+	// would (rightly) call the request itself an error.
+	srv := httptest.NewServer(httpapi.New(httpapi.Deps{})) // raw: /v1/nope is outside the spec
 	defer srv.Close()
-	res, err := http.Get(srv.URL + "/v1/nope")
+	res, err := http.Get(srv.URL + "/v1/nope") // raw: /v1/nope is outside the spec
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,8 +47,7 @@ func TestSecuredOperationsReject401BeforeBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(httpapi.New(httpapi.Deps{}))
-	defer srv.Close()
+	srv := startServer(t, httpapi.New(httpapi.Deps{}))
 	n := 0
 	for path, item := range spec.Paths.Map() {
 		for method, op := range item.Operations() {
@@ -59,7 +59,7 @@ func TestSecuredOperationsReject401BeforeBody(t *testing.T) {
 			// Every path parameter in the spec is a uuid.
 			p := regexp.MustCompile(`\{[^}]*\}`).ReplaceAllString(path, "0197a2b4-0000-7000-8000-000000000000")
 			req, _ := http.NewRequest(method, srv.URL+"/v1"+p, nil)
-			res, err := http.DefaultClient.Do(req)
+			res, err := clientFor(t, srv.URL).Do(req)
 			if err != nil {
 				t.Fatal(err)
 			}

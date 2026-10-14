@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -102,7 +105,7 @@ func (v *validating) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	route, params, err := v.router.FindRoute(req)
 	if err != nil {
-		// An unknown path or method is only wrong if the server answered it.
+		// Not in the spec at all: a test is calling something undocumented.
 		v.t.Errorf("%s %s isn't in openapi.yaml: %v", req.Method, req.URL.Path, err)
 		return res, nil
 	}
@@ -158,6 +161,20 @@ func sample(t *testing.T, name string, parts []*openapi3.Schema) any {
 			s = p // the part that says what it is
 		}
 	}
+	lo, hi := math.Inf(-1), math.Inf(1)
+	minLen, maxLen := 0, math.MaxInt
+	for _, p := range parts {
+		if p.Min != nil {
+			lo = max(lo, *p.Min)
+		}
+		if p.Max != nil {
+			hi = min(hi, *p.Max)
+		}
+		minLen = max(minLen, int(p.MinLength))
+		if p.MaxLength != nil {
+			maxLen = min(maxLen, int(*p.MaxLength))
+		}
+	}
 	switch name {
 	case "slug":
 		return "fresh-slug"
@@ -180,9 +197,9 @@ func sample(t *testing.T, name string, parts []*openapi3.Schema) any {
 		if s.Pattern != "" {
 			t.Fatalf("no sample for %s (pattern %s); add one to sample()", name, s.Pattern)
 		}
-		return strings.Repeat("a", max(int(s.MinLength), 12))
+		return strings.Repeat("a", min(max(minLen, 12), maxLen))
 	case s.Type.Includes("integer"):
-		return 1
+		return int(min(max(1, lo), hi))
 	case s.Type.Includes("array"):
 		return []any{}
 	case s.Type.Includes("boolean"):
@@ -249,18 +266,36 @@ func TestEveryBoundAnswers422(t *testing.T) {
 				}
 				return v
 			})
+			base := func() map[string]any {
+				body := map[string]any{}
+				for n := range req {
+					body[n] = sample(t, n, props[n])
+				}
+				return body
+			}
+			bounded := false
+			for _, parts := range props {
+				bounded = bounded || len(outside(parts)) > 0
+			}
+			if !bounded {
+				continue
+			}
+			// The base body has to be valid, or a 422 below proves nothing.
+			b, _ := json.Marshal(base())
+			if res := h.do(token, method, "/v1"+target, string(b)); res.StatusCode == http.StatusUnprocessableEntity || res.StatusCode >= 500 {
+				t.Errorf("%s /v1%s: the valid base body got %d %q", method, target, res.StatusCode, h.errorCode(res))
+			}
 			for name, parts := range props {
 				for _, bad := range outside(parts) {
-					body := map[string]any{}
-					for n := range req {
-						body[n] = sample(t, n, props[n])
-					}
+					body := base()
 					body[name] = bad
-					b, _ := json.Marshal(body)
+					b, _ = json.Marshal(body)
 					res := h.do(token, method, "/v1"+target, string(b))
-					code := h.errorCode(res)
-					if res.StatusCode != http.StatusUnprocessableEntity || code == "missing_field" {
-						t.Errorf("%s /v1%s with %s=%.20v: got %d %q, want 422 for the bound", method, target, name, bad, res.StatusCode, code)
+					e, _ := h.json(res)["error"].(map[string]any)
+					code, _ := e["code"].(string)
+					msg, _ := e["message"].(string)
+					if res.StatusCode != http.StatusUnprocessableEntity || !names(name, code+" "+msg) {
+						t.Errorf("%s /v1%s with %s=%.20v: got %d %q %q, want a 422 that names %s", method, target, name, bad, res.StatusCode, code, msg, name)
 					}
 					checked++
 				}
@@ -271,4 +306,42 @@ func TestEveryBoundAnswers422(t *testing.T) {
 		t.Fatal("no bounds checked; the walk is broken")
 	}
 	t.Logf("%d bounds checked", checked)
+}
+
+// names reports whether an error's code or message is about the property: it
+// mentions one of the words in the property's name (tax_rate_bp: tax, rate),
+// or an alias where the API says it differently.
+func names(prop, text string) bool {
+	text = strings.ToLower(text)
+	words := append(strings.Split(prop, "_"), aliases[prop]...)
+	for _, w := range words {
+		if len(w) >= 3 && strings.Contains(text, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// aliases are the words the API uses for a property whose name it avoids.
+var aliases = map[string][]string{"value": {"discount"}}
+
+// The test files must not reach the server around the validating client, or
+// their responses go unchecked. A line that has to may end in "// raw: why".
+func TestTestsUseTheValidatingClient(t *testing.T) {
+	files, _ := filepath.Glob("*_test.go")
+	raw := regexp.MustCompile(`http\.(Get|Post|Head|PostForm)\(|http\.DefaultClient|httptest\.NewServer\(`)
+	for _, f := range files {
+		if f == "openapi_test.go" {
+			continue // where the validating client and startServer live
+		}
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(src), "\n") {
+			if raw.MatchString(line) && !strings.Contains(line, "// raw:") {
+				t.Errorf("%s:%d reaches the server without the validating client; use startServer and clientFor, or end the line with \"// raw: <why>\"", f, i+1)
+			}
+		}
+	}
 }

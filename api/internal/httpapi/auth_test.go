@@ -257,6 +257,23 @@ func TestRecoveryCodesOverHTTP(t *testing.T) {
 	if st, e := do(t, "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"a long passphrase","totp_code":"123456","recovery_code":"aaaa-bbbb-cccc"}`); st != 422 || errCode(e) != "one_second_step" {
 		t.Fatalf("both: %d %v", st, e)
 	}
+	// A code copied with spaces for hyphens and padding still signs in; the
+	// length limit counts the code, not the padding.
+	padded := "  " + strings.ToLower(strings.ReplaceAll(codes[1].(string), "-", " ")) + "  "
+	if st, ok := do(t, "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"a long passphrase","recovery_code":"`+padded+`"}`); st != 200 {
+		t.Fatalf("padded recovery code: %d %v", st, ok)
+	}
+	// Padding up to 64 characters is read; more than 32 left after dropping
+	// spaces and hyphens, or more than 64 raw, is 422.
+	wide := strings.Repeat(" ", 20) + codes[2].(string) + strings.Repeat(" ", 20)
+	if st, ok := do(t, "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"a long passphrase","recovery_code":"`+wide+`"}`); st != 200 {
+		t.Fatalf("widely padded recovery code: %d %v", st, ok)
+	}
+	for name, long := range map[string]string{"stripped": strings.Repeat("a", 33), "raw": strings.Repeat(" ", 65)} {
+		if st, e := do(t, "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"a long passphrase","recovery_code":"`+long+`"}`); st != 422 || errCode(e) != "invalid_recovery_code" {
+			t.Fatalf("%s too long: %d %v", name, st, e)
+		}
+	}
 	login := `{"email":"a@example.com","password":"a long passphrase","recovery_code":"` + codes[0].(string) + `"}`
 	st, ok := do(t, "POST", srv.URL+"/v1/auth/login", "", login)
 	if user, _ := ok["user"].(map[string]any); st != 200 || user["mfa"] != true {
