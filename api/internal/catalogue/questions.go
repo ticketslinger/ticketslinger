@@ -98,13 +98,16 @@ func validateQuestion(q *Question) error {
 		switch {
 		case utf8.RuneCountInString(o) < 1 || utf8.RuneCountInString(o) > 120:
 			return invalid("bad_options", "Each option needs 1 to 120 characters.")
-		case seen[strings.ToLower(o)]:
+		case seen[fold(o)]:
 			return invalid("bad_options", "“"+o+"” is listed twice. Options have to be different, ignoring capitals.")
 		}
-		seen[strings.ToLower(o)] = true
+		seen[fold(o)] = true
 	}
 	return nil
 }
+
+// fold maps s and ſ, or σ, ς and Σ, to one key: upper then lower case.
+func fold(s string) string { return strings.ToLower(strings.ToUpper(s)) }
 
 // questionDBError is dbError for questions: 23514 a failed CHECK.
 func questionDBError(err error) error {

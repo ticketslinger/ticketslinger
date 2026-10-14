@@ -55,6 +55,9 @@ func TestQuestionValidation(t *testing.T) {
 		{qn("Q", "select", "only"), "bad_options"},
 		{qn("Q", "select", many...), "bad_options"},
 		{qn("Q", "select", "Red", " red "), "bad_options"},
+		{qn("Q", "select", "Ses", "ſes"), "bad_options"},
+		{qn("Q", "select", "ΟΔΟΣ", "οδος"), "bad_options"},
+		{qn("Q", "select", "ΟΔΟΣ", "οδοσ"), "bad_options"},
 		{qn("Q", "select", "Red", "  "), "bad_options"},
 		{qn("Q", "select", "Red", strings.Repeat("é", 121)), "bad_options"},
 		{qn("Q", "text", "a", "b"), "bad_options"},
@@ -66,8 +69,8 @@ func TestQuestionValidation(t *testing.T) {
 			t.Errorf("%+v: want %s, got %v", c.in, c.code, err)
 		}
 	}
-	if _, err := e.question(qn("Q", "select", "Red", "Red ")); !strings.Contains(err.Error(), "bad_options") {
-		t.Fatal(err)
+	if _, err := e.question(qn("Q", "select", "Red", "Red ")); err == nil || !strings.Contains(err.Error(), "bad_options") {
+		t.Fatalf("duplicate option: want bad_options, got %v", err)
 	} else if ie := err.(catalogue.ErrInvalid); !strings.Contains(ie.Message, "“Red”") {
 		t.Fatalf("message should name the option: %q", ie.Message)
 	}

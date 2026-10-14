@@ -14,12 +14,21 @@ import (
 )
 
 const (
-	argonMemory  = 64 * 1024 // KiB
-	argonTime    = 3
-	argonThreads = 2
 	argonSaltLen = 16
 	argonKeyLen  = 32
 )
+
+type argonParams struct {
+	memory, time uint32 // memory in KiB
+	threads      uint8
+}
+
+// productionCost is what every real hash is made at.
+var productionCost = argonParams{memory: 64 * 1024, time: 3, threads: 2}
+
+// argonCost is the cost new hashes are made at. Only LowerCostForTests, which
+// refuses to run outside a test binary, ever changes it.
+var argonCost = productionCost
 
 var b64 = base64.RawStdEncoding
 
@@ -48,16 +57,20 @@ func idKey(ctx context.Context, pw, salt []byte, t, m uint32, p uint8, keyLen ui
 func HashPassword(pw string) (string, error) { return hashPassword(context.Background(), pw) }
 
 func hashPassword(ctx context.Context, pw string) (string, error) {
+	return hashPasswordAt(ctx, pw, argonCost)
+}
+
+func hashPasswordAt(ctx context.Context, pw string, c argonParams) (string, error) {
 	salt := make([]byte, argonSaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
-	key, err := idKey(ctx, []byte(pw), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
+	key, err := idKey(ctx, []byte(pw), salt, c.time, c.memory, c.threads, argonKeyLen)
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version, argonMemory, argonTime, argonThreads, b64.EncodeToString(salt), b64.EncodeToString(key)), nil
+		argon2.Version, c.memory, c.time, c.threads, b64.EncodeToString(salt), b64.EncodeToString(key)), nil
 }
 
 // CheckPassword reports whether pw matches hash, using the parameters stored in the hash.
