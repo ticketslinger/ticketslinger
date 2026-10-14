@@ -16,7 +16,6 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/db"
 	"github.com/ticketslinger/ticketslinger/api/internal/httpapi"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
-	"github.com/ticketslinger/ticketslinger/api/internal/organizers"
 )
 
 var version = "dev"
@@ -72,7 +71,7 @@ func serve() error {
 	defer pool.Close()
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.New(httpapi.Deps{Pool: pool, Auth: auth.NewService(pool, mailer.Log{}, auth.Options{RPID: cfg.WebAuthnRPID, Origin: cfg.DashboardOrigin, SecretKey: cfg.SecretKey}), Organizers: &organizers.Service{}, Config: cfg}),
+		Handler:           httpapi.New(httpapi.Deps{Pool: pool, Auth: auth.NewService(pool, mailer.Log{}, auth.Options{RPID: cfg.WebAuthnRPID, Origin: cfg.DashboardOrigin, SecretKey: cfg.SecretKey}), Config: cfg}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}

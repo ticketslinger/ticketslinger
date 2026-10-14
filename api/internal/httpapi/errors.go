@@ -27,8 +27,6 @@ func notFound() error {
 	return &apiError{404, "not_found", "That doesn't exist, or you don't have access to it."}
 }
 
-var errNotImplemented = &apiError{501, "not_implemented", "This isn't available yet."}
-
 // writeBadRequest answers a request that couldn't be decoded. The decoder's
 // detail goes to the log, not the caller.
 func writeBadRequest(w http.ResponseWriter, r *http.Request, err error) {

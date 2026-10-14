@@ -284,7 +284,9 @@ func TestPasskeyOptionsRequireResidentKeyAndUV(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var login struct{ PublicKey struct{ UserVerification string } }
+	var login struct {
+		PublicKey struct{ UserVerification string }
+	}
 	b, _ = json.Marshal(lopts)
 	_ = json.Unmarshal(b, &login)
 	if login.PublicKey.UserVerification != "required" {
