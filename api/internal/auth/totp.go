@@ -101,7 +101,8 @@ func (s *Service) checkTOTP(userID uuid.UUID, sealed []byte, lastStep *int64, co
 func recordTOTPStep(ctx context.Context, tx pgx.Tx, id uuid.UUID, step int64, enable bool) (bool, error) {
 	tag, err := tx.Exec(ctx,
 		`UPDATE users SET totp_last_step = $2,
-		        totp_enabled_at = CASE WHEN $3 THEN now() ELSE totp_enabled_at END
+		        totp_enabled_at = CASE WHEN $3 THEN now() ELSE totp_enabled_at END,
+		        totp_pending_at = CASE WHEN $3 THEN NULL ELSE totp_pending_at END
 		  WHERE id = $1 AND (totp_last_step IS NULL OR totp_last_step < $2)`, id, step, enable)
 	return tag.RowsAffected() == 1, err
 }
@@ -139,7 +140,8 @@ func (s *Service) StartTOTP(ctx context.Context, userID uuid.UUID, mfa bool, pas
 		return "", "", err
 	}
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE users SET totp_secret = $2, totp_last_step = NULL WHERE id = $1 AND totp_enabled_at IS NULL`,
+		`UPDATE users SET totp_secret = $2, totp_last_step = NULL, totp_pending_at = now()
+		  WHERE id = $1 AND totp_enabled_at IS NULL`,
 		userID, sealed)
 	if err != nil {
 		return "", "", err
@@ -150,23 +152,33 @@ func (s *Service) StartTOTP(ctx context.Context, userID uuid.UUID, mfa bool, pas
 	return key.Secret(), key.URL(), nil
 }
 
-// ConfirmTOTP proves the user's authenticator works and switches TOTP on.
-func (s *Service) ConfirmTOTP(ctx context.Context, userID uuid.UUID, code string) error {
+// pendingTOTPLifetime is how long a started enrolment can be confirmed.
+const pendingTOTPLifetime = "10 minutes"
+
+// ConfirmTOTP proves the user's authenticator works and switches TOTP on,
+// once checkEnrolment's rule still holds under the user's row lock. A secret
+// started more than pendingTOTPLifetime ago counts as never started.
+func (s *Service) ConfirmTOTP(ctx context.Context, userID uuid.UUID, mfa bool, code string) error {
 	if !s.emLimit.allow("totp:"+userID.String(), time.Now()) {
 		return ErrRateLimited
 	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := lockEnrolment(ctx, tx, userID, mfa); err != nil {
+			return err
+		}
 		var sealed []byte
-		var enabled bool
+		var enabled, fresh bool
 		if err := tx.QueryRow(ctx,
-			`SELECT totp_secret, totp_enabled_at IS NOT NULL FROM users WHERE id = $1 FOR UPDATE`, userID).
-			Scan(&sealed, &enabled); err != nil {
+			`SELECT totp_secret, totp_enabled_at IS NOT NULL,
+			        coalesce(totp_pending_at > now() - $2::interval, false)
+			   FROM users WHERE id = $1`, userID, pendingTOTPLifetime).
+			Scan(&sealed, &enabled, &fresh); err != nil {
 			return err
 		}
 		if enabled {
 			return ErrTOTPAlreadyEnabled
 		}
-		if sealed == nil {
+		if sealed == nil || !fresh {
 			return ErrTOTPNotStarted
 		}
 		step, ok, err := s.checkTOTP(userID, sealed, nil, code)

@@ -51,7 +51,13 @@ export function Security({
 
   const confirmTotp = (code: string) =>
     totpAction.run(async () => {
-      must(await api.POST("/auth/totp/confirm", { body: { code } }));
+      try {
+        must(await api.POST("/auth/totp/confirm", { body: { code } }));
+      } catch (e) {
+        // An expired setup: put the start button back so they can begin again.
+        if (e instanceof ApiFailure && e.code === "totp_not_started") setTotp(null);
+        throw e;
+      }
       setTotp(null);
       setTotpOn(true);
       onChanged();

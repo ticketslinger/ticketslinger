@@ -24,7 +24,7 @@ func TestTOTPEnrollThenLoginNeedsCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, _ := totp.GenerateCode(secret, time.Now())
-	if err := s.ConfirmTOTP(ctx, u.ID, code); err != nil {
+	if err := s.ConfirmTOTP(ctx, u.ID, false, code); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", "", "", ""); !errors.Is(err, auth.ErrTOTPRequired) {
@@ -43,7 +43,7 @@ func TestTOTPCodeCannotBeReused(t *testing.T) {
 	_, u, _ := s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", "")
 	secret, _, _ := s.StartTOTP(ctx, u.ID, false, "a long passphrase")
 	c1, _ := totp.GenerateCode(secret, time.Now())
-	_ = s.ConfirmTOTP(ctx, u.ID, c1)
+	_ = s.ConfirmTOTP(ctx, u.ID, false, c1)
 	c2, _ := totp.GenerateCode(secret, time.Now().Add(30*time.Second))
 	if _, _, err := s.Login(ctx, "a@example.com", "a long passphrase", c2, "", ""); err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func enrolled(t *testing.T) (*auth.Service, auth.User, string) {
 	_, u, _ := s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", "")
 	secret, _, _ := s.StartTOTP(ctx, u.ID, false, "a long passphrase")
 	c, _ := totp.GenerateCode(secret, time.Now())
-	if err := s.ConfirmTOTP(ctx, u.ID, c); err != nil {
+	if err := s.ConfirmTOTP(ctx, u.ID, false, c); err != nil {
 		t.Fatal(err)
 	}
 	return s, u, secret
@@ -107,11 +107,11 @@ func TestTOTPConfirmRejectsWrongCode(t *testing.T) {
 	s, _ := newSvc(t)
 	ctx := context.Background()
 	_, u, _ := s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", "")
-	if err := s.ConfirmTOTP(ctx, u.ID, "123456"); !errors.Is(err, auth.ErrTOTPNotStarted) {
+	if err := s.ConfirmTOTP(ctx, u.ID, false, "123456"); !errors.Is(err, auth.ErrTOTPNotStarted) {
 		t.Fatalf("before start: got %v, want ErrTOTPNotStarted", err)
 	}
 	_, _, _ = s.StartTOTP(ctx, u.ID, false, "a long passphrase")
-	if err := s.ConfirmTOTP(ctx, u.ID, "000000"); !errors.Is(err, auth.ErrBadCode) {
+	if err := s.ConfirmTOTP(ctx, u.ID, false, "000000"); !errors.Is(err, auth.ErrBadCode) {
 		t.Fatalf("got %v, want ErrBadCode", err)
 	}
 }
@@ -167,7 +167,7 @@ func TestTOTPSecretBoundToUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, _ := totp.GenerateCode(secret, time.Now())
-	if err := s.ConfirmTOTP(ctx, b.ID, code); err == nil || errors.Is(err, auth.ErrBadCode) {
+	if err := s.ConfirmTOTP(ctx, b.ID, false, code); err == nil || errors.Is(err, auth.ErrBadCode) {
 		t.Fatalf("copied secret opened for another user: %v", err)
 	}
 }

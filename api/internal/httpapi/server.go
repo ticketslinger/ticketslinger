@@ -299,7 +299,7 @@ func (s *server) BeginPasskeyRegistration(ctx context.Context, req BeginPasskeyR
 }
 
 func (s *server) FinishPasskeyRegistration(ctx context.Context, req FinishPasskeyRegistrationRequestObject) (FinishPasskeyRegistrationResponseObject, error) {
-	u, _, ok := userFrom(ctx)
+	u, sess, ok := userFrom(ctx)
 	if !ok {
 		return nil, unauthorized()
 	}
@@ -311,7 +311,7 @@ func (s *server) FinishPasskeyRegistration(ctx context.Context, req FinishPasske
 	if req.Params.Name != nil {
 		name = *req.Params.Name
 	}
-	pk, err := s.Auth.FinishPasskeyRegistration(ctx, u.ID, req.ChallengeId, body, name)
+	pk, err := s.Auth.FinishPasskeyRegistration(ctx, u.ID, sess.MFA, req.ChallengeId, body, name)
 	if err != nil {
 		return nil, passkeyError(err, "That password doesn't match.")
 	}
@@ -356,7 +356,7 @@ func totpError(err error) error {
 	case errors.Is(err, auth.ErrPasswordRequired):
 		return &apiError{401, "password_required", "Enter your password to set up an authenticator app."}
 	case errors.Is(err, auth.ErrTOTPNotStarted):
-		return &apiError{400, "totp_not_started", "Start setting up your authenticator app first."}
+		return &apiError{400, "totp_not_started", "That setup has expired or wasn't started. Set up your authenticator app again."}
 	case errors.Is(err, auth.ErrBadCredentials):
 		return &apiError{401, "bad_credentials", "That password doesn't match."}
 	case errors.Is(err, auth.ErrLocked):
@@ -386,11 +386,11 @@ func (s *server) StartTotp(ctx context.Context, req StartTotpRequestObject) (Sta
 }
 
 func (s *server) ConfirmTotp(ctx context.Context, req ConfirmTotpRequestObject) (ConfirmTotpResponseObject, error) {
-	u, _, ok := userFrom(ctx)
+	u, sess, ok := userFrom(ctx)
 	if !ok {
 		return nil, unauthorized()
 	}
-	if err := s.Auth.ConfirmTOTP(ctx, u.ID, req.Body.Code); err != nil {
+	if err := s.Auth.ConfirmTOTP(ctx, u.ID, sess.MFA, req.Body.Code); err != nil {
 		return nil, totpError(err)
 	}
 	return ConfirmTotp204Response{}, nil

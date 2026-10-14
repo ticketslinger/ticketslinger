@@ -50,7 +50,7 @@ paths:
   /auth/totp:
     post:
       operationId: startTotp
-      description: Starts setting up an authenticator app. Unless this session passed a second factor, send the current password. Once the account has a passkey, only a session that passed one may start (403 mfa_required).
+      description: Starts setting up an authenticator app. Unless this session passed a second factor, send the current password. Once the account has a passkey or an authenticator app, only a session that passed one may start (403 mfa_required). The setup expires if not confirmed within 10 minutes.
       requestBody: { required: false, content: { application/json: { schema: { type: object, properties: { password: { type: string } } } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TotpSetup" } } } }
@@ -59,10 +59,12 @@ paths:
   /auth/totp/confirm:
     post:
       operationId: confirmTotp
+      description: Switches the authenticator app on. Refused (403 mfa_required) if the account gained a passkey since setup started and this session hasn't passed it; a setup older than 10 minutes is 400 totp_not_started.
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [code], properties: { code: { type: string, pattern: "^[0-9]{6}$" } } } } } }
       responses:
         "204": { description: Enabled }
         "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /auth/passkeys/register:
     post:
       operationId: beginPasskeyRegistration
@@ -84,6 +86,7 @@ paths:
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Passkey" } } } }
         "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
   /auth/passkeys/login:
     post:
