@@ -296,11 +296,8 @@ func UpdatePromo(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 		slices.Equal(p.AppliesTo, before.AppliesTo) && slices.Equal(p.Unlocks, before.Unlocks) {
 		return before, nil
 	}
-	if p.Kind != before.Kind || p.Value != before.Value {
-		field := "value"
-		if p.Kind != before.Kind {
-			field = "kind"
-		}
+	// What the code takes off, and from which tickets, is fixed once used.
+	if field := promoTermsChange(p, before); field != "" {
 		if err := promoUsed(ctx, tx, id, field); err != nil {
 			return PromoCode{}, err
 		}
@@ -316,6 +313,22 @@ func UpdatePromo(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor
 		return PromoCode{}, err
 	}
 	return p, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "promo_code.updated", EntityType: "promo_code", EntityID: id, Before: before, After: p})
+}
+
+// promoTermsChange names the first changed field a buyer's discount depends
+// on, "" when none did.
+func promoTermsChange(p, before PromoCode) string {
+	switch {
+	case p.Kind != before.Kind:
+		return "kind"
+	case p.Value != before.Value:
+		return "value"
+	case p.AppliesToAll != before.AppliesToAll:
+		return "applies_to_all"
+	case !slices.Equal(p.AppliesTo, before.AppliesTo):
+		return "applies_to"
+	}
+	return ""
 }
 
 // promoUsed refuses changing what a code takes off, or deleting it, once an

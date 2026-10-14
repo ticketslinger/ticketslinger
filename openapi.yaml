@@ -439,7 +439,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
     patch:
       operationId: updatePromoCode
-      description: "Owners and admins, or a write API key. Send only what changes. Changing kind needs value too (422 value_required_with_kind). applies_to and unlocks replace the whole set when sent. null clears max_uses, valid_from or valid_until; leaving one out keeps it. used_count can't be set. Once an order has used the code, or an open checkout is using it, kind and value can't change (409 has_sales)."
+      description: "Owners and admins, or a write API key. Send only what changes. Changing kind needs value too (422 value_required_with_kind). applies_to and unlocks replace the whole set when sent. null clears max_uses, valid_from or valid_until; leaving one out keeps it. used_count can't be set. Once an order has used the code, or an open checkout is using it, kind, value, applies_to_all and applies_to can't change (409 has_sales; field names the first one)."
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }

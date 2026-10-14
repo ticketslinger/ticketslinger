@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/oapi-codegen/nullable"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
@@ -176,6 +178,26 @@ func TestHiddenTicketsNeedAnUnlockingCode(t *testing.T) {
 	if _, err := s.CreateCheckout(ctx, in); invalidCode(err) != "unknown_ticket_type" {
 		t.Fatalf("hidden with a code that doesn't unlock it: %v, want unknown_ticket_type", err)
 	}
+	// Sold out lists what this buyer may see: VIP only with the code that unlocks it.
+	if _, err := s.CreateCheckout(ctx, buy(sales.Item{TicketTypeID: f.general, Quantity: 5})); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.CreateCheckout(ctx, buy(sales.Item{TicketTypeID: f.general, Quantity: 6}))
+	if r := remaining(err); r == nil || r[f.general] != 5 || len(r) != 1 {
+		t.Fatalf("sold out without a code: %v %v, want only General (5 left)", err, r)
+	}
+	unlocked := buy(sales.Item{TicketTypeID: vip, Quantity: 1}, sales.Item{TicketTypeID: f.general, Quantity: 5})
+	unlocked.PromoCode = "BACKSTAGE"
+	_, err = s.CreateCheckout(ctx, unlocked)
+	if r := remaining(err); r == nil || r[f.general] != 5 || r[vip] != 5 || len(r) != 2 {
+		t.Fatalf("sold out with the unlocking code: %v %v, want General and VIP (5 left each)", err, r)
+	}
+	// An access code for VIP does nothing for a General-only cart.
+	generalOnly := buy(sales.Item{TicketTypeID: f.general, Quantity: 1})
+	generalOnly.PromoCode = "BACKSTAGE"
+	if _, err := s.CreateCheckout(ctx, generalOnly); invalidCode(err) != "promo_not_applicable" {
+		t.Fatalf("access code on a cart it unlocks nothing in: %v, want promo_not_applicable", err)
+	}
 	in.PromoCode = "backstage"
 	c, err := s.CreateCheckout(ctx, in)
 	if err != nil {
@@ -204,6 +226,19 @@ func TestPromoCodeRules(t *testing.T) {
 	}
 	if c.PromoCode != "SPRING" || c.Quote.DiscountCents != 500 {
 		t.Fatalf("SPRING on VIP only: %q discount %d, want 500 (10%% of VIP)", c.PromoCode, c.Quote.DiscountCents)
+	}
+	// SPRING takes nothing off General: refused, and no use is spent.
+	generalOnly := buy(sales.Item{TicketTypeID: f.general, Quantity: 1})
+	generalOnly.PromoCode = "SPRING"
+	_, err = s.CreateCheckout(ctx, generalOnly)
+	var inv catalogue.ErrInvalid
+	if !errors.As(err, &inv) || inv.Code != "promo_not_applicable" || inv.Field != "promo_code" {
+		t.Fatalf("SPRING on General only: %v, want promo_not_applicable on promo_code", err)
+	}
+	var carts int
+	f.must(t, f.owner.QueryRow(ctx, `select count(*) from checkouts where promo_code_id = $1`, spring).Scan(&carts))
+	if carts != 1 {
+		t.Fatalf("%d checkouts use SPRING, want 1", carts)
 	}
 
 	for _, window := range []string{
@@ -244,7 +279,7 @@ func TestWhenTicketsAreOnSale(t *testing.T) {
 		{"draft", `update events set status = 'draft' where id = $1`, `update events set status = 'live' where id = $1`, "not found"},
 		{"ended", `update events set starts_at = now() - interval '2 days', ends_at = now() - interval '1 hour' where id = $1`,
 			`update events set starts_at = now() + interval '6 days', ends_at = now() + interval '7 days' where id = $1`, "event_over"},
-		{"not yet", `update ticket_types set sales_start = now() + interval '1 day' where event_id = $1`,
+		{"not yet", `update ticket_types set sales_start = '2030-10-14 23:00:00+00' where event_id = $1`,
 			`update ticket_types set sales_start = null where event_id = $1`, "sales_not_open"},
 		{"closed", `update ticket_types set sales_end = now() - interval '1 hour' where event_id = $1`,
 			`update ticket_types set sales_end = null where event_id = $1`, "sales_closed"},
@@ -258,6 +293,10 @@ func TestWhenTicketsAreOnSale(t *testing.T) {
 		}
 		if got != c.code {
 			t.Errorf("%s: %v, want %s", c.name, err, c.code)
+		}
+		var inv catalogue.ErrInvalid
+		if c.name == "not yet" && (!errors.As(err, &inv) || inv.Message != "General goes on sale on Oct 14, 2030, 7:00 PM.") {
+			t.Errorf("not yet: message %q, want the start in New York time", inv.Message)
 		}
 		f.exec(t, c.undo, f.event)
 	}
@@ -304,6 +343,11 @@ func TestQuantityRules(t *testing.T) {
 	if _, err := s.CreateCheckout(ctx, buy(g(10), v(90))); err != nil {
 		t.Fatalf("100 across types: %v", err)
 	}
+	f.exec(t, `update ticket_types set min_per_order = 4, max_per_order = 4 where id = $1`, vip)
+	_, err = s.CreateCheckout(ctx, buy(v(3)))
+	if !errors.As(err, &inv) || inv.Code != "quantity_out_of_range" || inv.Message != "You need exactly 4 VIP tickets in one order." {
+		t.Errorf("min = max: %v %q", err, inv.Message)
+	}
 }
 
 func TestCheckoutStaysInsideItsOrganizer(t *testing.T) {
@@ -345,95 +389,201 @@ func TestCheckoutStaysInsideItsOrganizer(t *testing.T) {
 
 // A quota linked to General while a checkout waits on General's quotas is
 // counted: the checkout notices the set changed and starts over, rather than
-// selling past the new quota.
+// selling past the new quota or refusing a sale it has room for.
 func TestQuotaAddedWhileWaitingIsCounted(t *testing.T) {
-	s := newService(t)
-	f := seed(t, s.Pool, seedOpts{quota: 100, price: 2500})
-	ctx := context.Background()
-	added, release := make(chan struct{}), make(chan struct{})
-	edit := make(chan error, 1)
-	go func() {
-		edit <- db.WithOrganizer(ctx, s.Pool, f.user, f.org, func(tx pgx.Tx, _ string) error {
-			if _, err := catalogue.CreateQuota(ctx, tx, f.org, f.event, audit.Actor{User: f.user},
-				catalogue.QuotaInput{Name: "Balcony", Size: 1, TicketTypeIDs: []uuid.UUID{f.general}}); err != nil {
-				return err
+	for _, size := range []int{1, 5} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			s := newService(t)
+			f := seed(t, s.Pool, seedOpts{quota: 100, price: 2500})
+			ctx := context.Background()
+			var balcony catalogue.Quota
+			added, release := make(chan struct{}), make(chan struct{})
+			edit := make(chan error, 1)
+			go func() {
+				edit <- db.WithOrganizer(ctx, s.Pool, f.user, f.org, func(tx pgx.Tx, _ string) (err error) {
+					if balcony, err = catalogue.CreateQuota(ctx, tx, f.org, f.event, audit.Actor{User: f.user},
+						catalogue.QuotaInput{Name: "Balcony", Size: size, TicketTypeIDs: []uuid.UUID{f.general}}); err != nil {
+						return err
+					}
+					close(added)
+					<-release
+					return nil
+				})
+			}()
+			select {
+			case <-added:
+			case err := <-edit:
+				t.Fatalf("create quota: %v", err)
 			}
-			close(added)
-			<-release
-			return nil
+			sale := make(chan error, 1)
+			go func() {
+				_, err := s.CreateCheckout(ctx, buy(sales.Item{TicketTypeID: f.general, Quantity: 2}))
+				sale <- err
+			}()
+			waitForLockWaiters(t, f.owner, 1)
+			close(release)
+			if err := <-edit; err != nil {
+				t.Fatalf("create quota: %v", err)
+			}
+			err := <-sale
+			if size == 1 {
+				if remaining(err)[f.general] != 1 {
+					t.Fatalf("2 General with a new quota of 1: %v, want sold out with 1 left", err)
+				}
+				return
+			}
+			var used int
+			f.must(t, f.owner.QueryRow(ctx, `select quota_used($1, null)`, balcony.ID).Scan(&used))
+			if err != nil || used != 2 {
+				t.Fatalf("2 General with a new quota of 5: %v, Balcony uses %d; want a checkout and 2", err, used)
+			}
 		})
-	}()
-	select {
-	case <-added:
-	case err := <-edit:
-		t.Fatalf("create quota: %v", err)
-	}
-	sale := make(chan error, 1)
-	go func() {
-		_, err := s.CreateCheckout(ctx, buy(sales.Item{TicketTypeID: f.general, Quantity: 2}))
-		sale <- err
-	}()
-	waitForLockWaiters(t, f.owner, 1)
-	close(release)
-	if err := <-edit; err != nil {
-		t.Fatalf("create quota: %v", err)
-	}
-	if err := <-sale; remaining(err)[f.general] != 1 {
-		t.Fatalf("2 General with a new quota of 1: %v, want sold out with 1 left", err)
 	}
 }
 
-// Every catalogue write that takes quota locks, racing a checkout that holds
-// the quotas and is about to insert its cart (foreign keys take FOR KEY SHARE
-// on the event the edit holds). Neither side deadlocks: the cart goes in and
-// the edit sees it.
+// When the clock is read: after the locks, per statement. A checkout that
+// waited on a quota past the end of sales is refused, and one that got in
+// holds for 15 minutes from when it got the locks, not from when it began.
+func TestClockIsReadAfterTheLocks(t *testing.T) {
+	s := newService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	park := func(wait time.Duration, during func()) (sales.Checkout, time.Time, error) {
+		gate, err := f.owner.Begin(ctx)
+		f.must(t, err)
+		defer func() { _ = gate.Rollback(ctx) }()
+		_, err = gate.Exec(ctx, `select 1 from quotas where id = $1 for update`, f.hall)
+		f.must(t, err)
+		type result struct {
+			c   sales.Checkout
+			err error
+		}
+		done := make(chan result, 1)
+		go func() {
+			c, err := s.CreateCheckout(ctx, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
+			done <- result{c, err}
+		}()
+		waitForLockWaiters(t, f.owner, 1)
+		during()
+		time.Sleep(wait)
+		released := time.Now()
+		f.must(t, gate.Commit(ctx))
+		r := <-done
+		return r.c, released, r.err
+	}
+	_, _, err := park(400*time.Millisecond, func() {
+		f.exec(t, `update ticket_types set sales_end = clock_timestamp() + interval '200 milliseconds' where id = $1`, f.general)
+	})
+	if invalidCode(err) != "sales_closed" {
+		t.Fatalf("sales ended while waiting: %v, want sales_closed", err)
+	}
+	f.exec(t, `update ticket_types set sales_end = null where id = $1`, f.general)
+	c, released, err := park(2*time.Second, func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if early := released.Add(15 * time.Minute).Sub(c.ExpiresAt); early > 500*time.Millisecond {
+		t.Fatalf("hold expires %v before 15 minutes from getting the locks", early)
+	}
+}
+
+// One cart across a shared quota counts every type in it.
+func TestOneCartAcrossASharedQuota(t *testing.T) {
+	s := newService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	vip := f.ticketType(t, f.org, f.event, "VIP", 9000, false)
+	f.exec(t, `insert into quota_ticket_types(organizer_id, event_id, quota_id, ticket_type_id) values ($1, $2, $3, $4)`, f.org, f.event, f.hall, vip)
+	_, err := s.CreateCheckout(ctx, buy(sales.Item{TicketTypeID: f.general, Quantity: 6}, sales.Item{TicketTypeID: vip, Quantity: 5}))
+	if r := remaining(err); r == nil || r[f.general] != 10 || r[vip] != 10 {
+		t.Fatalf("6 General + 5 VIP in Hall 10: %v %v, want sold out with 10 left of each", err, r)
+	}
+	if _, err := s.CreateCheckout(ctx, buy(sales.Item{TicketTypeID: f.general, Quantity: 5}, sales.Item{TicketTypeID: vip, Quantity: 5})); err != nil {
+		t.Fatalf("5 + 5 in Hall 10: %v", err)
+	}
+}
+
+// Every catalogue write that takes quota or promo locks, racing a checkout
+// parked while it holds them (foreign keys take FOR KEY SHARE on the event
+// the edit holds). Neither side deadlocks: the cart goes in and the edit
+// sees it, or the edit never needed what the cart holds.
 func TestCatalogueEditsAndAHoldDontDeadlock(t *testing.T) {
 	type edit func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error
-	cases := map[string]edit{
-		"ticket type price": func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
-			_, err := catalogue.UpdateTicketType(ctx, tx, f.org, f.event, f.general, a, catalogue.TicketTypePatch{PriceCents: ptr(int64(3000))})
+	type tc struct {
+		run edit
+		// gate is the row the checkout is parked on: "promo" parks it after
+		// its quota locks, "ticket type" after its promo lock too.
+		gate string
+		want string // the edit's 409 code; "" when it succeeds
+	}
+	ttPatch := func(p catalogue.TicketTypePatch) edit {
+		return func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
+			_, err := catalogue.UpdateTicketType(ctx, tx, f.org, f.event, f.general, a, p)
 			return err
-		},
-		"delete ticket type": func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
+		}
+	}
+	cases := map[string]tc{
+		"ticket type price": {ttPatch(catalogue.TicketTypePatch{PriceCents: ptr(int64(3000))}), "promo", "has_sales"},
+		"ticket type min":   {ttPatch(catalogue.TicketTypePatch{MinPerOrder: ptr(2)}), "promo", "has_sales"},
+		"ticket type max":   {ttPatch(catalogue.TicketTypePatch{MaxPerOrder: ptr(5)}), "promo", "has_sales"},
+		"sales window": {ttPatch(catalogue.TicketTypePatch{SalesEnd: nullable.NewNullableWithValue(time.Now().Add(24 * time.Hour))}),
+			"promo", ""},
+		"delete ticket type": {func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
 			return catalogue.DeleteTicketType(ctx, tx, f.org, f.event, f.general, a)
-		},
-		"create quota": func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
+		}, "promo", "has_sales"},
+		"create quota": {func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
 			_, err := catalogue.CreateQuota(ctx, tx, f.org, f.event, a, catalogue.QuotaInput{Name: "Tiny", Size: 0, TicketTypeIDs: []uuid.UUID{f.general}})
 			return err
-		},
-		"shrink quota": func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
+		}, "promo", "quota_below_sales"},
+		"shrink quota": {func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
 			_, err := catalogue.UpdateQuota(ctx, tx, f.org, f.event, f.hall, a, catalogue.QuotaPatch{Size: ptr(0)})
 			return err
-		},
-		"delete quota": func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
+		}, "promo", "quota_below_sales"},
+		"relink quota": {func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
+			_, err := catalogue.UpdateQuota(ctx, tx, f.org, f.event, f.hall, a, catalogue.QuotaPatch{TicketTypeIDs: &[]uuid.UUID{f.vip}})
+			return err
+		}, "promo", "has_sales"},
+		"delete quota": {func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
 			return catalogue.DeleteQuota(ctx, tx, f.org, f.event, f.hall, a)
-		},
-		"event tax": func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
+		}, "promo", "has_sales"},
+		"event tax": {func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
 			_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, a, catalogue.EventPatch{TaxRateBP: ptr(500)})
 			return err
-		},
-		"event to draft": func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
+		}, "promo", "has_sales"},
+		"event to draft": {func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
 			_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, a, catalogue.EventPatch{Status: ptr("draft")})
 			return err
-		},
+		}, "promo", "has_sales"},
+		"promo value": {func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
+			_, err := catalogue.UpdatePromo(ctx, tx, f.org, f.event, f.gate, a, catalogue.PromoPatch{Value: ptr(int64(2000))})
+			return err
+		}, "ticket type", "has_sales"},
+		"delete promo": {func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
+			return catalogue.DeletePromo(ctx, tx, f.org, f.event, f.gate, a)
+		}, "ticket type", "has_sales"},
 	}
-	for name, run := range cases {
+	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			s := newService(t)
 			f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
 			ctx := context.Background()
 			// VIP and a second quota, so deletes aren't refused for leaving
 			// the event without tickets or capacity.
-			vip := f.ticketType(t, f.org, f.event, "VIP", 9000, false)
-			f.exec(t, `insert into quota_ticket_types(organizer_id, event_id, quota_id, ticket_type_id) values ($1, $2, $3, $4)`, f.org, f.event, f.hall, vip)
-			f.quota(t, f.org, f.event, "Venue", 100, f.general, vip)
-			promo := f.promo(t, "GATE", "percent", 0)
+			f.vip = f.ticketType(t, f.org, f.event, "VIP", 9000, false)
+			f.exec(t, `insert into quota_ticket_types(organizer_id, event_id, quota_id, ticket_type_id) values ($1, $2, $3, $4)`, f.org, f.event, f.hall, f.vip)
+			f.quota(t, f.org, f.event, "Venue", 100, f.general, f.vip)
+			f.gate = f.promo(t, "GATE", "percent", 1000)
 
-			// Park the checkout after its quota locks: it waits on the promo row.
 			gate, err := f.owner.Begin(ctx)
 			f.must(t, err)
 			defer func() { _ = gate.Rollback(ctx) }()
-			_, err = gate.Exec(ctx, `select 1 from promo_codes where id = $1 for update`, promo)
+			if c.gate == "promo" {
+				_, err = gate.Exec(ctx, `select 1 from promo_codes where id = $1 for update`, f.gate)
+			} else {
+				// Blocks the holds insert's key share on General, after the
+				// checkout has locked the code and inserted its cart.
+				_, err = gate.Exec(ctx, `select 1 from ticket_types where id = $1 for update`, f.general)
+			}
 			f.must(t, err)
 			sale := make(chan error, 1)
 			go func() {
@@ -443,27 +593,30 @@ func TestCatalogueEditsAndAHoldDontDeadlock(t *testing.T) {
 				sale <- err
 			}()
 			waitForLockWaiters(t, f.owner, 1)
-			// The edit takes the event row, then waits on the checkout's quotas.
 			edited := make(chan error, 1)
 			go func() {
 				edited <- db.WithOrganizer(ctx, s.Pool, f.user, f.org, func(tx pgx.Tx, _ string) error {
-					return run(ctx, tx, f, audit.Actor{User: f.user})
+					return c.run(ctx, tx, f, audit.Actor{User: f.user})
 				})
 			}()
-			waitForLockWaiters(t, f.owner, 2)
+			if c.want != "" {
+				waitForLockWaiters(t, f.owner, 2) // the edit waits on what the checkout holds
+			} else if err := <-edited; err != nil {
+				t.Fatalf("edit that needs nothing the checkout holds: %v", err)
+			}
 			f.must(t, gate.Commit(ctx))
 
-			saleErr, editErr := <-sale, <-edited
+			saleErr := <-sale
+			var editErr error
+			if c.want != "" {
+				editErr = <-edited
+			}
 			var pg *pgconn.PgError
-			if errors.As(saleErr, &pg) || errors.As(editErr, &pg) {
+			if errors.As(saleErr, &pg) || errors.As(editErr, &pg) || saleErr != nil {
 				t.Fatalf("checkout: %v, edit: %v", saleErr, editErr)
 			}
-			if saleErr != nil {
-				t.Fatalf("checkout: %v (edit: %v)", saleErr, editErr)
-			}
-			var conflict catalogue.ErrConflict
-			if !errors.As(editErr, &conflict) {
-				t.Fatalf("edit: %v, want a 409 once the cart is in", editErr)
+			if code := conflictCode(editErr); code != c.want {
+				t.Fatalf("edit: %v, want %q", editErr, c.want)
 			}
 		})
 	}

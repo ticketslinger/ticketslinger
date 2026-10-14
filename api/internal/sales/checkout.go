@@ -104,7 +104,7 @@ func (s *Service) CreateCheckout(ctx context.Context, in CheckoutInput) (Checkou
 		out.Token = token
 		return out, nil
 	}
-	return Checkout{}, errTryAgain
+	return Checkout{}, ErrBusy
 }
 
 func checkItems(items []Item) error {
@@ -168,8 +168,11 @@ func (s *Service) hold(ctx context.Context, org, event uuid.UUID, hash []byte, i
 		if err := sellable(in.Items, tts, links, ev.timezone); err != nil {
 			return err
 		}
+		if !applies(p, in.Items, tts) {
+			return errPromoNotHere
+		}
 		// 3. Fit: every quota a requested type belongs to has room.
-		if err := fits(ctx, tx, event, sizes, need(in.Items, links), uuid.Nil); err != nil {
+		if err := fits(ctx, tx, event, sizes, need(in.Items, links), uuid.Nil, p); err != nil {
 			return err
 		}
 		// 4. Write.
@@ -179,7 +182,7 @@ func (s *Service) hold(ctx context.Context, org, event uuid.UUID, hash []byte, i
 			out.PromoCode = p.code
 		}
 		if err := tx.QueryRow(ctx, `insert into checkouts (organizer_id, event_id, token_hash, promo_code_id, expires_at)
-			values ($1, $2, $3, $4, now() + interval '15 minutes') returning id, expires_at`,
+			values ($1, $2, $3, $4, statement_timestamp() + interval '15 minutes') returning id, expires_at`,
 			org, event, hash, promoID).Scan(&out.ID, &out.ExpiresAt); err != nil {
 			return err
 		}
@@ -247,7 +250,7 @@ type eventTerms struct{ feeMode, timezone string }
 func onSaleEvent(ctx context.Context, tx pgx.Tx, event uuid.UUID) (eventTerms, error) {
 	var ev eventTerms
 	var live, running bool
-	err := tx.QueryRow(ctx, `select status = 'live', now() < ends_at, fee_mode, timezone from events where id = $1`, event).
+	err := tx.QueryRow(ctx, `select status = 'live', statement_timestamp() < ends_at, fee_mode, timezone from events where id = $1`, event).
 		Scan(&live, &running, &ev.feeMode, &ev.timezone)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows) || err == nil && !live:
@@ -284,7 +287,7 @@ func lockPromo(ctx context.Context, tx pgx.Tx, event uuid.UUID, code string) (*p
 	var maxUses *int
 	var used int
 	err := tx.QueryRow(ctx, `select id, code, kind, value, max_uses, used_count,
-			(valid_from is null or valid_from <= now()) and (valid_until is null or now() < valid_until)
+			(valid_from is null or valid_from <= statement_timestamp()) and (valid_until is null or statement_timestamp() < valid_until)
 		from promo_codes where event_id = $1 and code = $2 for update`, event, code).
 		Scan(&p.id, &p.code, &p.kind, &p.value, &maxUses, &used, &valid)
 	switch {
@@ -298,7 +301,7 @@ func lockPromo(ctx context.Context, tx pgx.Tx, event uuid.UUID, code string) (*p
 	// A new statement: it sees checkouts committed while we waited for the row.
 	var open int
 	if err := tx.QueryRow(ctx, `select count(*) from checkouts
-		where promo_code_id = $1 and status in ('open', 'paying') and expires_at > now()`, p.id).Scan(&open); err != nil {
+		where promo_code_id = $1 and status in ('open', 'paying') and expires_at > statement_timestamp()`, p.id).Scan(&open); err != nil {
 		return nil, err
 	}
 	if used+open >= *maxUses {
@@ -328,7 +331,7 @@ func ticketTypes(ctx context.Context, tx pgx.Tx, event uuid.UUID, ids []uuid.UUI
 	}
 	rows, _ := tx.Query(ctx, `select t.id, t.name, t.price_cents, coalesce(t.tax_rate_bp, e.tax_rate_bp),
 			coalesce(t.prices_include_tax, e.prices_include_tax), t.sales_start, t.sales_end,
-			coalesce(now() < t.sales_start, false), coalesce(now() >= t.sales_end, false),
+			coalesce(statement_timestamp() < t.sales_start, false), coalesce(statement_timestamp() >= t.sales_end, false),
 			t.min_per_order, t.max_per_order, t.hidden,
 			exists (select 1 from promo_unlocks u where u.promo_code_id = $3 and u.ticket_type_id = t.id),
 			coalesce((select applies_to_all from promo_codes where id = $3), false)
@@ -366,6 +369,20 @@ func sellable(items []Item, tts map[uuid.UUID]ticketType, links map[uuid.UUID][]
 	return nil
 }
 
+// applies: a code must take something off, or unlock, at least one item.
+// A code that does neither is refused before it uses up anything.
+func applies(p *promo, items []Item, tts map[uuid.UUID]ticketType) bool {
+	if p == nil {
+		return true
+	}
+	for _, it := range items {
+		if t := tts[it.TicketTypeID]; t.unlocked || t.discounted && p.value > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // need is how many seats the items take from each quota.
 func need(items []Item, links map[uuid.UUID][]uuid.UUID) map[uuid.UUID]int {
 	n := map[uuid.UUID]int{}
@@ -389,8 +406,12 @@ func lines(tts map[uuid.UUID]ticketType, items []Item, p *promo) []pricing.Line 
 
 // fits returns SoldOut unless every quota has room for need on top of what
 // is sold and held (leaving out the checkout named by except). The caller
-// holds the quota locks.
-func fits(ctx context.Context, tx pgx.Tx, event uuid.UUID, sizes, need map[uuid.UUID]int, except uuid.UUID) error {
+// holds the quota locks. quota_used reads expiry against the transaction's
+// start, which is never later than the statement clock: a hold that ran out
+// while we waited for the locks still counts, so the error is towards
+// refusing a seat, never towards overselling one. p is the buyer's code, which decides which hidden
+// types SoldOut may mention.
+func fits(ctx context.Context, tx pgx.Tx, event uuid.UUID, sizes, need map[uuid.UUID]int, except uuid.UUID, p *promo) error {
 	var ex *uuid.UUID
 	if except != uuid.Nil {
 		ex = &except
@@ -401,14 +422,23 @@ func fits(ctx context.Context, tx pgx.Tx, event uuid.UUID, sizes, need map[uuid.
 			return err
 		}
 		if used+n > sizes[q] {
-			return soldOut(ctx, tx, event)
+			return soldOut(ctx, tx, event, p)
 		}
 	}
 	return nil
 }
 
-func soldOut(ctx context.Context, tx pgx.Tx, event uuid.UUID) error {
-	rows, _ := tx.Query(ctx, `select ticket_type_id, remaining from event_availability($1) order by ticket_type_id`, event)
+// soldOut lists what's left of the types this buyer can see: every visible
+// type, and hidden ones only when their code unlocks them.
+func soldOut(ctx context.Context, tx pgx.Tx, event uuid.UUID, p *promo) error {
+	var promoID *uuid.UUID
+	if p != nil {
+		promoID = &p.id
+	}
+	rows, _ := tx.Query(ctx, `select a.ticket_type_id, a.remaining from event_availability($1) a
+		join ticket_types t on t.id = a.ticket_type_id
+		where not t.hidden or exists (select 1 from promo_unlocks u where u.promo_code_id = $2 and u.ticket_type_id = t.id)
+		order by a.ticket_type_id`, event, promoID)
 	avail, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Availability])
 	if err != nil {
 		return err
@@ -432,7 +462,7 @@ func (s *Service) GetCheckout(ctx context.Context, token string) (Checkout, erro
 		var promoID *uuid.UUID
 		var feeMode string
 		if err := tx.QueryRow(ctx, `select c.id, c.organizer_id, c.event_id,
-				case when c.status <> 'completed' and c.expires_at <= now() then 'expired' else c.status end,
+				case when c.status <> 'completed' and c.expires_at <= statement_timestamp() then 'expired' else c.status end,
 				c.expires_at, c.promo_code_id, coalesce(p.code, ''), coalesce(p.kind, ''), coalesce(p.value, 0), e.fee_mode,
 				coalesce((select code from orders o where o.checkout_id = c.id), '')
 			from checkouts c join events e on e.id = c.event_id left join promo_codes p on p.id = c.promo_code_id

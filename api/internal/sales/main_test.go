@@ -32,6 +32,7 @@ type fixture struct {
 	owner            *pgxpool.Pool
 	user, org, event uuid.UUID
 	general, hall    uuid.UUID
+	vip, gate        uuid.UUID // set by tests that add them
 }
 
 func seed(t *testing.T, pool *pgxpool.Pool, o seedOpts) fixture {
@@ -100,6 +101,14 @@ func invalidCode(err error) string {
 	var i catalogue.ErrInvalid
 	if errors.As(err, &i) {
 		return i.Code
+	}
+	return ""
+}
+
+func conflictCode(err error) string {
+	var c catalogue.ErrConflict
+	if errors.As(err, &c) {
+		return c.Code
 	}
 	return ""
 }
