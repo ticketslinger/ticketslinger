@@ -29,8 +29,7 @@ func newAuthServerPool(t *testing.T) (*httptest.Server, *mailer.Memory, *pgxpool
 	pool := testdb.New(t)
 	m := &mailer.Memory{}
 	svc := auth.NewService(pool, m, auth.Options{RPID: "localhost", Origin: "http://localhost:5173", SecretKey: []byte("0123456789abcdef0123456789abcdef")})
-	srv := httptest.NewServer(httpapi.New(httpapi.Deps{Pool: pool, Auth: svc}))
-	t.Cleanup(srv.Close)
+	srv := startServer(t, httpapi.New(httpapi.Deps{Pool: pool, Auth: svc}))
 	return srv, m, pool
 }
 
@@ -50,7 +49,7 @@ func doFrom(t *testing.T, realIP, method, url, token, body string) (int, map[str
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := clientFor(t, url).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,8 +128,7 @@ func TestSignupAndLoginErrors(t *testing.T) {
 }
 
 func TestBadPathParamIs400(t *testing.T) {
-	srv := httptest.NewServer(httpapi.New(httpapi.Deps{}))
-	defer srv.Close()
+	srv := startServer(t, httpapi.New(httpapi.Deps{}))
 	code, body := do(t, "POST", srv.URL+"/v1/auth/passkeys/login/not-a-uuid", "", `{}`)
 	if code != 400 || errCode(body) != "bad_request" || body["error"].(map[string]any)["message"] != "That request couldn't be read." {
 		t.Fatalf("got %d %v", code, body)
@@ -138,8 +136,7 @@ func TestBadPathParamIs400(t *testing.T) {
 }
 
 func TestOversizedBodyIs400(t *testing.T) {
-	srv := httptest.NewServer(httpapi.New(httpapi.Deps{}))
-	defer srv.Close()
+	srv := startServer(t, httpapi.New(httpapi.Deps{}))
 	big := `{"email":"a@example.com","password":"` + strings.Repeat("x", 2<<20) + `","name":"A"}`
 	if code, body := do(t, "POST", srv.URL+"/v1/auth/signup", "", big); code != 400 || errCode(body) != "bad_request" {
 		t.Fatalf("got %d %v", code, body)
@@ -150,7 +147,7 @@ func TestRateLimitAndSessionIPUseRealClientIP(t *testing.T) {
 	pool := testdb.New(t)
 	svc := auth.NewService(pool, &mailer.Memory{}, auth.Options{Origin: "http://localhost:5173", SecretKey: []byte("0123456789abcdef0123456789abcdef")})
 	cfg := config.Config{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.MustParsePrefix("::1/128")}}
-	srv := httptest.NewServer(httpapi.New(httpapi.Deps{Pool: pool, Auth: svc, Config: cfg}))
+	srv := startServer(t, httpapi.New(httpapi.Deps{Pool: pool, Auth: svc, Config: cfg}))
 	defer srv.Close()
 
 	// Short passwords are rejected after the rate limit but before any hashing.

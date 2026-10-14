@@ -21,6 +21,7 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SignupRequest" } } } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SessionCreated" } } } }
+        "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
@@ -41,6 +42,8 @@ paths:
       operationId: logout
       responses:
         "204": { description: Signed out }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /auth/verify-email:
     post:
       operationId: verifyEmail
@@ -72,7 +75,7 @@ paths:
       operationId: createRecoveryCodes
       description: Replaces the account's recovery codes with ten new single-use ones and returns them. They are shown this once. Needs a session that passed a second factor (403 mfa_required) and an account that has one (409 no_second_factor).
       responses:
-        "200": { description: The new codes, once, content: { application/json: { schema: { type: object, required: [codes], properties: { codes: { type: array, items: { type: string } } } } } } }
+        "200": { description: "The new codes, once", content: { application/json: { schema: { type: object, required: [codes], properties: { codes: { type: array, items: { type: string } } } } } } }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
@@ -124,11 +127,14 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /organizers:
     get:
       operationId: listOrganizers
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Organizer" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
     post:
       operationId: createOrganizer
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateOrganizer" } } } }
@@ -143,6 +149,7 @@ paths:
       parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Organizer" } } } }
+        "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/audit:
@@ -295,6 +302,7 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TicketType" } } } }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteTicketType
@@ -682,7 +690,7 @@ components:
     PromoCodeFields:
       type: object
       properties:
-        code: { type: string, description: "3 to 32 letters, numbers and hyphens. Stored upper-case; unique within the event." }
+        code: { type: string, minLength: 3, maxLength: 32, description: "3 to 32 letters, numbers and hyphens. Stored upper-case; unique within the event." }
         kind: { type: string, enum: [percent, amount] }
         value: { type: integer, format: int64, minimum: 0, maximum: 10000000, description: "percent: basis points, 0 to 10000 (1000 is 10%). amount: cents, 0 to 10000000 ($100,000). 0 makes an access code: no discount, so unlocks must not be empty (422 bad_discount), on create and on any patch that sends value or unlocks." }
         max_uses: { type: [integer, "null"], minimum: 1, description: "null means unlimited." }

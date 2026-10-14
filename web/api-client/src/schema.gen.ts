@@ -963,6 +963,7 @@ export interface operations {
                     "application/json": components["schemas"]["SessionCreated"];
                 };
             };
+            400: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
             429: components["responses"]["Error"];
@@ -1012,6 +1013,8 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     verifyEmail: {
@@ -1102,7 +1105,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The new codes */
+            /** @description The new codes, once */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1253,6 +1256,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     listOrganizers: {
@@ -1273,6 +1277,8 @@ export interface operations {
                     "application/json": components["schemas"]["Organizer"][];
                 };
             };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     createOrganizer: {
@@ -1322,6 +1328,7 @@ export interface operations {
                     "application/json": components["schemas"]["Organizer"];
                 };
             };
+            401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
@@ -1721,6 +1728,7 @@ export interface operations {
             };
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
