@@ -183,6 +183,9 @@ func ListTicketTypes(ctx context.Context, tx pgx.Tx, event uuid.UUID) ([]TicketT
 // result and records ticket_type.updated. A patch that changes nothing writes
 // nothing.
 func UpdateTicketType(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, actor audit.Actor, p TicketTypePatch) (TicketType, error) {
+	if _, err := lockEvent(ctx, tx, event); err != nil {
+		return TicketType{}, err
+	}
 	before, err := scanTT(tx.QueryRow(ctx, `select `+ttCols+` from ticket_types where id = $1 and event_id = $2 for update`, id, event))
 	if err != nil {
 		return TicketType{}, err
@@ -215,6 +218,17 @@ func UpdateTicketType(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, 
 	}
 	if sameTT(t, before) {
 		return before, nil
+	}
+	if before.Hidden && !t.Hidden {
+		var code string
+		err := tx.QueryRow(ctx, `select p.code from promo_unlocks u join promo_codes p on p.id = u.promo_code_id
+			where u.ticket_type_id = $1 order by p.code limit 1`, id).Scan(&code)
+		if err == nil {
+			return TicketType{}, ErrConflict{"unlocked_by_promo", "Remove it from promo code " + code + " first, or keep it hidden."}
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return TicketType{}, err
+		}
 	}
 	// ponytail: P3 must guard price and limit edits once tickets are sold.
 	t, err = scanTT(tx.QueryRow(ctx, `update ticket_types set name = $2, description = $3, price_cents = $4, tax_rate_bp = $5, prices_include_tax = $6,

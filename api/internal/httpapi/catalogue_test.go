@@ -264,3 +264,39 @@ func TestQuotaOverHTTP(t *testing.T) {
 	h.must(h.do(owner, "PATCH", "/v1/organizers/acme/events/"+ev, `{"status":"draft"}`), 200)
 	h.must(h.do(owner, "DELETE", base+"/"+id, ""), 204)
 }
+
+func TestPromoCodeOverHTTP(t *testing.T) {
+	h := newHarness(t)
+	owner := h.signupWithMFA("owner@example.com")
+	h.createOrganizer(owner, "acme")
+	base := "/v1/organizers/acme/events/" + h.must(h.do(owner, "POST", "/v1/organizers/acme/events", eventBody), 201)["id"].(string)
+	secret := h.must(h.do(owner, "POST", base+"/ticket-types", `{"name":"Secret","price_cents":0,"hidden":true}`), 201)["id"].(string)
+	visible := h.must(h.do(owner, "POST", base+"/ticket-types", `{"name":"General","price_cents":2500}`), 201)["id"].(string)
+
+	for body, field := range map[string]string{`{"kind":"percent","value":10}`: "code", `{"code":"ABC","value":10}`: "kind", `{"code":"ABC","kind":"percent"}`: "value"} {
+		if res := h.do(owner, "POST", base+"/promo-codes", body); res.StatusCode != 422 || h.errorCode(res) != "missing_field" {
+			t.Errorf("missing %s: %d %q", field, res.StatusCode, h.errorCode(res))
+		}
+	}
+	if res := h.do(owner, "POST", base+"/promo-codes", `{"code":"VIS","kind":"percent","value":1000,"unlocks":["`+visible+`"]}`); res.StatusCode != 422 || h.errorCode(res) != "unlock_not_hidden" {
+		t.Fatalf("visible unlock: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	p := h.must(h.do(owner, "POST", base+"/promo-codes", `{"code":" early ","kind":"percent","value":1000,"max_uses":3,"unlocks":["`+secret+`"],"used_count":9}`), 201)
+	id := p["id"].(string)
+	if p["code"] != "EARLY" || p["used_count"] != float64(0) || p["max_uses"] != float64(3) || p["valid_from"] != nil {
+		t.Fatalf("created: %v", p)
+	}
+	if res := h.do(owner, "POST", base+"/promo-codes", `{"code":"early","kind":"amount","value":500}`); res.StatusCode != 409 || h.errorCode(res) != "code_taken" {
+		t.Fatalf("duplicate: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	up := h.must(h.do(owner, "PATCH", base+"/promo-codes/"+id, `{"max_uses":null,"used_count":5}`), 200)
+	if up["max_uses"] != nil || up["used_count"] != float64(0) || len(up["unlocks"].([]any)) != 1 {
+		t.Fatalf("patched: %v", up)
+	}
+	if res := h.do(owner, "PATCH", base+"/ticket-types/"+secret, `{"hidden":false}`); res.StatusCode != 409 || h.errorCode(res) != "unlocked_by_promo" {
+		t.Fatalf("show unlocked: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	h.must(h.do(owner, "GET", base+"/promo-codes/"+id, ""), 200)
+	h.must(h.do(owner, "DELETE", base+"/promo-codes/"+id, ""), 204)
+	h.must(h.do(owner, "GET", base+"/promo-codes/"+id, ""), 404)
+}

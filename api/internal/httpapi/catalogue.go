@@ -343,3 +343,98 @@ func (s *server) DeleteQuota(ctx context.Context, req DeleteQuotaRequestObject) 
 	}
 	return DeleteQuota204Response{}, nil
 }
+
+func toPromo(p catalogue.PromoCode) PromoCode {
+	return PromoCode{Id: p.ID, EventId: p.EventID, Code: p.Code, Kind: PromoCodeKind(p.Kind), Value: p.Value, MaxUses: nullOf(p.MaxUses),
+		UsedCount: p.UsedCount, ValidFrom: nullOf(p.ValidFrom), ValidUntil: nullOf(p.ValidUntil), AppliesTo: p.AppliesTo, Unlocks: p.Unlocks,
+		CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt}
+}
+
+func (s *server) ListPromoCodes(ctx context.Context, req ListPromoCodesRequestObject) (ListPromoCodesResponseObject, error) {
+	out := ListPromoCodes200JSONResponse{}
+	err := s.inOrganizer(ctx, req.Organizer, catalogueRead, func(_ organizers.Organizer, tx pgx.Tx) error {
+		list, err := catalogue.ListPromos(ctx, tx, req.Event)
+		for _, p := range list {
+			out = append(out, toPromo(p))
+		}
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) CreatePromoCode(ctx context.Context, req CreatePromoCodeRequestObject) (CreatePromoCodeResponseObject, error) {
+	b := req.Body
+	in := catalogue.PromoInput{MaxUses: orNil(b.MaxUses), ValidFrom: orNil(b.ValidFrom), ValidUntil: orNil(b.ValidUntil)}
+	if b.AppliesTo != nil {
+		in.AppliesTo = *b.AppliesTo
+	}
+	if b.Unlocks != nil {
+		in.Unlocks = *b.Unlocks
+	}
+	var out CreatePromoCode201JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		// Checked after membership, so a stranger still gets 404.
+		switch {
+		case b.Code == nil:
+			return missingField("code", "what buyers type in, like EARLYBIRD")
+		case b.Kind == nil:
+			return missingField("kind", "percent or amount")
+		case b.Value == nil:
+			return missingField("value", "basis points for a percent (1000 is 10%), cents for an amount")
+		}
+		in.Code, in.Kind, in.Value = *b.Code, *b.Kind, *b.Value
+		p, err := catalogue.CreatePromo(ctx, tx, org.ID, req.Event, actorFrom(ctx), in)
+		out = CreatePromoCode201JSONResponse(toPromo(p))
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) GetPromoCode(ctx context.Context, req GetPromoCodeRequestObject) (GetPromoCodeResponseObject, error) {
+	var out GetPromoCode200JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, catalogueRead, func(_ organizers.Organizer, tx pgx.Tx) error {
+		p, err := catalogue.GetPromo(ctx, tx, req.Event, req.PromoCode)
+		out = GetPromoCode200JSONResponse(toPromo(p))
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) UpdatePromoCode(ctx context.Context, req UpdatePromoCodeRequestObject) (UpdatePromoCodeResponseObject, error) {
+	b := req.Body
+	p := catalogue.PromoPatch{Code: b.Code, Value: b.Value, MaxUses: b.MaxUses, ValidFrom: b.ValidFrom, ValidUntil: b.ValidUntil,
+		AppliesTo: b.AppliesTo, Unlocks: b.Unlocks}
+	if b.Kind != nil {
+		k := string(*b.Kind)
+		p.Kind = &k
+	}
+	var out UpdatePromoCode200JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		x, err := catalogue.UpdatePromo(ctx, tx, org.ID, req.Event, req.PromoCode, actorFrom(ctx), p)
+		out = UpdatePromoCode200JSONResponse(toPromo(x))
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) DeletePromoCode(ctx context.Context, req DeletePromoCodeRequestObject) (DeletePromoCodeResponseObject, error) {
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		return catalogue.DeletePromo(ctx, tx, org.ID, req.Event, req.PromoCode, actorFrom(ctx))
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return DeletePromoCode204Response{}, nil
+}
