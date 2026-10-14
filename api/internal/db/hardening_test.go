@@ -161,3 +161,17 @@ func TestSaleRolesStayNarrow(t *testing.T) {
 		}
 	}
 }
+
+// The order page goes through order_by_link, which needs the code and the
+// token together. Nothing answers "does this code exist?" on its own.
+func TestNoOrderCodeOracle(t *testing.T) {
+	pool := testdb.New(t)
+	var scope, link *string
+	if err := testdb.Owner(t, pool).QueryRow(context.Background(),
+		`select to_regprocedure('order_scope(text)')::text, to_regprocedure('order_by_link(text, bytea)')::text`).Scan(&scope, &link); err != nil {
+		t.Fatal(err)
+	}
+	if scope != nil || link == nil {
+		t.Fatalf("order_scope exists: %v, order_by_link exists: %v; want only order_by_link", scope != nil, link != nil)
+	}
+}

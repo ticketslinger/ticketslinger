@@ -121,9 +121,14 @@ type unsellable struct {
 // still be sold: the event is live and not over, every ticket type is still
 // there and counted by a quota, the quotas have room (leaving out this
 // order's own checkout), every question answered is still there, and the
-// promo code has a use left. The questions (FOR KEY SHARE: DeleteQuestion
-// locks the event, then the question, never a quota) and the promo row are
-// locked after the quotas, as CreateCheckout locks the promo. nil means it can.
+// promo code has a use left. The promo row is locked after the quotas, as
+// CreateCheckout locks it. nil means it can.
+//
+// The questions aren't locked: a DeleteQuestion racing between this check
+// and the answers' insert makes that insert fail its foreign key (23503).
+// That rolls back the whole event, stripe_events row included, so the
+// webhook answers 5xx, Stripe sends it again, and this check then finds the
+// question gone.
 func stillSellable(ctx context.Context, tx pgx.Tx, event uuid.UUID, promo *uuid.UUID, q pricing.Quote, d Details,
 	links map[uuid.UUID][]uuid.UUID, sizes map[uuid.UUID]int, except uuid.UUID) (*unsellable, error) {
 	var live, running bool
@@ -160,7 +165,7 @@ func stillSellable(ctx context.Context, tx pgx.Tx, event uuid.UUID, promo *uuid.
 	}
 	if len(asked) > 0 {
 		var left int
-		if err := tx.QueryRow(ctx, `select count(*) from (select id from questions where event_id = $1 and id = any($2) for key share) q`,
+		if err := tx.QueryRow(ctx, `select count(*) from questions where event_id = $1 and id = any($2)`,
 			event, asked).Scan(&left); err != nil {
 			return nil, err
 		}

@@ -15,12 +15,9 @@ GRANT INSERT ON audit_log TO ts_system;
 CREATE POLICY audit_system ON audit_log FOR INSERT TO ts_system
   WITH CHECK (organizer_id = (SELECT app_scope()) AND actor_system AND actor_user_id IS NULL AND actor_api_key_id IS NULL);
 
--- A confirmation locks the questions its answers name (FOR KEY SHARE), so
--- none can be deleted between the check and the insert. Locking needs an
--- UPDATE right; WITH CHECK (false) keeps every real write out.
-GRANT UPDATE (position) ON questions TO ts_system;
-CREATE POLICY questions_system_lock ON questions FOR UPDATE TO ts_system
-  USING (organizer_id = (SELECT app_scope())) WITH CHECK (false);
+-- order_by_link replaces it: a code alone no longer tells anyone whether
+-- an order exists.
+DROP FUNCTION order_scope(text);
 
 -- The buyer's order page in one statement: the order, its event and its
 -- tickets, only when the code exists and the link's token hash matches. A
@@ -50,8 +47,11 @@ GRANT EXECUTE ON FUNCTION order_by_link(text, bytea) TO ts_app;
 
 -- +goose Down
 DROP FUNCTION order_by_link(text, bytea);
-DROP POLICY questions_system_lock ON questions;
-REVOKE UPDATE (position) ON questions FROM ts_system;
+CREATE FUNCTION order_scope(p_code text) RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER
+  SET search_path = pg_catalog, public, pg_temp AS
+  $$ SELECT organizer_id FROM public.orders WHERE code = upper(p_code) $$;
+REVOKE ALL ON FUNCTION order_scope(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION order_scope(text) TO ts_app;
 DROP POLICY audit_system ON audit_log;
 REVOKE INSERT ON audit_log FROM ts_system;
 ALTER POLICY audit_insert ON audit_log WITH CHECK (organizer_id = (SELECT app_organizer()));

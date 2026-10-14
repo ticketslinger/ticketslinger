@@ -335,32 +335,43 @@ func systemRun(ctx context.Context, pool *pgxpool.Pool, org uuid.UUID, sql strin
 	})
 }
 
-// A confirmation locks the questions its answers name; ts_system can take
-// that lock but never write a question.
-func TestSystemCanLockButNotEditQuestions(t *testing.T) {
+// The TO PUBLIC *_scope policies match nothing for ts_system only because,
+// inside system.Run, no user is scoped and app_organizer() is NULL.
+func TestSystemRunHasNoMemberScope(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
 	a, _, _ := seedOrganizer(t, pool, "org-a")
-	b, _, _ := seedOrganizer(t, pool, "org-b")
-	err := system.Run(ctx, pool, a, func(tx pgx.Tx) error {
-		var n int
-		err := tx.QueryRow(ctx, `select count(*) from (select id from questions for key share) q`).Scan(&n)
-		if err == nil && n != 2 {
-			t.Errorf("system locked %d questions, want A's 2", n)
-		}
-		return err
-	})
-	if err != nil {
-		t.Fatalf("lock questions: %v", err)
+	owner := testdb.Owner(t, pool)
+	var user uuid.UUID
+	if err := owner.QueryRow(ctx, `insert into users(email, name) values ('m@example.com', 'M') returning id`).Scan(&user); err != nil {
+		t.Fatal(err)
 	}
-	for _, org := range []uuid.UUID{a, b} {
-		err = systemRun(ctx, pool, a, `update questions set position = position + 10 where organizer_id = $1`, org)
-		var pg *pgconn.PgError
-		if org == a && (!errors.As(err, &pg) || pg.Code != "42501") {
-			t.Errorf("system moving its own question: %v, want 42501", err)
-		}
-		if org == b && err != nil {
-			t.Errorf("system touching B's questions: %v, want 0 rows silently", err)
+	if _, err := owner.Exec(ctx, `insert into memberships(organizer_id, user_id, role) values ($1, $2, 'owner')`, a, user); err != nil {
+		t.Fatal(err)
+	}
+	// Even a connection that once had a member scoped gets none.
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `select set_config('app.user_id', $1, false), set_config('app.organizer_id', $2, false)`, user.String(), a.String()); err != nil {
+		t.Fatal(err)
+	}
+	conn.Release()
+	for range 3 { // the pool may hand back that connection
+		err := system.Run(ctx, pool, a, func(tx pgx.Tx) error {
+			var org *uuid.UUID
+			var userID string
+			if err := tx.QueryRow(ctx, `select app_organizer(), current_setting('app.user_id', true)`).Scan(&org, &userID); err != nil {
+				return err
+			}
+			if org != nil || userID != "" {
+				t.Errorf("inside system.Run: app_organizer() = %v, app.user_id = %q; want NULL and empty", org, userID)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 }

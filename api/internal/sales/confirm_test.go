@@ -568,3 +568,47 @@ func (c *statements) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.Tra
 }
 
 func (c *statements) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// A question deleted between stillSellable's check and the answers' insert
+// fails the foreign key. That rolls the whole event back, its stripe_events
+// row too, so the webhook errors and Stripe retries; the retry finds the
+// question gone, then cancels and refunds.
+func TestQuestionDeletedMidConfirmIsRetriedIntoARefund(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	q := f.question(t, "Doomed", "text", "ticket", false, nil)
+	c, pi := paying(t, s, f, fake, sales.Details{Answers: []sales.Answer{{QuestionID: q, TicketIndex: 0, Value: "Vegan"}}},
+		sales.Item{TicketTypeID: f.general, Quantity: 1})
+	// The race, made certain: inserting the tickets (after the check, before
+	// the answers) deletes the question, as a DeleteQuestion committing then would.
+	f.exec(t, `create function delete_doomed() returns trigger language plpgsql security definer
+		set search_path = pg_catalog, public, pg_temp as $$
+		begin delete from public.questions where label = 'Doomed'; return null; end $$`)
+	f.exec(t, `create trigger race before insert on tickets for each statement execute function delete_doomed()`)
+	ev := succeeded(pi.ID, "acct_fake1", c.Quote.TotalCents, 1)
+	err := s.HandleStripeEvent(ctx, ev)
+	if err == nil || !strings.Contains(err.Error(), "23503") {
+		t.Fatalf("first delivery: %v, want the answers' foreign key error", err)
+	}
+	if _, _, status := f.orderOf(t, c.ID); status != "pending" {
+		t.Fatalf("after the failed delivery the order is %s, want pending", status)
+	}
+	if n := f.count(t, `select count(*) from stripe_events`) + f.count(t, `select count(*) from tickets`) + f.count(t, `select count(*) from jobs`); n != 0 {
+		t.Fatalf("%d events, tickets or jobs kept from a rolled-back delivery", n)
+	}
+	// The deletion itself was rolled back too; now it really happens.
+	f.exec(t, `drop trigger race on tickets`)
+	f.exec(t, `delete from questions where id = $1`, q)
+	f.must(t, s.HandleStripeEvent(ctx, ev))
+	order, _, status := f.orderOf(t, c.ID)
+	if status != "cancelled" {
+		t.Fatalf("after the retry the order is %s, want cancelled", status)
+	}
+	if n := f.count(t, `select count(*) from jobs where kind = 'refund_payment' and payload->>'order_id' = $1`, order.String()); n != 1 {
+		t.Fatalf("%d refund jobs, want 1", n)
+	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'order.cancelled_late' and after->>'reason' = 'question_gone'`); n != 1 {
+		t.Fatal("the cancellation doesn't say the question was gone")
+	}
+}
