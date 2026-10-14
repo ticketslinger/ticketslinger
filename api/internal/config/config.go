@@ -62,7 +62,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return c, err
 	}
-	c.PlatformFeeBP, c.PlatformFeeCents = int(bpv), cents
+	c.PlatformFeeBP, c.PlatformFeeCents = bpv, int64(cents)
 	if c.DatabaseURL == "" {
 		return c, errors.New("TS_DATABASE_URL is required")
 	}
@@ -77,12 +77,12 @@ func env(k, def string) string {
 }
 
 // intEnv reads an integer in [0, max], or def when unset.
-func intEnv(k string, def, max int64) (int64, error) {
+func intEnv(k string, def, max int) (int, error) {
 	v := os.Getenv(k)
 	if v == "" {
 		return def, nil
 	}
-	n, err := strconv.ParseInt(v, 10, 64)
+	n, err := strconv.Atoi(v)
 	if err != nil || n < 0 || n > max {
 		return 0, fmt.Errorf("%s must be a whole number from 0 to %d", k, max)
 	}
