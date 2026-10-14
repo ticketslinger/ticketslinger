@@ -1,6 +1,8 @@
 services:
   db:
     image: postgres:18
+    # Parallel tests each make a database; the 64 MB default /dev/shm runs out.
+    shm_size: 512m
     environment:
       POSTGRES_DB: ticketslinger
       POSTGRES_USER: postgres

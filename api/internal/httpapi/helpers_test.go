@@ -18,15 +18,16 @@ import (
 const testPassword = "a long passphrase"
 
 type harness struct {
-	t    *testing.T
-	srv  *httptest.Server
-	mail *mailer.Memory
-	pool *pgxpool.Pool // ts_app
+	t      *testing.T
+	srv    *httptest.Server
+	mail   *mailer.Memory
+	pool   *pgxpool.Pool // ts_app
+	client *http.Client  // checks every exchange against openapi.yaml
 }
 
 func newHarness(t *testing.T) *harness {
 	srv, m, pool := newAuthServerPool(t)
-	return &harness{t, srv, m, pool}
+	return &harness{t, srv, m, pool, clientFor(t, srv.URL)}
 }
 
 // do sends a request with the session token (empty for none).
@@ -37,7 +38,7 @@ func (h *harness) do(token, method, path, body string) *http.Response {
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := h.client.Do(req)
 	if err != nil {
 		h.t.Fatal(err)
 	}

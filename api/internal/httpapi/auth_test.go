@@ -29,8 +29,7 @@ func newAuthServerPool(t *testing.T) (*httptest.Server, *mailer.Memory, *pgxpool
 	pool := testdb.New(t)
 	m := &mailer.Memory{}
 	svc := auth.NewService(pool, m, auth.Options{RPID: "localhost", Origin: "http://localhost:5173", SecretKey: []byte("0123456789abcdef0123456789abcdef")})
-	srv := httptest.NewServer(httpapi.New(httpapi.Deps{Pool: pool, Auth: svc}))
-	t.Cleanup(srv.Close)
+	srv := startServer(t, httpapi.New(httpapi.Deps{Pool: pool, Auth: svc}))
 	return srv, m, pool
 }
 
@@ -50,7 +49,7 @@ func doFrom(t *testing.T, realIP, method, url, token, body string) (int, map[str
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := clientFor(t, url).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,8 +128,7 @@ func TestSignupAndLoginErrors(t *testing.T) {
 }
 
 func TestBadPathParamIs400(t *testing.T) {
-	srv := httptest.NewServer(httpapi.New(httpapi.Deps{}))
-	defer srv.Close()
+	srv := startServer(t, httpapi.New(httpapi.Deps{}))
 	code, body := do(t, "POST", srv.URL+"/v1/auth/passkeys/login/not-a-uuid", "", `{}`)
 	if code != 400 || errCode(body) != "bad_request" || body["error"].(map[string]any)["message"] != "That request couldn't be read." {
 		t.Fatalf("got %d %v", code, body)
@@ -138,8 +136,7 @@ func TestBadPathParamIs400(t *testing.T) {
 }
 
 func TestOversizedBodyIs400(t *testing.T) {
-	srv := httptest.NewServer(httpapi.New(httpapi.Deps{}))
-	defer srv.Close()
+	srv := startServer(t, httpapi.New(httpapi.Deps{}))
 	big := `{"email":"a@example.com","password":"` + strings.Repeat("x", 2<<20) + `","name":"A"}`
 	if code, body := do(t, "POST", srv.URL+"/v1/auth/signup", "", big); code != 400 || errCode(body) != "bad_request" {
 		t.Fatalf("got %d %v", code, body)
@@ -150,7 +147,7 @@ func TestRateLimitAndSessionIPUseRealClientIP(t *testing.T) {
 	pool := testdb.New(t)
 	svc := auth.NewService(pool, &mailer.Memory{}, auth.Options{Origin: "http://localhost:5173", SecretKey: []byte("0123456789abcdef0123456789abcdef")})
 	cfg := config.Config{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.MustParsePrefix("::1/128")}}
-	srv := httptest.NewServer(httpapi.New(httpapi.Deps{Pool: pool, Auth: svc, Config: cfg}))
+	srv := startServer(t, httpapi.New(httpapi.Deps{Pool: pool, Auth: svc, Config: cfg}))
 	defer srv.Close()
 
 	// Short passwords are rejected after the rate limit but before any hashing.
@@ -259,6 +256,23 @@ func TestRecoveryCodesOverHTTP(t *testing.T) {
 	}
 	if st, e := do(t, "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"a long passphrase","totp_code":"123456","recovery_code":"aaaa-bbbb-cccc"}`); st != 422 || errCode(e) != "one_second_step" {
 		t.Fatalf("both: %d %v", st, e)
+	}
+	// A code copied with spaces for hyphens and padding still signs in; the
+	// length limit counts the code, not the padding.
+	padded := "  " + strings.ToLower(strings.ReplaceAll(codes[1].(string), "-", " ")) + "  "
+	if st, ok := do(t, "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"a long passphrase","recovery_code":"`+padded+`"}`); st != 200 {
+		t.Fatalf("padded recovery code: %d %v", st, ok)
+	}
+	// Padding up to 64 characters is read; more than 32 left after dropping
+	// spaces and hyphens, or more than 64 raw, is 422.
+	wide := strings.Repeat(" ", 20) + codes[2].(string) + strings.Repeat(" ", 20)
+	if st, ok := do(t, "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"a long passphrase","recovery_code":"`+wide+`"}`); st != 200 {
+		t.Fatalf("widely padded recovery code: %d %v", st, ok)
+	}
+	for name, long := range map[string]string{"stripped": strings.Repeat("a", 33), "raw": strings.Repeat(" ", 65)} {
+		if st, e := do(t, "POST", srv.URL+"/v1/auth/login", "", `{"email":"a@example.com","password":"a long passphrase","recovery_code":"`+long+`"}`); st != 422 || errCode(e) != "invalid_recovery_code" {
+			t.Fatalf("%s too long: %d %v", name, st, e)
+		}
 	}
 	login := `{"email":"a@example.com","password":"a long passphrase","recovery_code":"` + codes[0].(string) + `"}`
 	st, ok := do(t, "POST", srv.URL+"/v1/auth/login", "", login)

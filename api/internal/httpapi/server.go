@@ -233,6 +233,11 @@ func (s *server) Login(ctx context.Context, req LoginRequestObject) (LoginRespon
 	if req.Body.RecoveryCode != nil {
 		recovery = *req.Body.RecoveryCode
 	}
+	// Spaces and hyphens are how people copy a code, and the service drops
+	// them: allow padding up to 64 characters, then count what's left.
+	if len(recovery) > 64 || len(strings.NewReplacer(" ", "", "-", "").Replace(recovery)) > 32 {
+		return nil, &apiError{422, "invalid_recovery_code", "That recovery code is too long. Copy it again from where you saved it."}
+	}
 	sess, u, err := s.Auth.Login(ctx, string(req.Body.Email), req.Body.Password, code, recovery, c.ip, c.ua)
 	switch {
 	case errors.Is(err, auth.ErrBadCredentials):
