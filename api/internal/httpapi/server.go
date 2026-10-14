@@ -254,6 +254,8 @@ func totpError(err error) error {
 		return &apiError{409, "totp_already_enabled", "Two-factor sign-in is already switched on for your account."}
 	case errors.Is(err, auth.ErrTOTPNotStarted):
 		return &apiError{400, "totp_not_started", "Start setting up your authenticator app first."}
+	case errors.Is(err, auth.ErrBadCredentials):
+		return &apiError{401, "bad_credentials", "That password doesn't match."}
 	case errors.Is(err, auth.ErrBadCode):
 		return &apiError{400, "invalid_code", "That code didn't work. Check your authenticator app and try the newest one."}
 	case errors.Is(err, auth.ErrRateLimited):
@@ -262,12 +264,12 @@ func totpError(err error) error {
 	return err
 }
 
-func (s *server) StartTotp(ctx context.Context, _ StartTotpRequestObject) (StartTotpResponseObject, error) {
+func (s *server) StartTotp(ctx context.Context, req StartTotpRequestObject) (StartTotpResponseObject, error) {
 	u, _, ok := userFrom(ctx)
 	if !ok {
 		return nil, unauthorized()
 	}
-	secret, url, err := s.Auth.StartTOTP(ctx, u.ID)
+	secret, url, err := s.Auth.StartTOTP(ctx, u.ID, req.Body.Password)
 	if err != nil {
 		return nil, totpError(err)
 	}

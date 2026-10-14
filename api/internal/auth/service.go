@@ -204,7 +204,7 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, ip, ua s
 	var step int64
 	if totpOn {
 		var ok bool
-		if step, ok, err = s.checkTOTP(sealed, last, totpCode); err != nil {
+		if step, ok, err = s.checkTOTP(u.ID, sealed, last, totpCode); err != nil {
 			return Session{}, User{}, err
 		}
 		if !ok {

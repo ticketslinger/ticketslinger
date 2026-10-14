@@ -174,7 +174,10 @@ func TestTOTPEndpoints(t *testing.T) {
 	if st, _ := do(t, "POST", srv.URL+"/v1/auth/totp", "", ""); st != 401 {
 		t.Fatalf("unauthenticated start: %d", st)
 	}
-	st, setup := do(t, "POST", srv.URL+"/v1/auth/totp", tok, "")
+	if st, _ := do(t, "POST", srv.URL+"/v1/auth/totp", tok, `{"password":"wrong password!"}`); st != 401 {
+		t.Fatalf("wrong password: %d", st)
+	}
+	st, setup := do(t, "POST", srv.URL+"/v1/auth/totp", tok, `{"password":"a long passphrase"}`)
 	if st != 200 || setup["secret"] == "" || setup["otpauth_url"] == "" {
 		t.Fatalf("start: %d %v", st, setup)
 	}
@@ -185,7 +188,7 @@ func TestTOTPEndpoints(t *testing.T) {
 	if st, _ := do(t, "POST", srv.URL+"/v1/auth/totp/confirm", tok, `{"code":"`+code+`"}`); st != 204 {
 		t.Fatalf("confirm: %d", st)
 	}
-	if st, e := do(t, "POST", srv.URL+"/v1/auth/totp", tok, ""); st != 409 {
+	if st, e := do(t, "POST", srv.URL+"/v1/auth/totp", tok, `{"password":"a long passphrase"}`); st != 409 {
 		t.Fatalf("restart while enabled: %d %v", st, e)
 	}
 }

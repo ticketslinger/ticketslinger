@@ -29,7 +29,8 @@ func totpOpts() totp.ValidateOpts {
 }
 
 // seal encrypts with AES-256-GCM; the random 12-byte nonce is prepended.
-func seal(key, plain []byte) ([]byte, error) {
+// aad (the owner's user id) binds the ciphertext to its row.
+func seal(key, aad, plain []byte) ([]byte, error) {
 	gcm, err := newGCM(key)
 	if err != nil {
 		return nil, err
@@ -38,10 +39,10 @@ func seal(key, plain []byte) ([]byte, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
-	return gcm.Seal(nonce, nonce, plain, nil), nil
+	return gcm.Seal(nonce, nonce, plain, aad), nil
 }
 
-func open(key, sealed []byte) ([]byte, error) {
+func open(key, aad, sealed []byte) ([]byte, error) {
 	gcm, err := newGCM(key)
 	if err != nil {
 		return nil, err
@@ -49,7 +50,7 @@ func open(key, sealed []byte) ([]byte, error) {
 	if len(sealed) < gcm.NonceSize() {
 		return nil, errors.New("auth: sealed value too short")
 	}
-	return gcm.Open(nil, sealed[:gcm.NonceSize()], sealed[gcm.NonceSize():], nil)
+	return gcm.Open(nil, sealed[:gcm.NonceSize()], sealed[gcm.NonceSize():], aad)
 }
 
 func newGCM(key []byte) (cipher.AEAD, error) {
@@ -83,8 +84,8 @@ func matchStep(secret, code string, now time.Time) (int64, bool) {
 // checkTOTP verifies code against the user's stored secret and returns the
 // matching step. It does not record it; the caller does that atomically with
 // recordTOTPStep. A step at or before lastStep is a replay.
-func (s *Service) checkTOTP(sealed []byte, lastStep *int64, code string) (int64, bool, error) {
-	secret, err := open(s.opts.SecretKey, sealed)
+func (s *Service) checkTOTP(userID uuid.UUID, sealed []byte, lastStep *int64, code string) (int64, bool, error) {
+	secret, err := open(s.opts.SecretKey, userID[:], sealed)
 	if err != nil {
 		return 0, false, err
 	}
@@ -107,13 +108,30 @@ func recordTOTPStep(ctx context.Context, tx pgx.Tx, id uuid.UUID, step int64, en
 
 // StartTOTP begins enrolment: it stores a fresh encrypted secret, not yet
 // enabled, and returns it with the otpauth:// URL for a QR code. Calling it
-// again before confirming replaces the pending secret.
-func (s *Service) StartTOTP(ctx context.Context, userID uuid.UUID) (string, string, error) {
+// again before confirming replaces the pending secret. The current password
+// is required, so a stolen session token can't lock the owner out; a wrong
+// one counts toward the login lockout.
+func (s *Service) StartTOTP(ctx context.Context, userID uuid.UUID, password string) (string, string, error) {
 	var email string
 	var enabled bool
-	if err := s.pool.QueryRow(ctx, `SELECT email, totp_enabled_at IS NOT NULL FROM users WHERE id = $1`, userID).
-		Scan(&email, &enabled); err != nil {
+	var hash *string
+	if err := s.pool.QueryRow(ctx,
+		`SELECT email, totp_enabled_at IS NOT NULL, password_hash FROM users WHERE id = $1`, userID).
+		Scan(&email, &enabled, &hash); err != nil {
 		return "", "", err
+	}
+	if !s.emLimit.allow(email, time.Now()) {
+		return "", "", ErrRateLimited
+	}
+	if hash == nil {
+		return "", "", ErrBadCredentials
+	}
+	ok, err := checkPassword(ctx, *hash, password)
+	if err != nil {
+		return "", "", err
+	}
+	if !ok {
+		return "", "", s.recordFailure(ctx, userID)
 	}
 	if enabled {
 		return "", "", ErrTOTPAlreadyEnabled
@@ -122,7 +140,7 @@ func (s *Service) StartTOTP(ctx context.Context, userID uuid.UUID) (string, stri
 	if err != nil {
 		return "", "", err
 	}
-	sealed, err := seal(s.opts.SecretKey, []byte(key.Secret()))
+	sealed, err := seal(s.opts.SecretKey, userID[:], []byte(key.Secret()))
 	if err != nil {
 		return "", "", err
 	}
@@ -157,7 +175,7 @@ func (s *Service) ConfirmTOTP(ctx context.Context, userID uuid.UUID, code string
 		if sealed == nil {
 			return ErrTOTPNotStarted
 		}
-		step, ok, err := s.checkTOTP(sealed, nil, code)
+		step, ok, err := s.checkTOTP(userID, sealed, nil, code)
 		if err != nil {
 			return err
 		}
