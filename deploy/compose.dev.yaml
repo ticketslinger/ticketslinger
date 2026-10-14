@@ -1,0 +1,10 @@
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: ticketslinger
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports: ["54329:5432"]
+    volumes:
+      - ./initdb:/docker-entrypoint-initdb.d:ro
