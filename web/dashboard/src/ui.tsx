@@ -11,6 +11,13 @@ const subscribe = (cb: () => void) => {
 };
 export const usePath = () => useSyncExternalStore(subscribe, () => location.pathname);
 
+/** Where to go after sign-in: a same-site path or "/". Never an off-site URL. */
+export function safeNext(raw: string | null): string {
+  if (!raw?.startsWith("/") || raw[1] === "/" || raw[1] === "\\") return "/";
+  // The URL parser drops tabs and newlines, so "/\t/evil" really means "//evil".
+  return new URL(raw, "http://x").origin === "http://x" ? raw : "/";
+}
+
 export function navigate(to: string, replace = false) {
   history[replace ? "replaceState" : "pushState"](null, "", to);
   dispatchEvent(new PopStateEvent("popstate"));

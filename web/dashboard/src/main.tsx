@@ -7,7 +7,7 @@ import { Security } from "./routes/Security";
 import { SignIn } from "./routes/SignIn";
 import { SignUp } from "./routes/SignUp";
 import { VerifyEmail } from "./routes/VerifyEmail";
-import { type Me, navigate, usePath } from "./ui";
+import { type Me, navigate, safeNext, usePath } from "./ui";
 import "./styles.css";
 
 const PUBLIC = new Set(["/signin", "/signup"]);
@@ -31,7 +31,7 @@ function App() {
 
   const signedIn = useCallback(async () => {
     await loadMe();
-    navigate("/");
+    navigate(safeNext(new URLSearchParams(location.search).get("next")));
   }, [loadMe]);
   const signedOut = useCallback(() => {
     setMe(null);
@@ -52,9 +52,11 @@ function App() {
   // Redirects: signed-out visitors go to sign-in; signed-in ones skip it.
   const redirect =
     me === null && !PUBLIC.has(path) && path !== "/verify-email"
-      ? "/signin"
+      ? path === "/"
+        ? "/signin"
+        : `/signin?next=${encodeURIComponent(path + location.search)}`
       : me && PUBLIC.has(path)
-        ? "/"
+        ? safeNext(new URLSearchParams(location.search).get("next"))
         : null;
   useEffect(() => {
     if (redirect) navigate(redirect, true);

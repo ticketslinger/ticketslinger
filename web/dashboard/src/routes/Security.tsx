@@ -42,7 +42,8 @@ export function Security({
   const signInAgain = useAction();
   // A session that already passed a second factor needs no password. Once the
   // account has one, a password session is refused and the API says why.
-  const needPassword = !me.mfa;
+  const needPassword = !me.mfa && !me.has_second_factor;
+  const needSecondStep = !me.mfa && me.has_second_factor;
 
   const startTotp = () =>
     totpAction.run(async () => {
@@ -106,6 +107,11 @@ export function Security({
         account.
       </p>
 
+      {needSecondStep && (
+        <p className="notice">
+          Sign in with your passkey or authenticator code first, then you can add another.
+        </p>
+      )}
       {needPassword && (
         <Field
           id="password"

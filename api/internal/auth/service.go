@@ -59,6 +59,7 @@ type User struct {
 	ID                         uuid.UUID
 	Email, Name                string
 	EmailVerified, TOTPEnabled bool
+	HasPasskey                 bool
 }
 
 type Options struct {
@@ -277,11 +278,12 @@ func (s *Service) Authenticate(ctx context.Context, token string) (User, Session
 	var sess Session
 	err := s.pool.QueryRow(ctx,
 		`SELECT s.id, s.mfa, s.expires_at,
-		        u.id, u.email, u.name, u.email_verified_at IS NOT NULL, u.totp_enabled_at IS NOT NULL
+		        u.id, u.email, u.name, u.email_verified_at IS NOT NULL, u.totp_enabled_at IS NOT NULL,
+		        EXISTS (SELECT 1 FROM passkeys p WHERE p.user_id = u.id)
 		   FROM sessions s JOIN users u ON u.id = s.user_id
 		  WHERE s.token_hash = $1 AND s.expires_at > now() AND s.created_at > now() - $2::interval`,
 		hashToken(token), maxSessionAge.String()).
-		Scan(&sess.ID, &sess.MFA, &sess.ExpiresAt, &u.ID, &u.Email, &u.Name, &u.EmailVerified, &u.TOTPEnabled)
+		Scan(&sess.ID, &sess.MFA, &sess.ExpiresAt, &u.ID, &u.Email, &u.Name, &u.EmailVerified, &u.TOTPEnabled, &u.HasPasskey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, Session{}, ErrBadToken
 	}

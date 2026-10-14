@@ -163,3 +163,24 @@ func TestVerificationEmailLeavesOutName(t *testing.T) {
 		t.Fatalf("email body: %q", body)
 	}
 }
+
+func TestAuthenticateReportsPasskey(t *testing.T) {
+	s, pool := newSvcPool(t)
+	ctx := context.Background()
+	sess, u, err := s.Signup(ctx, "a@example.com", "a long passphrase", "A", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ := s.Authenticate(ctx, sess.Token)
+	if got.HasPasskey {
+		t.Fatal("new user must not report a passkey")
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO passkeys (user_id, credential_id, credential, name) VALUES ($1, '\x01', '{}', 'test')`, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ = s.Authenticate(ctx, sess.Token)
+	if !got.HasPasskey {
+		t.Fatal("user with a passkey must report it")
+	}
+}
