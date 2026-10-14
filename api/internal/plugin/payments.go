@@ -29,7 +29,7 @@ type RefundInput struct {
 type PaymentProvider interface {
 	Name() string // "stripe" or "test"; stored in payments.provider
 	PublishableKey() string
-	CreateAccount(ctx context.Context, email, idempotencyKey string) (accountID string, err error)
+	CreateAccount(ctx context.Context, idempotencyKey string) (accountID string, err error)
 	OnboardingLink(ctx context.Context, accountID, refreshURL, returnURL string) (url string, err error)
 	Account(ctx context.Context, accountID string) (AccountStatus, error)
 	CreatePaymentIntent(ctx context.Context, in PaymentIntentInput) (PaymentIntent, error)

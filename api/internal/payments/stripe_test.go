@@ -112,14 +112,14 @@ func TestNoFeeMeansNoApplicationFeeParam(t *testing.T) {
 
 func TestCreateAccountIsStandard(t *testing.T) {
 	s, rec := newStripe(t)
-	id, err := s.CreateAccount(context.Background(), "owner@example.com", "acct-0190")
+	id, err := s.CreateAccount(context.Background(), "acct-0190")
 	if err != nil || id != "acct_test1" {
 		t.Fatalf("id %q err %v", id, err)
 	}
 	r := rec.last()
 	want := map[string]string{
 		"controller[stripe_dashboard][type]": "full", "controller[fees][payer]": "account", "controller[losses][payments]": "stripe",
-		"controller[requirement_collection]": "stripe", "country": "US", "email": "owner@example.com",
+		"controller[requirement_collection]": "stripe", "country": "US",
 	}
 	for k, v := range want {
 		if r.form.Get(k) != v {
@@ -128,6 +128,9 @@ func TestCreateAccountIsStandard(t *testing.T) {
 	}
 	if _, ok := r.form["type"]; ok {
 		t.Error("type sent: controller properties replace it")
+	}
+	if _, ok := r.form["email"]; ok {
+		t.Error("email sent: a retry must send identical params, and onboarding asks for it")
 	}
 	if r.method != "POST" || r.path != "/v1/accounts" || r.idem != "acct-0190" || r.account != "" {
 		t.Fatalf("%s %s idempotency %q account %q", r.method, r.path, r.idem, r.account)

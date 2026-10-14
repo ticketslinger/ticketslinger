@@ -10,8 +10,6 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/organizers"
 )
 
-var errNotConnected = &apiError{409, "not_connected", "There's no Stripe account to check yet. Connect one first."}
-
 // providerError logs what the payment provider said and answers 503. The
 // provider's errors never carry our keys.
 func providerError(ctx context.Context, op string, err error) error {
@@ -44,7 +42,10 @@ func (s *server) GetPayments(ctx context.Context, req GetPaymentsRequestObject) 
 // ConnectPayments creates the organizer's Stripe account once and hands back
 // an onboarding link. The network calls sit inside the transaction on
 // purpose: the organizer row lock is what makes two clicks produce one
-// account, and this runs once per organizer.
+// account, and this runs once per organizer. The lock is FOR NO KEY UPDATE,
+// so foreign-key checks (FOR KEY SHARE) from other writes to this organizer
+// don't wait on Stripe. stripe_account_id is a unique column, so writing it
+// takes the stronger lock; that happens last, after both Stripe calls.
 func (s *server) ConnectPayments(ctx context.Context, req ConnectPaymentsRequestObject) (ConnectPaymentsResponseObject, error) {
 	var link string
 	var linkErr error
@@ -52,33 +53,29 @@ func (s *server) ConnectPayments(ctx context.Context, req ConnectPaymentsRequest
 		if s.Payments == nil {
 			return errPaymentsNotConfigured
 		}
-		u, _, err := userFrom(ctx)
-		if err != nil {
-			return err
-		}
 		var account *string
-		if err := tx.QueryRow(ctx, `select stripe_account_id from organizers where id = $1 for update`, org.ID).Scan(&account); err != nil {
+		if err := tx.QueryRow(ctx, `select stripe_account_id from organizers where id = $1 for no key update`, org.ID).Scan(&account); err != nil {
 			return err
 		}
-		if account == nil {
-			id, err := s.Payments.CreateAccount(ctx, u.Email, "acct-"+org.ID.String())
+		created := account == nil
+		if created {
+			id, err := s.Payments.CreateAccount(ctx, "acct-"+org.ID.String())
 			if err != nil {
 				return providerError(ctx, "create account", err)
-			}
-			if _, err := tx.Exec(ctx, `update organizers set stripe_account_id = $2 where id = $1`, org.ID, id); err != nil {
-				return err
-			}
-			err = audit.Write(ctx, tx, audit.Entry{Organizer: org.ID, Actor: actorFrom(ctx), Action: "organizer.stripe_connected",
-				EntityType: "organizer", EntityID: org.ID, After: map[string]string{"stripe_account_id": id}})
-			if err != nil {
-				return err
 			}
 			account = &id
 		}
 		base := s.Config.DashboardOrigin + "/o/" + org.Slug + "/payments"
-		// A failed link still commits the new account, so a retry reuses it.
+		// A failed link still commits a new account, so a retry reuses it.
 		link, linkErr = s.Payments.OnboardingLink(ctx, *account, base+"?refresh=1", base+"?return=1")
-		return nil
+		if !created {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, `update organizers set stripe_account_id = $2 where id = $1`, org.ID, *account); err != nil {
+			return err
+		}
+		return audit.Write(ctx, tx, audit.Entry{Organizer: org.ID, Actor: actorFrom(ctx), Action: "organizer.stripe_connected",
+			EntityType: "organizer", EntityID: org.ID, After: map[string]string{"stripe_account_id": *account}})
 	})
 	if err != nil {
 		return nil, err
@@ -96,8 +93,9 @@ func (s *server) RefreshPayments(ctx context.Context, req RefreshPaymentsRequest
 		if s.Payments == nil {
 			return errPaymentsNotConfigured
 		}
+		// No row lock: only the non-key flags change, and the last write wins.
 		var account *string
-		if err := tx.QueryRow(ctx, `select stripe_account_id from organizers where id = $1 for update`, org.ID).Scan(&account); err != nil {
+		if err := tx.QueryRow(ctx, `select stripe_account_id from organizers where id = $1`, org.ID).Scan(&account); err != nil {
 			return err
 		}
 		if account == nil {

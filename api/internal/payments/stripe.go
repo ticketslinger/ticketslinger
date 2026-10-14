@@ -5,6 +5,8 @@ package payments
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"time"
 
 	"github.com/stripe/stripe-go/v87"
 
@@ -21,12 +23,15 @@ type Stripe struct {
 var _ plugin.PaymentProvider = (*Stripe)(nil)
 
 // NewStripe talks to Stripe's API, or to backends when not nil (tests).
+// Stripe's own logger stays off; our handlers log what matters.
 func NewStripe(secretKey, publishableKey string, backends *stripe.Backends) *Stripe {
-	var opts []stripe.ClientOption
-	if backends != nil {
-		opts = append(opts, stripe.WithBackends(backends))
+	if backends == nil {
+		backends = stripe.NewBackendsWithConfig(&stripe.BackendConfig{
+			HTTPClient:    &http.Client{Timeout: 15 * time.Second},
+			LeveledLogger: &stripe.LeveledLogger{Level: stripe.LevelNull},
+		})
 	}
-	return &Stripe{c: stripe.NewClient(secretKey, opts...), pk: publishableKey}
+	return &Stripe{c: stripe.NewClient(secretKey, stripe.WithBackends(backends)), pk: publishableKey}
 }
 
 func (s *Stripe) Name() string           { return "stripe" }
@@ -34,10 +39,11 @@ func (s *Stripe) PublishableKey() string { return s.pk }
 
 // CreateAccount makes a Standard connected account: the organizer gets the
 // full Stripe dashboard, pays Stripe's fees and owns disputes with Stripe.
-func (s *Stripe) CreateAccount(ctx context.Context, email, key string) (string, error) {
+// Onboarding collects the email; a retry with the same key sends the same
+// params, as Stripe's idempotency requires.
+func (s *Stripe) CreateAccount(ctx context.Context, key string) (string, error) {
 	p := &stripe.AccountCreateParams{
 		Country: stripe.String("US"),
-		Email:   stripe.String(email),
 		Controller: &stripe.AccountCreateControllerParams{
 			StripeDashboard:       &stripe.AccountCreateControllerStripeDashboardParams{Type: stripe.String("full")},
 			Fees:                  &stripe.AccountCreateControllerFeesParams{Payer: stripe.String("account")},

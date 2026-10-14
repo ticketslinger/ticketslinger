@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -74,8 +75,9 @@ func TestConnectStripe(t *testing.T) {
 	}
 
 	var n int
-	if err := testdb.Owner(t, h.pool).QueryRow(context.Background(), `select count(*) from audit_log
-		where action = 'organizer.stripe_connected' and entity_type = 'organizer' and after->>'stripe_account_id' = 'acct_fake1'`).Scan(&n); err != nil || n != 1 {
+	if err := testdb.Owner(t, h.pool).QueryRow(context.Background(), `select count(*) from audit_log a join organizers o on o.id = a.organizer_id
+		where a.action = 'organizer.stripe_connected' and a.entity_type = 'organizer' and a.after->>'stripe_account_id' = o.stripe_account_id
+		and starts_with(o.stripe_account_id, 'acct_fake')`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("audit rows %d %v, want 1", n, err)
 	}
 
@@ -143,6 +145,11 @@ func TestConcurrentConnectsMakeOneAccount(t *testing.T) {
 	}
 	if n := fake.Accounts(); n != 1 {
 		t.Fatalf("%d concurrent connects made %d accounts, want 1", len(codes), n)
+	}
+	// Stripe's idempotency key hides a repeated create; the audit log doesn't.
+	var created int
+	if err := root.QueryRow(ctx, `select count(*) from audit_log where action = 'organizer.stripe_connected'`).Scan(&created); err != nil || created != 1 {
+		t.Fatalf("%d connects recorded %d accounts (%v), want 1", len(codes), created, err)
 	}
 }
 
@@ -213,5 +220,60 @@ func TestOnboardingLinksAreNotKept(t *testing.T) {
 	var rows int
 	if err := h.pool.QueryRow(context.Background(), `select count(*) from idempotency_keys`).Scan(&rows); err != nil || rows != 0 {
 		t.Fatalf("idempotency rows = %d (%v), want 0", rows, err)
+	}
+}
+
+// blockingLink holds the first onboarding link until release closes, so a
+// test can act while a connect sits on the organizer row mid-Stripe-call.
+type blockingLink struct {
+	*payments.Fake
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (b *blockingLink) OnboardingLink(ctx context.Context, account, refreshURL, returnURL string) (string, error) {
+	b.once.Do(func() {
+		close(b.entered)
+		<-b.release
+	})
+	return b.Fake.OnboardingLink(ctx, account, refreshURL, returnURL)
+}
+
+// A connect waiting on Stripe must not hold up the organizer's other writes:
+// their foreign keys take FOR KEY SHARE on the organizer row.
+func TestConnectDoesNotBlockOtherWrites(t *testing.T) {
+	p := &blockingLink{Fake: payments.NewFake(), entered: make(chan struct{}), release: make(chan struct{})}
+	h := newPaymentsHarness(t, p)
+	owner := h.signupWithMFA("owner@example.com")
+	h.createOrganizer(owner, "acme")
+	connected := make(chan int, 1)
+	go func() {
+		req, _ := http.NewRequest("POST", h.srv.URL+paymentsURL+"/connect", nil)
+		req.Header.Set("Authorization", "Bearer "+owner)
+		res, err := h.client.Do(req)
+		if err != nil {
+			connected <- 0
+			return
+		}
+		_ = res.Body.Close()
+		connected <- res.StatusCode
+	}()
+	<-p.entered
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "POST", h.srv.URL+"/v1/organizers/acme/events", strings.NewReader(eventBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+owner)
+	res, err := h.client.Do(req)
+	close(p.release)
+	if err != nil {
+		t.Fatalf("creating an event while a connect waits on Stripe: %v", err)
+	}
+	_ = res.Body.Close()
+	if res.StatusCode != 201 {
+		t.Fatalf("create event: %d", res.StatusCode)
+	}
+	if code := <-connected; code != 200 {
+		t.Fatalf("connect: %d", code)
 	}
 }

@@ -45,6 +45,7 @@ func locked() error {
 var (
 	errPaymentsNotConfigured = &apiError{503, "payments_not_configured", "This server isn't set up to take card payments yet. Free tickets still work. Paid ones need Stripe keys from whoever runs it."}
 	errPaymentsUnavailable   = &apiError{503, "payments_unavailable", "We couldn't reach Stripe just now. Try again in a minute."}
+	errNotConnected          = &apiError{409, "not_connected", "There's no Stripe account to check yet. Connect one first."}
 )
 
 func notFound() error {
