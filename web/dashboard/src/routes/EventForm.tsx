@@ -1,6 +1,7 @@
 import type { components } from "@ticketslinger/api-client";
 import { useState } from "react";
 import { api, must } from "../api";
+import { LOCAL } from "../forms";
 import { browserZone, fromLocalInput, timeZones, toLocalInput } from "../time";
 import { ErrorText, Field, navigate, useAction, useUnsavedChanges } from "../ui";
 import { slugify } from "./NewOrganizer";
@@ -25,9 +26,6 @@ export function percentToBp(s: string): number | null {
 }
 
 let zones: string[] | undefined;
-
-// What <input type="datetime-local"> gives back, with or without seconds.
-const LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
 
 type Draft = {
   name: string;

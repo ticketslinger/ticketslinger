@@ -484,3 +484,17 @@ dialog.form::backdrop {
 .tickets-section {
   margin-top: 2rem;
 }
+
+.option-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.option-row input {
+  flex: 1 1 10rem;
+  width: auto;
+  min-width: 0;
+}

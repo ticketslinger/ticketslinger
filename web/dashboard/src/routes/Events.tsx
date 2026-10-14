@@ -4,6 +4,8 @@ import { formatWhen } from "../time";
 import { ErrorText, focusOnMount, Link, navigate, useAction, useLoad } from "../ui";
 import { type Event, EventForm } from "./EventForm";
 import { canEdit, type Org } from "./Organizer";
+import { Promos } from "./Promos";
+import { Questions } from "./Questions";
 import { Tickets } from "./Tickets";
 
 const STATUS: Record<Event["status"], string> = {
@@ -90,10 +92,11 @@ export function NewEvent({ org }: { org: Org }) {
   );
 }
 
-// Promo codes and questions add their tabs here, with a route each in main.tsx.
 const TABS = [
   { path: "", label: "Details" },
   { path: "/tickets", label: "Tickets" },
+  { path: "/promo-codes", label: "Promo codes" },
+  { path: "/questions", label: "Questions" },
 ];
 
 export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: string }) {
@@ -187,6 +190,8 @@ export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: s
           </nav>
           {tab === "" && <EventForm org={org} event={event} onSaved={setEvent} />}
           {tab === "/tickets" && <Tickets org={org} event={event} />}
+          {tab === "/promo-codes" && <Promos org={org} event={event} />}
+          {tab === "/questions" && <Questions org={org} event={event} />}
 
           {tab === "" && canEdit(org) && event.status === "draft" && (
             <section className="danger">
