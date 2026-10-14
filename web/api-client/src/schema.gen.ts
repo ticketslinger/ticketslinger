@@ -29,6 +29,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["signup"];
         delete?: never;
         options?: never;
@@ -45,7 +46,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description 401 totp_required means the account has an authenticator app; send totp_code, or a recovery_code instead. A valid recovery code is accepted for any account with a second factor and gives a session that passed it. */
+        /** @description 401 totp_required means the account has an authenticator app; send totp_code, or a recovery_code instead. A valid recovery code is accepted for any account with a second factor and gives a session that passed it. Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["login"];
         delete?: never;
         options?: never;
@@ -94,7 +95,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts setting up an authenticator app. Unless this session passed a second factor, send the current password. Once the account has a passkey or an authenticator app, only a session that passed one may start (403 mfa_required). The setup expires if not confirmed within 10 minutes. */
+        /** @description Starts setting up an authenticator app. Unless this session passed a second factor, send the current password. Once the account has a passkey or an authenticator app, only a session that passed one may start (403 mfa_required). The setup expires if not confirmed within 10 minutes. Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["startTotp"];
         delete?: never;
         options?: never;
@@ -128,7 +129,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Replaces the account's recovery codes with ten new single-use ones and returns them. They are shown this once. Needs a session that passed a second factor (403 mfa_required) and an account that has one (409 no_second_factor). */
+        /** @description Replaces the account's recovery codes with ten new single-use ones and returns them. They are shown this once. Needs a session that passed a second factor (403 mfa_required) and an account that has one (409 no_second_factor). Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["createRecoveryCodes"];
         delete?: never;
         options?: never;
@@ -194,6 +195,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["finishPasskeyLogin"];
         delete?: never;
         options?: never;
@@ -275,7 +277,7 @@ export interface paths {
         /** @description Owners and admins only, from a signed-in session. An API key gets 403 session_required. */
         get: operations["listApiKeys"];
         put?: never;
-        /** @description Owners and admins only, from a signed-in session. The token is in this response and nowhere else, ever. */
+        /** @description Owners and admins only, from a signed-in session. The token is in this response and nowhere else, ever. Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["createApiKey"];
         delete?: never;
         options?: never;
@@ -910,6 +912,8 @@ export interface components {
         };
     };
     parameters: {
+        /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+        IdempotencyKey: string;
         OrganizerPath: string;
         QuotaPath: string;
         PromoCodePath: string;
@@ -946,7 +950,10 @@ export interface operations {
     signup: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -974,7 +981,10 @@ export interface operations {
     login: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -993,7 +1003,9 @@ export interface operations {
                     "application/json": components["schemas"]["SessionCreated"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
             423: components["responses"]["Error"];
             429: components["responses"]["Error"];
@@ -1002,7 +1014,10 @@ export interface operations {
     logout: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1015,14 +1030,20 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     verifyEmail: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1042,12 +1063,17 @@ export interface operations {
                 content?: never;
             };
             400: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     startTotp: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1068,15 +1094,20 @@ export interface operations {
                     "application/json": components["schemas"]["TotpSetup"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     confirmTotp: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1098,12 +1129,17 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     createRecoveryCodes: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1120,16 +1156,21 @@ export interface operations {
                     };
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
     };
     beginPasskeyRegistration: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1150,8 +1191,11 @@ export interface operations {
                     "application/json": components["schemas"]["WebAuthnChallenge"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             423: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
@@ -1161,7 +1205,10 @@ export interface operations {
             query?: {
                 name?: string;
             };
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 challengeId: string;
             };
@@ -1187,13 +1234,17 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
     beginPasskeyLogin: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1208,13 +1259,19 @@ export interface operations {
                     "application/json": components["schemas"]["WebAuthnChallenge"];
                 };
             };
+            400: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
     };
     finishPasskeyLogin: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 challengeId: string;
             };
@@ -1239,6 +1296,8 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
     };
@@ -1289,7 +1348,10 @@ export interface operations {
     createOrganizer: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1308,6 +1370,7 @@ export interface operations {
                     "application/json": components["schemas"]["Organizer"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             409: components["responses"]["Error"];
@@ -1392,7 +1455,10 @@ export interface operations {
     createApiKey: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
             };
@@ -1413,16 +1479,21 @@ export interface operations {
                     "application/json": components["schemas"]["ApiKeyCreated"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
     revokeApiKey: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 apiKey: string;
@@ -1438,9 +1509,12 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     listEvents: {
@@ -1470,7 +1544,10 @@ export interface operations {
     createEvent: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
             };
@@ -1491,6 +1568,7 @@ export interface operations {
                     "application/json": components["schemas"]["Event"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -1526,7 +1604,10 @@ export interface operations {
     deleteEvent: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1542,16 +1623,21 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     updateEvent: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1573,6 +1659,7 @@ export interface operations {
                     "application/json": components["schemas"]["Event"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -1608,7 +1695,10 @@ export interface operations {
     createTicketType: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1630,6 +1720,7 @@ export interface operations {
                     "application/json": components["schemas"]["TicketType"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -1640,7 +1731,10 @@ export interface operations {
     reorderTicketTypes: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1662,9 +1756,11 @@ export interface operations {
                     "application/json": components["schemas"]["TicketType"][];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
@@ -1697,7 +1793,10 @@ export interface operations {
     deleteTicketType: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1714,16 +1813,21 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     updateTicketType: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1746,6 +1850,7 @@ export interface operations {
                     "application/json": components["schemas"]["TicketType"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -1781,7 +1886,10 @@ export interface operations {
     createQuota: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1803,6 +1911,7 @@ export interface operations {
                     "application/json": components["schemas"]["Quota"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -1839,7 +1948,10 @@ export interface operations {
     deleteQuota: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1856,16 +1968,21 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     updateQuota: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1888,6 +2005,7 @@ export interface operations {
                     "application/json": components["schemas"]["Quota"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -1923,7 +2041,10 @@ export interface operations {
     createPromoCode: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1945,6 +2066,7 @@ export interface operations {
                     "application/json": components["schemas"]["PromoCode"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -1981,7 +2103,10 @@ export interface operations {
     deletePromoCode: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -1998,16 +2123,21 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     updatePromoCode: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -2030,6 +2160,7 @@ export interface operations {
                     "application/json": components["schemas"]["PromoCode"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
@@ -2065,7 +2196,10 @@ export interface operations {
     createQuestion: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -2087,16 +2221,21 @@ export interface operations {
                     "application/json": components["schemas"]["Question"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
     reorderQuestions: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -2118,9 +2257,11 @@ export interface operations {
                     "application/json": components["schemas"]["Question"][];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
@@ -2153,7 +2294,10 @@ export interface operations {
     deleteQuestion: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -2170,16 +2314,21 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     updateQuestion: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 organizer: components["parameters"]["OrganizerPath"];
                 event: components["parameters"]["EventPath"];
@@ -2202,9 +2351,11 @@ export interface operations {
                     "application/json": components["schemas"]["Question"];
                 };
             };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };

@@ -211,6 +211,10 @@ func TestSweepRemovesOnlyExpired(t *testing.T) {
 	exec(`insert into email_tokens(token_hash, user_id, purpose, expires_at) values ('\x01', $1, 'verify', now() - interval '1 minute'), ('\x02', $1, 'verify', now() + interval '1 hour')`, user)
 	exec(`insert into webauthn_challenges(user_id, kind, data, expires_at) values ($1, 'login', '{}', now() - interval '1 minute'), ($1, 'login', '{}', now() + interval '1 minute')`, user)
 
+	idem := `insert into idempotency_keys(scope, key, request_hash, owner, expires_at) values ('anon POST /x', $1, '\x00', uuidv7(), now() + $2::interval)`
+	exec(idem, "old", "-1 minute")
+	exec(idem, "fresh", "1 hour")
+
 	co := `insert into checkouts(organizer_id, event_id, token_hash, expires_at) values ($1, $2, $3, now() - interval '8 days') returning id`
 	var gone, kept, recent string
 	must(owner.QueryRow(ctx, co, org, event, make([]byte, 32)).Scan(&gone))
@@ -230,6 +234,7 @@ func TestSweepRemovesOnlyExpired(t *testing.T) {
 		`select count(*) from email_tokens`:                        1,
 		`select count(*) from webauthn_challenges`:                 1,
 		`select count(*) from checkouts`:                           2,
+		`select count(*) from idempotency_keys`:                    1,
 		`select count(*) from checkouts where id = '` + gone + `'`: 0,
 	} {
 		if got := count(t, owner, sql); got != want {
@@ -392,7 +397,7 @@ func TestJobsTableGrants(t *testing.T) {
 
 func TestSweepPredicatesAreIndexed(t *testing.T) {
 	pool := testdb.New(t)
-	for _, tbl := range []string{"sessions", "email_tokens", "webauthn_challenges"} {
+	for _, tbl := range []string{"sessions", "email_tokens", "webauthn_challenges", "idempotency_keys"} {
 		n := count(t, pool, `select count(*) from pg_indexes where tablename = '`+tbl+`' and indexdef ~ '\(expires_at\)'`)
 		if n != 1 {
 			t.Errorf("%s has %d indexes on expires_at, want 1", tbl, n)

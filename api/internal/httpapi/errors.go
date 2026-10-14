@@ -4,6 +4,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+
+	"github.com/ticketslinger/ticketslinger/api/internal/sales"
 )
 
 type apiError struct {
@@ -50,6 +52,11 @@ func writeBadRequest(w http.ResponseWriter, r *http.Request, err error) {
 
 func writeError(w http.ResponseWriter, err error) {
 	var ae *apiError
+	if errors.Is(err, sales.ErrBusy) {
+		// Not stored by Idempotency-Key (5xx), so the buyer's retry runs fresh.
+		w.Header().Set("Retry-After", "1")
+		err = &apiError{503, "try_again", "Tickets are moving fast. Give it a second and try again."}
+	}
 	if !errors.As(err, &ae) {
 		slog.Error("unhandled error", "err", err)
 		ae = &apiError{500, "internal", "Something went wrong on our side. Please try again."}

@@ -860,6 +860,9 @@ type WebAuthnChallenge struct {
 // EventPath defines model for EventPath.
 type EventPath = openapi_types.UUID
 
+// IdempotencyKey defines model for IdempotencyKey.
+type IdempotencyKey = string
+
 // OrganizerPath defines model for OrganizerPath.
 type OrganizerPath = string
 
@@ -875,12 +878,42 @@ type QuotaPath = openapi_types.UUID
 // TicketTypePath defines model for TicketTypePath.
 type TicketTypePath = openapi_types.UUID
 
+// LoginParams defines parameters for Login.
+type LoginParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// LogoutParams defines parameters for Logout.
+type LogoutParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// BeginPasskeyLoginParams defines parameters for BeginPasskeyLogin.
+type BeginPasskeyLoginParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
 // FinishPasskeyLoginJSONBody defines parameters for FinishPasskeyLogin.
 type FinishPasskeyLoginJSONBody map[string]interface{}
+
+// FinishPasskeyLoginParams defines parameters for FinishPasskeyLogin.
+type FinishPasskeyLoginParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
 
 // BeginPasskeyRegistrationJSONBody defines parameters for BeginPasskeyRegistration.
 type BeginPasskeyRegistrationJSONBody struct {
 	Password *string `json:"password,omitempty"`
+}
+
+// BeginPasskeyRegistrationParams defines parameters for BeginPasskeyRegistration.
+type BeginPasskeyRegistrationParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
 
 // FinishPasskeyRegistrationJSONBody defines parameters for FinishPasskeyRegistration.
@@ -889,6 +922,21 @@ type FinishPasskeyRegistrationJSONBody map[string]interface{}
 // FinishPasskeyRegistrationParams defines parameters for FinishPasskeyRegistration.
 type FinishPasskeyRegistrationParams struct {
 	Name *string `form:"name,omitempty" json:"name,omitempty"`
+
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// CreateRecoveryCodesParams defines parameters for CreateRecoveryCodes.
+type CreateRecoveryCodesParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// SignupParams defines parameters for Signup.
+type SignupParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
 
 // StartTotpJSONBody defines parameters for StartTotp.
@@ -896,14 +944,152 @@ type StartTotpJSONBody struct {
 	Password *string `json:"password,omitempty"`
 }
 
+// StartTotpParams defines parameters for StartTotp.
+type StartTotpParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
 // ConfirmTotpJSONBody defines parameters for ConfirmTotp.
 type ConfirmTotpJSONBody struct {
 	Code string `json:"code"`
 }
 
+// ConfirmTotpParams defines parameters for ConfirmTotp.
+type ConfirmTotpParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
 // VerifyEmailJSONBody defines parameters for VerifyEmail.
 type VerifyEmailJSONBody struct {
 	Token string `json:"token"`
+}
+
+// VerifyEmailParams defines parameters for VerifyEmail.
+type VerifyEmailParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// CreateOrganizerParams defines parameters for CreateOrganizer.
+type CreateOrganizerParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// CreateApiKeyParams defines parameters for CreateApiKey.
+type CreateApiKeyParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// RevokeApiKeyParams defines parameters for RevokeApiKey.
+type RevokeApiKeyParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// CreateEventParams defines parameters for CreateEvent.
+type CreateEventParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// DeleteEventParams defines parameters for DeleteEvent.
+type DeleteEventParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// UpdateEventParams defines parameters for UpdateEvent.
+type UpdateEventParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// CreatePromoCodeParams defines parameters for CreatePromoCode.
+type CreatePromoCodeParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// DeletePromoCodeParams defines parameters for DeletePromoCode.
+type DeletePromoCodeParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// UpdatePromoCodeParams defines parameters for UpdatePromoCode.
+type UpdatePromoCodeParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// CreateQuestionParams defines parameters for CreateQuestion.
+type CreateQuestionParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// ReorderQuestionsParams defines parameters for ReorderQuestions.
+type ReorderQuestionsParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// DeleteQuestionParams defines parameters for DeleteQuestion.
+type DeleteQuestionParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// UpdateQuestionParams defines parameters for UpdateQuestion.
+type UpdateQuestionParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// CreateQuotaParams defines parameters for CreateQuota.
+type CreateQuotaParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// DeleteQuotaParams defines parameters for DeleteQuota.
+type DeleteQuotaParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// UpdateQuotaParams defines parameters for UpdateQuota.
+type UpdateQuotaParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// CreateTicketTypeParams defines parameters for CreateTicketType.
+type CreateTicketTypeParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// ReorderTicketTypesParams defines parameters for ReorderTicketTypes.
+type ReorderTicketTypesParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// DeleteTicketTypeParams defines parameters for DeleteTicketType.
+type DeleteTicketTypeParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// UpdateTicketTypeParams defines parameters for UpdateTicketType.
+type UpdateTicketTypeParams struct {
+	// IdempotencyKey 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works).
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
@@ -976,37 +1162,37 @@ type UpdateTicketTypeJSONRequestBody = TicketTypeFields
 type ServerInterface interface {
 
 	// (POST /auth/login)
-	Login(w http.ResponseWriter, r *http.Request)
+	Login(w http.ResponseWriter, r *http.Request, params LoginParams)
 
 	// (POST /auth/logout)
-	Logout(w http.ResponseWriter, r *http.Request)
+	Logout(w http.ResponseWriter, r *http.Request, params LogoutParams)
 
 	// (POST /auth/passkeys/login)
-	BeginPasskeyLogin(w http.ResponseWriter, r *http.Request)
+	BeginPasskeyLogin(w http.ResponseWriter, r *http.Request, params BeginPasskeyLoginParams)
 
 	// (POST /auth/passkeys/login/{challengeId})
-	FinishPasskeyLogin(w http.ResponseWriter, r *http.Request, challengeId openapi_types.UUID)
+	FinishPasskeyLogin(w http.ResponseWriter, r *http.Request, challengeId openapi_types.UUID, params FinishPasskeyLoginParams)
 
 	// (POST /auth/passkeys/register)
-	BeginPasskeyRegistration(w http.ResponseWriter, r *http.Request)
+	BeginPasskeyRegistration(w http.ResponseWriter, r *http.Request, params BeginPasskeyRegistrationParams)
 
 	// (POST /auth/passkeys/register/{challengeId})
 	FinishPasskeyRegistration(w http.ResponseWriter, r *http.Request, challengeId openapi_types.UUID, params FinishPasskeyRegistrationParams)
 
 	// (POST /auth/recovery-codes)
-	CreateRecoveryCodes(w http.ResponseWriter, r *http.Request)
+	CreateRecoveryCodes(w http.ResponseWriter, r *http.Request, params CreateRecoveryCodesParams)
 
 	// (POST /auth/signup)
-	Signup(w http.ResponseWriter, r *http.Request)
+	Signup(w http.ResponseWriter, r *http.Request, params SignupParams)
 
 	// (POST /auth/totp)
-	StartTotp(w http.ResponseWriter, r *http.Request)
+	StartTotp(w http.ResponseWriter, r *http.Request, params StartTotpParams)
 
 	// (POST /auth/totp/confirm)
-	ConfirmTotp(w http.ResponseWriter, r *http.Request)
+	ConfirmTotp(w http.ResponseWriter, r *http.Request, params ConfirmTotpParams)
 
 	// (POST /auth/verify-email)
-	VerifyEmail(w http.ResponseWriter, r *http.Request)
+	VerifyEmail(w http.ResponseWriter, r *http.Request, params VerifyEmailParams)
 
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
@@ -1018,7 +1204,7 @@ type ServerInterface interface {
 	ListOrganizers(w http.ResponseWriter, r *http.Request)
 
 	// (POST /organizers)
-	CreateOrganizer(w http.ResponseWriter, r *http.Request)
+	CreateOrganizer(w http.ResponseWriter, r *http.Request, params CreateOrganizerParams)
 
 	// (GET /organizers/{organizer})
 	GetOrganizer(w http.ResponseWriter, r *http.Request, organizer OrganizerPath)
@@ -1027,10 +1213,10 @@ type ServerInterface interface {
 	ListApiKeys(w http.ResponseWriter, r *http.Request, organizer OrganizerPath)
 
 	// (POST /organizers/{organizer}/api-keys)
-	CreateApiKey(w http.ResponseWriter, r *http.Request, organizer OrganizerPath)
+	CreateApiKey(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, params CreateApiKeyParams)
 
 	// (DELETE /organizers/{organizer}/api-keys/{apiKey})
-	RevokeApiKey(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, apiKey openapi_types.UUID)
+	RevokeApiKey(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, apiKey openapi_types.UUID, params RevokeApiKeyParams)
 
 	// (GET /organizers/{organizer}/audit)
 	ListAudit(w http.ResponseWriter, r *http.Request, organizer OrganizerPath)
@@ -1039,82 +1225,82 @@ type ServerInterface interface {
 	ListEvents(w http.ResponseWriter, r *http.Request, organizer OrganizerPath)
 
 	// (POST /organizers/{organizer}/events)
-	CreateEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath)
+	CreateEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, params CreateEventParams)
 
 	// (DELETE /organizers/{organizer}/events/{event})
-	DeleteEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+	DeleteEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params DeleteEventParams)
 
 	// (GET /organizers/{organizer}/events/{event})
 	GetEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
 
 	// (PATCH /organizers/{organizer}/events/{event})
-	UpdateEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+	UpdateEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params UpdateEventParams)
 
 	// (GET /organizers/{organizer}/events/{event}/promo-codes)
 	ListPromoCodes(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
 
 	// (POST /organizers/{organizer}/events/{event}/promo-codes)
-	CreatePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+	CreatePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params CreatePromoCodeParams)
 
 	// (DELETE /organizers/{organizer}/events/{event}/promo-codes/{promoCode})
-	DeletePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath)
+	DeletePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath, params DeletePromoCodeParams)
 
 	// (GET /organizers/{organizer}/events/{event}/promo-codes/{promoCode})
 	GetPromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath)
 
 	// (PATCH /organizers/{organizer}/events/{event}/promo-codes/{promoCode})
-	UpdatePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath)
+	UpdatePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath, params UpdatePromoCodeParams)
 
 	// (GET /organizers/{organizer}/events/{event}/questions)
 	ListQuestions(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
 
 	// (POST /organizers/{organizer}/events/{event}/questions)
-	CreateQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+	CreateQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params CreateQuestionParams)
 
 	// (PUT /organizers/{organizer}/events/{event}/questions/order)
-	ReorderQuestions(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+	ReorderQuestions(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params ReorderQuestionsParams)
 
 	// (DELETE /organizers/{organizer}/events/{event}/questions/{question})
-	DeleteQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, question QuestionPath)
+	DeleteQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, question QuestionPath, params DeleteQuestionParams)
 
 	// (GET /organizers/{organizer}/events/{event}/questions/{question})
 	GetQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, question QuestionPath)
 
 	// (PATCH /organizers/{organizer}/events/{event}/questions/{question})
-	UpdateQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, question QuestionPath)
+	UpdateQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, question QuestionPath, params UpdateQuestionParams)
 
 	// (GET /organizers/{organizer}/events/{event}/quotas)
 	ListQuotas(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
 
 	// (POST /organizers/{organizer}/events/{event}/quotas)
-	CreateQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+	CreateQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params CreateQuotaParams)
 
 	// (DELETE /organizers/{organizer}/events/{event}/quotas/{quota})
-	DeleteQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, quota QuotaPath)
+	DeleteQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, quota QuotaPath, params DeleteQuotaParams)
 
 	// (GET /organizers/{organizer}/events/{event}/quotas/{quota})
 	GetQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, quota QuotaPath)
 
 	// (PATCH /organizers/{organizer}/events/{event}/quotas/{quota})
-	UpdateQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, quota QuotaPath)
+	UpdateQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, quota QuotaPath, params UpdateQuotaParams)
 
 	// (GET /organizers/{organizer}/events/{event}/ticket-types)
 	ListTicketTypes(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
 
 	// (POST /organizers/{organizer}/events/{event}/ticket-types)
-	CreateTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+	CreateTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params CreateTicketTypeParams)
 
 	// (PUT /organizers/{organizer}/events/{event}/ticket-types/order)
-	ReorderTicketTypes(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+	ReorderTicketTypes(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params ReorderTicketTypesParams)
 
 	// (DELETE /organizers/{organizer}/events/{event}/ticket-types/{ticketType})
-	DeleteTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, ticketType TicketTypePath)
+	DeleteTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, ticketType TicketTypePath, params DeleteTicketTypeParams)
 
 	// (GET /organizers/{organizer}/events/{event}/ticket-types/{ticketType})
 	GetTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, ticketType TicketTypePath)
 
 	// (PATCH /organizers/{organizer}/events/{event}/ticket-types/{ticketType})
-	UpdateTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, ticketType TicketTypePath)
+	UpdateTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, ticketType TicketTypePath, params UpdateTicketTypeParams)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -1129,8 +1315,35 @@ type MiddlewareFunc func(http.Handler) http.Handler
 // Login operation middleware
 func (siw *ServerInterfaceWrapper) Login(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params LoginParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.Login(w, r)
+		siw.Handler.Login(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1143,8 +1356,35 @@ func (siw *ServerInterfaceWrapper) Login(w http.ResponseWriter, r *http.Request)
 // Logout operation middleware
 func (siw *ServerInterfaceWrapper) Logout(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params LogoutParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.Logout(w, r)
+		siw.Handler.Logout(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1157,8 +1397,35 @@ func (siw *ServerInterfaceWrapper) Logout(w http.ResponseWriter, r *http.Request
 // BeginPasskeyLogin operation middleware
 func (siw *ServerInterfaceWrapper) BeginPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params BeginPasskeyLoginParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.BeginPasskeyLogin(w, r)
+		siw.Handler.BeginPasskeyLogin(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1183,8 +1450,32 @@ func (siw *ServerInterfaceWrapper) FinishPasskeyLogin(w http.ResponseWriter, r *
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params FinishPasskeyLoginParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.FinishPasskeyLogin(w, r, challengeId)
+		siw.Handler.FinishPasskeyLogin(w, r, challengeId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1197,8 +1488,35 @@ func (siw *ServerInterfaceWrapper) FinishPasskeyLogin(w http.ResponseWriter, r *
 // BeginPasskeyRegistration operation middleware
 func (siw *ServerInterfaceWrapper) BeginPasskeyRegistration(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params BeginPasskeyRegistrationParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.BeginPasskeyRegistration(w, r)
+		siw.Handler.BeginPasskeyRegistration(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1239,6 +1557,27 @@ func (siw *ServerInterfaceWrapper) FinishPasskeyRegistration(w http.ResponseWrit
 		return
 	}
 
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.FinishPasskeyRegistration(w, r, challengeId, params)
 	}))
@@ -1253,8 +1592,35 @@ func (siw *ServerInterfaceWrapper) FinishPasskeyRegistration(w http.ResponseWrit
 // CreateRecoveryCodes operation middleware
 func (siw *ServerInterfaceWrapper) CreateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateRecoveryCodesParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.CreateRecoveryCodes(w, r)
+		siw.Handler.CreateRecoveryCodes(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1267,8 +1633,35 @@ func (siw *ServerInterfaceWrapper) CreateRecoveryCodes(w http.ResponseWriter, r 
 // Signup operation middleware
 func (siw *ServerInterfaceWrapper) Signup(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SignupParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.Signup(w, r)
+		siw.Handler.Signup(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1281,8 +1674,35 @@ func (siw *ServerInterfaceWrapper) Signup(w http.ResponseWriter, r *http.Request
 // StartTotp operation middleware
 func (siw *ServerInterfaceWrapper) StartTotp(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StartTotpParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.StartTotp(w, r)
+		siw.Handler.StartTotp(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1295,8 +1715,35 @@ func (siw *ServerInterfaceWrapper) StartTotp(w http.ResponseWriter, r *http.Requ
 // ConfirmTotp operation middleware
 func (siw *ServerInterfaceWrapper) ConfirmTotp(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ConfirmTotpParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ConfirmTotp(w, r)
+		siw.Handler.ConfirmTotp(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1309,8 +1756,35 @@ func (siw *ServerInterfaceWrapper) ConfirmTotp(w http.ResponseWriter, r *http.Re
 // VerifyEmail operation middleware
 func (siw *ServerInterfaceWrapper) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params VerifyEmailParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.VerifyEmail(w, r)
+		siw.Handler.VerifyEmail(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1365,8 +1839,35 @@ func (siw *ServerInterfaceWrapper) ListOrganizers(w http.ResponseWriter, r *http
 // CreateOrganizer operation middleware
 func (siw *ServerInterfaceWrapper) CreateOrganizer(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateOrganizerParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.CreateOrganizer(w, r)
+		siw.Handler.CreateOrganizer(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1443,8 +1944,32 @@ func (siw *ServerInterfaceWrapper) CreateApiKey(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateApiKeyParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.CreateApiKey(w, r, organizer)
+		siw.Handler.CreateApiKey(w, r, organizer, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1478,8 +2003,32 @@ func (siw *ServerInterfaceWrapper) RevokeApiKey(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RevokeApiKeyParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.RevokeApiKey(w, r, organizer, apiKey)
+		siw.Handler.RevokeApiKey(w, r, organizer, apiKey, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1556,8 +2105,32 @@ func (siw *ServerInterfaceWrapper) CreateEvent(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateEventParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.CreateEvent(w, r, organizer)
+		siw.Handler.CreateEvent(w, r, organizer, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1591,8 +2164,32 @@ func (siw *ServerInterfaceWrapper) DeleteEvent(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteEventParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.DeleteEvent(w, r, organizer, event)
+		siw.Handler.DeleteEvent(w, r, organizer, event, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1661,8 +2258,32 @@ func (siw *ServerInterfaceWrapper) UpdateEvent(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateEventParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.UpdateEvent(w, r, organizer, event)
+		siw.Handler.UpdateEvent(w, r, organizer, event, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1731,8 +2352,32 @@ func (siw *ServerInterfaceWrapper) CreatePromoCode(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreatePromoCodeParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.CreatePromoCode(w, r, organizer, event)
+		siw.Handler.CreatePromoCode(w, r, organizer, event, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1775,8 +2420,32 @@ func (siw *ServerInterfaceWrapper) DeletePromoCode(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeletePromoCodeParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.DeletePromoCode(w, r, organizer, event, promoCode)
+		siw.Handler.DeletePromoCode(w, r, organizer, event, promoCode, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1863,8 +2532,32 @@ func (siw *ServerInterfaceWrapper) UpdatePromoCode(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdatePromoCodeParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.UpdatePromoCode(w, r, organizer, event, promoCode)
+		siw.Handler.UpdatePromoCode(w, r, organizer, event, promoCode, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1933,8 +2626,32 @@ func (siw *ServerInterfaceWrapper) CreateQuestion(w http.ResponseWriter, r *http
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateQuestionParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.CreateQuestion(w, r, organizer, event)
+		siw.Handler.CreateQuestion(w, r, organizer, event, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1968,8 +2685,32 @@ func (siw *ServerInterfaceWrapper) ReorderQuestions(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ReorderQuestionsParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ReorderQuestions(w, r, organizer, event)
+		siw.Handler.ReorderQuestions(w, r, organizer, event, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2012,8 +2753,32 @@ func (siw *ServerInterfaceWrapper) DeleteQuestion(w http.ResponseWriter, r *http
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteQuestionParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.DeleteQuestion(w, r, organizer, event, question)
+		siw.Handler.DeleteQuestion(w, r, organizer, event, question, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2100,8 +2865,32 @@ func (siw *ServerInterfaceWrapper) UpdateQuestion(w http.ResponseWriter, r *http
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateQuestionParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.UpdateQuestion(w, r, organizer, event, question)
+		siw.Handler.UpdateQuestion(w, r, organizer, event, question, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2170,8 +2959,32 @@ func (siw *ServerInterfaceWrapper) CreateQuota(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateQuotaParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.CreateQuota(w, r, organizer, event)
+		siw.Handler.CreateQuota(w, r, organizer, event, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2214,8 +3027,32 @@ func (siw *ServerInterfaceWrapper) DeleteQuota(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteQuotaParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.DeleteQuota(w, r, organizer, event, quota)
+		siw.Handler.DeleteQuota(w, r, organizer, event, quota, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2302,8 +3139,32 @@ func (siw *ServerInterfaceWrapper) UpdateQuota(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateQuotaParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.UpdateQuota(w, r, organizer, event, quota)
+		siw.Handler.UpdateQuota(w, r, organizer, event, quota, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2372,8 +3233,32 @@ func (siw *ServerInterfaceWrapper) CreateTicketType(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateTicketTypeParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.CreateTicketType(w, r, organizer, event)
+		siw.Handler.CreateTicketType(w, r, organizer, event, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2407,8 +3292,32 @@ func (siw *ServerInterfaceWrapper) ReorderTicketTypes(w http.ResponseWriter, r *
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ReorderTicketTypesParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ReorderTicketTypes(w, r, organizer, event)
+		siw.Handler.ReorderTicketTypes(w, r, organizer, event, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2451,8 +3360,32 @@ func (siw *ServerInterfaceWrapper) DeleteTicketType(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteTicketTypeParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.DeleteTicketType(w, r, organizer, event, ticketType)
+		siw.Handler.DeleteTicketType(w, r, organizer, event, ticketType, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2539,8 +3472,32 @@ func (siw *ServerInterfaceWrapper) UpdateTicketType(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateTicketTypeParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.UpdateTicketType(w, r, organizer, event, ticketType)
+		siw.Handler.UpdateTicketType(w, r, organizer, event, ticketType, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2724,7 +3681,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 type ErrorJSONResponse Error
 
 type LoginRequestObject struct {
-	Body *LoginJSONRequestBody
+	Params LoginParams
+	Body   *LoginJSONRequestBody
 }
 
 type LoginResponseObject interface {
@@ -2745,7 +3703,21 @@ func (response Login200JSONResponse) VisitLoginResponse(w http.ResponseWriter) e
 	return err
 }
 
-type Login401JSONResponse struct{ ErrorJSONResponse }
+type Login400JSONResponse struct{ ErrorJSONResponse }
+
+func (response Login400JSONResponse) VisitLoginResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Login401JSONResponse Error
 
 func (response Login401JSONResponse) VisitLoginResponse(w http.ResponseWriter) error {
 
@@ -2755,6 +3727,20 @@ func (response Login401JSONResponse) VisitLoginResponse(w http.ResponseWriter) e
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Login409JSONResponse Error
+
+func (response Login409JSONResponse) VisitLoginResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -2802,6 +3788,7 @@ func (response Login429JSONResponse) VisitLoginResponse(w http.ResponseWriter) e
 }
 
 type LogoutRequestObject struct {
+	Params LogoutParams
 }
 
 type LogoutResponseObject interface {
@@ -2816,7 +3803,21 @@ func (response Logout204Response) VisitLogoutResponse(w http.ResponseWriter) err
 	return nil
 }
 
-type Logout401JSONResponse struct{ ErrorJSONResponse }
+type Logout400JSONResponse struct{ ErrorJSONResponse }
+
+func (response Logout400JSONResponse) VisitLogoutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Logout401JSONResponse Error
 
 func (response Logout401JSONResponse) VisitLogoutResponse(w http.ResponseWriter) error {
 
@@ -2844,7 +3845,36 @@ func (response Logout403JSONResponse) VisitLogoutResponse(w http.ResponseWriter)
 	return err
 }
 
+type Logout409JSONResponse Error
+
+func (response Logout409JSONResponse) VisitLogoutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type Logout422JSONResponse Error
+
+func (response Logout422JSONResponse) VisitLogoutResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type BeginPasskeyLoginRequestObject struct {
+	Params BeginPasskeyLoginParams
 }
 
 type BeginPasskeyLoginResponseObject interface {
@@ -2865,7 +3895,49 @@ func (response BeginPasskeyLogin200JSONResponse) VisitBeginPasskeyLoginResponse(
 	return err
 }
 
-type BeginPasskeyLogin429JSONResponse struct{ ErrorJSONResponse }
+type BeginPasskeyLogin400JSONResponse struct{ ErrorJSONResponse }
+
+func (response BeginPasskeyLogin400JSONResponse) VisitBeginPasskeyLoginResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyLogin409JSONResponse Error
+
+func (response BeginPasskeyLogin409JSONResponse) VisitBeginPasskeyLoginResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyLogin422JSONResponse Error
+
+func (response BeginPasskeyLogin422JSONResponse) VisitBeginPasskeyLoginResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyLogin429JSONResponse Error
 
 func (response BeginPasskeyLogin429JSONResponse) VisitBeginPasskeyLoginResponse(w http.ResponseWriter) error {
 
@@ -2881,6 +3953,7 @@ func (response BeginPasskeyLogin429JSONResponse) VisitBeginPasskeyLoginResponse(
 
 type FinishPasskeyLoginRequestObject struct {
 	ChallengeId openapi_types.UUID `json:"challengeId"`
+	Params      FinishPasskeyLoginParams
 	Body        *FinishPasskeyLoginJSONRequestBody
 }
 
@@ -2930,6 +4003,34 @@ func (response FinishPasskeyLogin401JSONResponse) VisitFinishPasskeyLoginRespons
 	return err
 }
 
+type FinishPasskeyLogin409JSONResponse Error
+
+func (response FinishPasskeyLogin409JSONResponse) VisitFinishPasskeyLoginResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishPasskeyLogin422JSONResponse Error
+
+func (response FinishPasskeyLogin422JSONResponse) VisitFinishPasskeyLoginResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type FinishPasskeyLogin429JSONResponse Error
 
 func (response FinishPasskeyLogin429JSONResponse) VisitFinishPasskeyLoginResponse(w http.ResponseWriter) error {
@@ -2945,7 +4046,8 @@ func (response FinishPasskeyLogin429JSONResponse) VisitFinishPasskeyLoginRespons
 }
 
 type BeginPasskeyRegistrationRequestObject struct {
-	Body *BeginPasskeyRegistrationJSONRequestBody
+	Params BeginPasskeyRegistrationParams
+	Body   *BeginPasskeyRegistrationJSONRequestBody
 }
 
 type BeginPasskeyRegistrationResponseObject interface {
@@ -2966,7 +4068,21 @@ func (response BeginPasskeyRegistration200JSONResponse) VisitBeginPasskeyRegistr
 	return err
 }
 
-type BeginPasskeyRegistration401JSONResponse struct{ ErrorJSONResponse }
+type BeginPasskeyRegistration400JSONResponse struct{ ErrorJSONResponse }
+
+func (response BeginPasskeyRegistration400JSONResponse) VisitBeginPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyRegistration401JSONResponse Error
 
 func (response BeginPasskeyRegistration401JSONResponse) VisitBeginPasskeyRegistrationResponse(w http.ResponseWriter) error {
 
@@ -2990,6 +4106,34 @@ func (response BeginPasskeyRegistration403JSONResponse) VisitBeginPasskeyRegistr
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyRegistration409JSONResponse Error
+
+func (response BeginPasskeyRegistration409JSONResponse) VisitBeginPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BeginPasskeyRegistration422JSONResponse Error
+
+func (response BeginPasskeyRegistration422JSONResponse) VisitBeginPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3088,6 +4232,20 @@ func (response FinishPasskeyRegistration403JSONResponse) VisitFinishPasskeyRegis
 	return err
 }
 
+type FinishPasskeyRegistration409JSONResponse Error
+
+func (response FinishPasskeyRegistration409JSONResponse) VisitFinishPasskeyRegistrationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type FinishPasskeyRegistration422JSONResponse Error
 
 func (response FinishPasskeyRegistration422JSONResponse) VisitFinishPasskeyRegistrationResponse(w http.ResponseWriter) error {
@@ -3103,6 +4261,7 @@ func (response FinishPasskeyRegistration422JSONResponse) VisitFinishPasskeyRegis
 }
 
 type CreateRecoveryCodesRequestObject struct {
+	Params CreateRecoveryCodesParams
 }
 
 type CreateRecoveryCodesResponseObject interface {
@@ -3125,7 +4284,21 @@ func (response CreateRecoveryCodes200JSONResponse) VisitCreateRecoveryCodesRespo
 	return err
 }
 
-type CreateRecoveryCodes401JSONResponse struct{ ErrorJSONResponse }
+type CreateRecoveryCodes400JSONResponse struct{ ErrorJSONResponse }
+
+func (response CreateRecoveryCodes400JSONResponse) VisitCreateRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateRecoveryCodes401JSONResponse Error
 
 func (response CreateRecoveryCodes401JSONResponse) VisitCreateRecoveryCodesResponse(w http.ResponseWriter) error {
 
@@ -3167,6 +4340,20 @@ func (response CreateRecoveryCodes409JSONResponse) VisitCreateRecoveryCodesRespo
 	return err
 }
 
+type CreateRecoveryCodes422JSONResponse Error
+
+func (response CreateRecoveryCodes422JSONResponse) VisitCreateRecoveryCodesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type CreateRecoveryCodes429JSONResponse Error
 
 func (response CreateRecoveryCodes429JSONResponse) VisitCreateRecoveryCodesResponse(w http.ResponseWriter) error {
@@ -3182,7 +4369,8 @@ func (response CreateRecoveryCodes429JSONResponse) VisitCreateRecoveryCodesRespo
 }
 
 type SignupRequestObject struct {
-	Body *SignupJSONRequestBody
+	Params SignupParams
+	Body   *SignupJSONRequestBody
 }
 
 type SignupResponseObject interface {
@@ -3260,7 +4448,8 @@ func (response Signup429JSONResponse) VisitSignupResponse(w http.ResponseWriter)
 }
 
 type StartTotpRequestObject struct {
-	Body *StartTotpJSONRequestBody
+	Params StartTotpParams
+	Body   *StartTotpJSONRequestBody
 }
 
 type StartTotpResponseObject interface {
@@ -3281,7 +4470,21 @@ func (response StartTotp200JSONResponse) VisitStartTotpResponse(w http.ResponseW
 	return err
 }
 
-type StartTotp401JSONResponse struct{ ErrorJSONResponse }
+type StartTotp400JSONResponse struct{ ErrorJSONResponse }
+
+func (response StartTotp400JSONResponse) VisitStartTotpResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartTotp401JSONResponse Error
 
 func (response StartTotp401JSONResponse) VisitStartTotpResponse(w http.ResponseWriter) error {
 
@@ -3323,8 +4526,23 @@ func (response StartTotp409JSONResponse) VisitStartTotpResponse(w http.ResponseW
 	return err
 }
 
+type StartTotp422JSONResponse Error
+
+func (response StartTotp422JSONResponse) VisitStartTotpResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ConfirmTotpRequestObject struct {
-	Body *ConfirmTotpJSONRequestBody
+	Params ConfirmTotpParams
+	Body   *ConfirmTotpJSONRequestBody
 }
 
 type ConfirmTotpResponseObject interface {
@@ -3381,8 +4599,37 @@ func (response ConfirmTotp403JSONResponse) VisitConfirmTotpResponse(w http.Respo
 	return err
 }
 
+type ConfirmTotp409JSONResponse Error
+
+func (response ConfirmTotp409JSONResponse) VisitConfirmTotpResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmTotp422JSONResponse Error
+
+func (response ConfirmTotp422JSONResponse) VisitConfirmTotpResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type VerifyEmailRequestObject struct {
-	Body *VerifyEmailJSONRequestBody
+	Params VerifyEmailParams
+	Body   *VerifyEmailJSONRequestBody
 }
 
 type VerifyEmailResponseObject interface {
@@ -3407,6 +4654,34 @@ func (response VerifyEmail400JSONResponse) VisitVerifyEmailResponse(w http.Respo
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyEmail409JSONResponse Error
+
+func (response VerifyEmail409JSONResponse) VisitVerifyEmailResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyEmail422JSONResponse Error
+
+func (response VerifyEmail422JSONResponse) VisitVerifyEmailResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3531,7 +4806,8 @@ func (response ListOrganizers403JSONResponse) VisitListOrganizersResponse(w http
 }
 
 type CreateOrganizerRequestObject struct {
-	Body *CreateOrganizerJSONRequestBody
+	Params CreateOrganizerParams
+	Body   *CreateOrganizerJSONRequestBody
 }
 
 type CreateOrganizerResponseObject interface {
@@ -3552,7 +4828,21 @@ func (response CreateOrganizer201JSONResponse) VisitCreateOrganizerResponse(w ht
 	return err
 }
 
-type CreateOrganizer401JSONResponse struct{ ErrorJSONResponse }
+type CreateOrganizer400JSONResponse struct{ ErrorJSONResponse }
+
+func (response CreateOrganizer400JSONResponse) VisitCreateOrganizerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateOrganizer401JSONResponse Error
 
 func (response CreateOrganizer401JSONResponse) VisitCreateOrganizerResponse(w http.ResponseWriter) error {
 
@@ -3738,6 +5028,7 @@ func (response ListApiKeys404JSONResponse) VisitListApiKeysResponse(w http.Respo
 
 type CreateApiKeyRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
+	Params    CreateApiKeyParams
 	Body      *CreateApiKeyJSONRequestBody
 }
 
@@ -3759,7 +5050,21 @@ func (response CreateApiKey201JSONResponse) VisitCreateApiKeyResponse(w http.Res
 	return err
 }
 
-type CreateApiKey401JSONResponse struct{ ErrorJSONResponse }
+type CreateApiKey400JSONResponse struct{ ErrorJSONResponse }
+
+func (response CreateApiKey400JSONResponse) VisitCreateApiKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateApiKey401JSONResponse Error
 
 func (response CreateApiKey401JSONResponse) VisitCreateApiKeyResponse(w http.ResponseWriter) error {
 
@@ -3801,6 +5106,20 @@ func (response CreateApiKey404JSONResponse) VisitCreateApiKeyResponse(w http.Res
 	return err
 }
 
+type CreateApiKey409JSONResponse Error
+
+func (response CreateApiKey409JSONResponse) VisitCreateApiKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type CreateApiKey422JSONResponse Error
 
 func (response CreateApiKey422JSONResponse) VisitCreateApiKeyResponse(w http.ResponseWriter) error {
@@ -3818,6 +5137,7 @@ func (response CreateApiKey422JSONResponse) VisitCreateApiKeyResponse(w http.Res
 type RevokeApiKeyRequestObject struct {
 	Organizer OrganizerPath      `json:"organizer"`
 	ApiKey    openapi_types.UUID `json:"apiKey"`
+	Params    RevokeApiKeyParams
 }
 
 type RevokeApiKeyResponseObject interface {
@@ -3832,7 +5152,21 @@ func (response RevokeApiKey204Response) VisitRevokeApiKeyResponse(w http.Respons
 	return nil
 }
 
-type RevokeApiKey401JSONResponse struct{ ErrorJSONResponse }
+type RevokeApiKey400JSONResponse struct{ ErrorJSONResponse }
+
+func (response RevokeApiKey400JSONResponse) VisitRevokeApiKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeApiKey401JSONResponse Error
 
 func (response RevokeApiKey401JSONResponse) VisitRevokeApiKeyResponse(w http.ResponseWriter) error {
 
@@ -3870,6 +5204,34 @@ func (response RevokeApiKey404JSONResponse) VisitRevokeApiKeyResponse(w http.Res
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeApiKey409JSONResponse Error
+
+func (response RevokeApiKey409JSONResponse) VisitRevokeApiKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeApiKey422JSONResponse Error
+
+func (response RevokeApiKey422JSONResponse) VisitRevokeApiKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3990,6 +5352,7 @@ func (response ListEvents404JSONResponse) VisitListEventsResponse(w http.Respons
 
 type CreateEventRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
+	Params    CreateEventParams
 	Body      *CreateEventJSONRequestBody
 }
 
@@ -4011,7 +5374,21 @@ func (response CreateEvent201JSONResponse) VisitCreateEventResponse(w http.Respo
 	return err
 }
 
-type CreateEvent401JSONResponse struct{ ErrorJSONResponse }
+type CreateEvent400JSONResponse struct{ ErrorJSONResponse }
+
+func (response CreateEvent400JSONResponse) VisitCreateEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEvent401JSONResponse Error
 
 func (response CreateEvent401JSONResponse) VisitCreateEventResponse(w http.ResponseWriter) error {
 
@@ -4084,6 +5461,7 @@ func (response CreateEvent422JSONResponse) VisitCreateEventResponse(w http.Respo
 type DeleteEventRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
+	Params    DeleteEventParams
 }
 
 type DeleteEventResponseObject interface {
@@ -4098,7 +5476,21 @@ func (response DeleteEvent204Response) VisitDeleteEventResponse(w http.ResponseW
 	return nil
 }
 
-type DeleteEvent401JSONResponse struct{ ErrorJSONResponse }
+type DeleteEvent400JSONResponse struct{ ErrorJSONResponse }
+
+func (response DeleteEvent400JSONResponse) VisitDeleteEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteEvent401JSONResponse Error
 
 func (response DeleteEvent401JSONResponse) VisitDeleteEventResponse(w http.ResponseWriter) error {
 
@@ -4150,6 +5542,20 @@ func (response DeleteEvent409JSONResponse) VisitDeleteEventResponse(w http.Respo
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteEvent422JSONResponse Error
+
+func (response DeleteEvent422JSONResponse) VisitDeleteEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4208,6 +5614,7 @@ func (response GetEvent404JSONResponse) VisitGetEventResponse(w http.ResponseWri
 type UpdateEventRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
+	Params    UpdateEventParams
 	Body      *UpdateEventJSONRequestBody
 }
 
@@ -4229,7 +5636,21 @@ func (response UpdateEvent200JSONResponse) VisitUpdateEventResponse(w http.Respo
 	return err
 }
 
-type UpdateEvent401JSONResponse struct{ ErrorJSONResponse }
+type UpdateEvent400JSONResponse struct{ ErrorJSONResponse }
+
+func (response UpdateEvent400JSONResponse) VisitUpdateEventResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEvent401JSONResponse Error
 
 func (response UpdateEvent401JSONResponse) VisitUpdateEventResponse(w http.ResponseWriter) error {
 
@@ -4353,6 +5774,7 @@ func (response ListPromoCodes404JSONResponse) VisitListPromoCodesResponse(w http
 type CreatePromoCodeRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
+	Params    CreatePromoCodeParams
 	Body      *CreatePromoCodeJSONRequestBody
 }
 
@@ -4374,7 +5796,21 @@ func (response CreatePromoCode201JSONResponse) VisitCreatePromoCodeResponse(w ht
 	return err
 }
 
-type CreatePromoCode401JSONResponse struct{ ErrorJSONResponse }
+type CreatePromoCode400JSONResponse struct{ ErrorJSONResponse }
+
+func (response CreatePromoCode400JSONResponse) VisitCreatePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePromoCode401JSONResponse Error
 
 func (response CreatePromoCode401JSONResponse) VisitCreatePromoCodeResponse(w http.ResponseWriter) error {
 
@@ -4448,6 +5884,7 @@ type DeletePromoCodeRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
 	PromoCode PromoCodePath `json:"promoCode"`
+	Params    DeletePromoCodeParams
 }
 
 type DeletePromoCodeResponseObject interface {
@@ -4462,7 +5899,21 @@ func (response DeletePromoCode204Response) VisitDeletePromoCodeResponse(w http.R
 	return nil
 }
 
-type DeletePromoCode401JSONResponse struct{ ErrorJSONResponse }
+type DeletePromoCode400JSONResponse struct{ ErrorJSONResponse }
+
+func (response DeletePromoCode400JSONResponse) VisitDeletePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePromoCode401JSONResponse Error
 
 func (response DeletePromoCode401JSONResponse) VisitDeletePromoCodeResponse(w http.ResponseWriter) error {
 
@@ -4514,6 +5965,20 @@ func (response DeletePromoCode409JSONResponse) VisitDeletePromoCodeResponse(w ht
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeletePromoCode422JSONResponse Error
+
+func (response DeletePromoCode422JSONResponse) VisitDeletePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4574,6 +6039,7 @@ type UpdatePromoCodeRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
 	PromoCode PromoCodePath `json:"promoCode"`
+	Params    UpdatePromoCodeParams
 	Body      *UpdatePromoCodeJSONRequestBody
 }
 
@@ -4595,7 +6061,21 @@ func (response UpdatePromoCode200JSONResponse) VisitUpdatePromoCodeResponse(w ht
 	return err
 }
 
-type UpdatePromoCode401JSONResponse struct{ ErrorJSONResponse }
+type UpdatePromoCode400JSONResponse struct{ ErrorJSONResponse }
+
+func (response UpdatePromoCode400JSONResponse) VisitUpdatePromoCodeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdatePromoCode401JSONResponse Error
 
 func (response UpdatePromoCode401JSONResponse) VisitUpdatePromoCodeResponse(w http.ResponseWriter) error {
 
@@ -4719,6 +6199,7 @@ func (response ListQuestions404JSONResponse) VisitListQuestionsResponse(w http.R
 type CreateQuestionRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
+	Params    CreateQuestionParams
 	Body      *CreateQuestionJSONRequestBody
 }
 
@@ -4740,7 +6221,21 @@ func (response CreateQuestion201JSONResponse) VisitCreateQuestionResponse(w http
 	return err
 }
 
-type CreateQuestion401JSONResponse struct{ ErrorJSONResponse }
+type CreateQuestion400JSONResponse struct{ ErrorJSONResponse }
+
+func (response CreateQuestion400JSONResponse) VisitCreateQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateQuestion401JSONResponse Error
 
 func (response CreateQuestion401JSONResponse) VisitCreateQuestionResponse(w http.ResponseWriter) error {
 
@@ -4782,6 +6277,20 @@ func (response CreateQuestion404JSONResponse) VisitCreateQuestionResponse(w http
 	return err
 }
 
+type CreateQuestion409JSONResponse Error
+
+func (response CreateQuestion409JSONResponse) VisitCreateQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type CreateQuestion422JSONResponse Error
 
 func (response CreateQuestion422JSONResponse) VisitCreateQuestionResponse(w http.ResponseWriter) error {
@@ -4799,6 +6308,7 @@ func (response CreateQuestion422JSONResponse) VisitCreateQuestionResponse(w http
 type ReorderQuestionsRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
+	Params    ReorderQuestionsParams
 	Body      *ReorderQuestionsJSONRequestBody
 }
 
@@ -4820,7 +6330,21 @@ func (response ReorderQuestions200JSONResponse) VisitReorderQuestionsResponse(w 
 	return err
 }
 
-type ReorderQuestions401JSONResponse struct{ ErrorJSONResponse }
+type ReorderQuestions400JSONResponse struct{ ErrorJSONResponse }
+
+func (response ReorderQuestions400JSONResponse) VisitReorderQuestionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReorderQuestions401JSONResponse Error
 
 func (response ReorderQuestions401JSONResponse) VisitReorderQuestionsResponse(w http.ResponseWriter) error {
 
@@ -4862,6 +6386,20 @@ func (response ReorderQuestions404JSONResponse) VisitReorderQuestionsResponse(w 
 	return err
 }
 
+type ReorderQuestions409JSONResponse Error
+
+func (response ReorderQuestions409JSONResponse) VisitReorderQuestionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ReorderQuestions422JSONResponse Error
 
 func (response ReorderQuestions422JSONResponse) VisitReorderQuestionsResponse(w http.ResponseWriter) error {
@@ -4880,6 +6418,7 @@ type DeleteQuestionRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
 	Question  QuestionPath  `json:"question"`
+	Params    DeleteQuestionParams
 }
 
 type DeleteQuestionResponseObject interface {
@@ -4894,7 +6433,21 @@ func (response DeleteQuestion204Response) VisitDeleteQuestionResponse(w http.Res
 	return nil
 }
 
-type DeleteQuestion401JSONResponse struct{ ErrorJSONResponse }
+type DeleteQuestion400JSONResponse struct{ ErrorJSONResponse }
+
+func (response DeleteQuestion400JSONResponse) VisitDeleteQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteQuestion401JSONResponse Error
 
 func (response DeleteQuestion401JSONResponse) VisitDeleteQuestionResponse(w http.ResponseWriter) error {
 
@@ -4946,6 +6499,20 @@ func (response DeleteQuestion409JSONResponse) VisitDeleteQuestionResponse(w http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteQuestion422JSONResponse Error
+
+func (response DeleteQuestion422JSONResponse) VisitDeleteQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5006,6 +6573,7 @@ type UpdateQuestionRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
 	Question  QuestionPath  `json:"question"`
+	Params    UpdateQuestionParams
 	Body      *UpdateQuestionJSONRequestBody
 }
 
@@ -5027,7 +6595,21 @@ func (response UpdateQuestion200JSONResponse) VisitUpdateQuestionResponse(w http
 	return err
 }
 
-type UpdateQuestion401JSONResponse struct{ ErrorJSONResponse }
+type UpdateQuestion400JSONResponse struct{ ErrorJSONResponse }
+
+func (response UpdateQuestion400JSONResponse) VisitUpdateQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateQuestion401JSONResponse Error
 
 func (response UpdateQuestion401JSONResponse) VisitUpdateQuestionResponse(w http.ResponseWriter) error {
 
@@ -5065,6 +6647,20 @@ func (response UpdateQuestion404JSONResponse) VisitUpdateQuestionResponse(w http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateQuestion409JSONResponse Error
+
+func (response UpdateQuestion409JSONResponse) VisitUpdateQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5137,6 +6733,7 @@ func (response ListQuotas404JSONResponse) VisitListQuotasResponse(w http.Respons
 type CreateQuotaRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
+	Params    CreateQuotaParams
 	Body      *CreateQuotaJSONRequestBody
 }
 
@@ -5158,7 +6755,21 @@ func (response CreateQuota201JSONResponse) VisitCreateQuotaResponse(w http.Respo
 	return err
 }
 
-type CreateQuota401JSONResponse struct{ ErrorJSONResponse }
+type CreateQuota400JSONResponse struct{ ErrorJSONResponse }
+
+func (response CreateQuota400JSONResponse) VisitCreateQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateQuota401JSONResponse Error
 
 func (response CreateQuota401JSONResponse) VisitCreateQuotaResponse(w http.ResponseWriter) error {
 
@@ -5232,6 +6843,7 @@ type DeleteQuotaRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
 	Quota     QuotaPath     `json:"quota"`
+	Params    DeleteQuotaParams
 }
 
 type DeleteQuotaResponseObject interface {
@@ -5246,7 +6858,21 @@ func (response DeleteQuota204Response) VisitDeleteQuotaResponse(w http.ResponseW
 	return nil
 }
 
-type DeleteQuota401JSONResponse struct{ ErrorJSONResponse }
+type DeleteQuota400JSONResponse struct{ ErrorJSONResponse }
+
+func (response DeleteQuota400JSONResponse) VisitDeleteQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteQuota401JSONResponse Error
 
 func (response DeleteQuota401JSONResponse) VisitDeleteQuotaResponse(w http.ResponseWriter) error {
 
@@ -5298,6 +6924,20 @@ func (response DeleteQuota409JSONResponse) VisitDeleteQuotaResponse(w http.Respo
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteQuota422JSONResponse Error
+
+func (response DeleteQuota422JSONResponse) VisitDeleteQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5358,6 +6998,7 @@ type UpdateQuotaRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
 	Quota     QuotaPath     `json:"quota"`
+	Params    UpdateQuotaParams
 	Body      *UpdateQuotaJSONRequestBody
 }
 
@@ -5379,7 +7020,21 @@ func (response UpdateQuota200JSONResponse) VisitUpdateQuotaResponse(w http.Respo
 	return err
 }
 
-type UpdateQuota401JSONResponse struct{ ErrorJSONResponse }
+type UpdateQuota400JSONResponse struct{ ErrorJSONResponse }
+
+func (response UpdateQuota400JSONResponse) VisitUpdateQuotaResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateQuota401JSONResponse Error
 
 func (response UpdateQuota401JSONResponse) VisitUpdateQuotaResponse(w http.ResponseWriter) error {
 
@@ -5503,6 +7158,7 @@ func (response ListTicketTypes404JSONResponse) VisitListTicketTypesResponse(w ht
 type CreateTicketTypeRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
+	Params    CreateTicketTypeParams
 	Body      *CreateTicketTypeJSONRequestBody
 }
 
@@ -5524,7 +7180,21 @@ func (response CreateTicketType201JSONResponse) VisitCreateTicketTypeResponse(w 
 	return err
 }
 
-type CreateTicketType401JSONResponse struct{ ErrorJSONResponse }
+type CreateTicketType400JSONResponse struct{ ErrorJSONResponse }
+
+func (response CreateTicketType400JSONResponse) VisitCreateTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTicketType401JSONResponse Error
 
 func (response CreateTicketType401JSONResponse) VisitCreateTicketTypeResponse(w http.ResponseWriter) error {
 
@@ -5597,6 +7267,7 @@ func (response CreateTicketType422JSONResponse) VisitCreateTicketTypeResponse(w 
 type ReorderTicketTypesRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
+	Params    ReorderTicketTypesParams
 	Body      *ReorderTicketTypesJSONRequestBody
 }
 
@@ -5618,7 +7289,21 @@ func (response ReorderTicketTypes200JSONResponse) VisitReorderTicketTypesRespons
 	return err
 }
 
-type ReorderTicketTypes401JSONResponse struct{ ErrorJSONResponse }
+type ReorderTicketTypes400JSONResponse struct{ ErrorJSONResponse }
+
+func (response ReorderTicketTypes400JSONResponse) VisitReorderTicketTypesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReorderTicketTypes401JSONResponse Error
 
 func (response ReorderTicketTypes401JSONResponse) VisitReorderTicketTypesResponse(w http.ResponseWriter) error {
 
@@ -5660,6 +7345,20 @@ func (response ReorderTicketTypes404JSONResponse) VisitReorderTicketTypesRespons
 	return err
 }
 
+type ReorderTicketTypes409JSONResponse Error
+
+func (response ReorderTicketTypes409JSONResponse) VisitReorderTicketTypesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ReorderTicketTypes422JSONResponse Error
 
 func (response ReorderTicketTypes422JSONResponse) VisitReorderTicketTypesResponse(w http.ResponseWriter) error {
@@ -5678,6 +7377,7 @@ type DeleteTicketTypeRequestObject struct {
 	Organizer  OrganizerPath  `json:"organizer"`
 	Event      EventPath      `json:"event"`
 	TicketType TicketTypePath `json:"ticketType"`
+	Params     DeleteTicketTypeParams
 }
 
 type DeleteTicketTypeResponseObject interface {
@@ -5692,7 +7392,21 @@ func (response DeleteTicketType204Response) VisitDeleteTicketTypeResponse(w http
 	return nil
 }
 
-type DeleteTicketType401JSONResponse struct{ ErrorJSONResponse }
+type DeleteTicketType400JSONResponse struct{ ErrorJSONResponse }
+
+func (response DeleteTicketType400JSONResponse) VisitDeleteTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteTicketType401JSONResponse Error
 
 func (response DeleteTicketType401JSONResponse) VisitDeleteTicketTypeResponse(w http.ResponseWriter) error {
 
@@ -5744,6 +7458,20 @@ func (response DeleteTicketType409JSONResponse) VisitDeleteTicketTypeResponse(w 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteTicketType422JSONResponse Error
+
+func (response DeleteTicketType422JSONResponse) VisitDeleteTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5804,6 +7532,7 @@ type UpdateTicketTypeRequestObject struct {
 	Organizer  OrganizerPath  `json:"organizer"`
 	Event      EventPath      `json:"event"`
 	TicketType TicketTypePath `json:"ticketType"`
+	Params     UpdateTicketTypeParams
 	Body       *UpdateTicketTypeJSONRequestBody
 }
 
@@ -5825,7 +7554,21 @@ func (response UpdateTicketType200JSONResponse) VisitUpdateTicketTypeResponse(w 
 	return err
 }
 
-type UpdateTicketType401JSONResponse struct{ ErrorJSONResponse }
+type UpdateTicketType400JSONResponse struct{ ErrorJSONResponse }
+
+func (response UpdateTicketType400JSONResponse) VisitUpdateTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTicketType401JSONResponse Error
 
 func (response UpdateTicketType401JSONResponse) VisitUpdateTicketTypeResponse(w http.ResponseWriter) error {
 
@@ -6080,8 +7823,10 @@ type strictHandler struct {
 }
 
 // Login operation middleware
-func (sh *strictHandler) Login(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) Login(w http.ResponseWriter, r *http.Request, params LoginParams) {
 	var request LoginRequestObject
+
+	request.Params = params
 
 	var body LoginJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -6111,8 +7856,10 @@ func (sh *strictHandler) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 // Logout operation middleware
-func (sh *strictHandler) Logout(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) Logout(w http.ResponseWriter, r *http.Request, params LogoutParams) {
 	var request LogoutRequestObject
+
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.Logout(ctx, request.(LogoutRequestObject))
@@ -6135,8 +7882,10 @@ func (sh *strictHandler) Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 // BeginPasskeyLogin operation middleware
-func (sh *strictHandler) BeginPasskeyLogin(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) BeginPasskeyLogin(w http.ResponseWriter, r *http.Request, params BeginPasskeyLoginParams) {
 	var request BeginPasskeyLoginRequestObject
+
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.BeginPasskeyLogin(ctx, request.(BeginPasskeyLoginRequestObject))
@@ -6159,10 +7908,11 @@ func (sh *strictHandler) BeginPasskeyLogin(w http.ResponseWriter, r *http.Reques
 }
 
 // FinishPasskeyLogin operation middleware
-func (sh *strictHandler) FinishPasskeyLogin(w http.ResponseWriter, r *http.Request, challengeId openapi_types.UUID) {
+func (sh *strictHandler) FinishPasskeyLogin(w http.ResponseWriter, r *http.Request, challengeId openapi_types.UUID, params FinishPasskeyLoginParams) {
 	var request FinishPasskeyLoginRequestObject
 
 	request.ChallengeId = challengeId
+	request.Params = params
 
 	var body FinishPasskeyLoginJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -6192,8 +7942,10 @@ func (sh *strictHandler) FinishPasskeyLogin(w http.ResponseWriter, r *http.Reque
 }
 
 // BeginPasskeyRegistration operation middleware
-func (sh *strictHandler) BeginPasskeyRegistration(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) BeginPasskeyRegistration(w http.ResponseWriter, r *http.Request, params BeginPasskeyRegistrationParams) {
 	var request BeginPasskeyRegistrationRequestObject
+
+	request.Params = params
 
 	var body BeginPasskeyRegistrationJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -6260,8 +8012,10 @@ func (sh *strictHandler) FinishPasskeyRegistration(w http.ResponseWriter, r *htt
 }
 
 // CreateRecoveryCodes operation middleware
-func (sh *strictHandler) CreateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) CreateRecoveryCodes(w http.ResponseWriter, r *http.Request, params CreateRecoveryCodesParams) {
 	var request CreateRecoveryCodesRequestObject
+
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.CreateRecoveryCodes(ctx, request.(CreateRecoveryCodesRequestObject))
@@ -6284,8 +8038,10 @@ func (sh *strictHandler) CreateRecoveryCodes(w http.ResponseWriter, r *http.Requ
 }
 
 // Signup operation middleware
-func (sh *strictHandler) Signup(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) Signup(w http.ResponseWriter, r *http.Request, params SignupParams) {
 	var request SignupRequestObject
+
+	request.Params = params
 
 	var body SignupJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -6315,8 +8071,10 @@ func (sh *strictHandler) Signup(w http.ResponseWriter, r *http.Request) {
 }
 
 // StartTotp operation middleware
-func (sh *strictHandler) StartTotp(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) StartTotp(w http.ResponseWriter, r *http.Request, params StartTotpParams) {
 	var request StartTotpRequestObject
+
+	request.Params = params
 
 	var body StartTotpJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -6349,8 +8107,10 @@ func (sh *strictHandler) StartTotp(w http.ResponseWriter, r *http.Request) {
 }
 
 // ConfirmTotp operation middleware
-func (sh *strictHandler) ConfirmTotp(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) ConfirmTotp(w http.ResponseWriter, r *http.Request, params ConfirmTotpParams) {
 	var request ConfirmTotpRequestObject
+
+	request.Params = params
 
 	var body ConfirmTotpJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -6380,8 +8140,10 @@ func (sh *strictHandler) ConfirmTotp(w http.ResponseWriter, r *http.Request) {
 }
 
 // VerifyEmail operation middleware
-func (sh *strictHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) VerifyEmail(w http.ResponseWriter, r *http.Request, params VerifyEmailParams) {
 	var request VerifyEmailRequestObject
+
+	request.Params = params
 
 	var body VerifyEmailJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -6483,8 +8245,10 @@ func (sh *strictHandler) ListOrganizers(w http.ResponseWriter, r *http.Request) 
 }
 
 // CreateOrganizer operation middleware
-func (sh *strictHandler) CreateOrganizer(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) CreateOrganizer(w http.ResponseWriter, r *http.Request, params CreateOrganizerParams) {
 	var request CreateOrganizerRequestObject
+
+	request.Params = params
 
 	var body CreateOrganizerJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -6566,10 +8330,11 @@ func (sh *strictHandler) ListApiKeys(w http.ResponseWriter, r *http.Request, org
 }
 
 // CreateApiKey operation middleware
-func (sh *strictHandler) CreateApiKey(w http.ResponseWriter, r *http.Request, organizer OrganizerPath) {
+func (sh *strictHandler) CreateApiKey(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, params CreateApiKeyParams) {
 	var request CreateApiKeyRequestObject
 
 	request.Organizer = organizer
+	request.Params = params
 
 	var body CreateApiKeyJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -6599,11 +8364,12 @@ func (sh *strictHandler) CreateApiKey(w http.ResponseWriter, r *http.Request, or
 }
 
 // RevokeApiKey operation middleware
-func (sh *strictHandler) RevokeApiKey(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, apiKey openapi_types.UUID) {
+func (sh *strictHandler) RevokeApiKey(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, apiKey openapi_types.UUID, params RevokeApiKeyParams) {
 	var request RevokeApiKeyRequestObject
 
 	request.Organizer = organizer
 	request.ApiKey = apiKey
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.RevokeApiKey(ctx, request.(RevokeApiKeyRequestObject))
@@ -6678,10 +8444,11 @@ func (sh *strictHandler) ListEvents(w http.ResponseWriter, r *http.Request, orga
 }
 
 // CreateEvent operation middleware
-func (sh *strictHandler) CreateEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath) {
+func (sh *strictHandler) CreateEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, params CreateEventParams) {
 	var request CreateEventRequestObject
 
 	request.Organizer = organizer
+	request.Params = params
 
 	var body CreateEventJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -6711,11 +8478,12 @@ func (sh *strictHandler) CreateEvent(w http.ResponseWriter, r *http.Request, org
 }
 
 // DeleteEvent operation middleware
-func (sh *strictHandler) DeleteEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+func (sh *strictHandler) DeleteEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params DeleteEventParams) {
 	var request DeleteEventRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.DeleteEvent(ctx, request.(DeleteEventRequestObject))
@@ -6765,11 +8533,12 @@ func (sh *strictHandler) GetEvent(w http.ResponseWriter, r *http.Request, organi
 }
 
 // UpdateEvent operation middleware
-func (sh *strictHandler) UpdateEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+func (sh *strictHandler) UpdateEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params UpdateEventParams) {
 	var request UpdateEventRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
+	request.Params = params
 
 	var body UpdateEventJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -6826,11 +8595,12 @@ func (sh *strictHandler) ListPromoCodes(w http.ResponseWriter, r *http.Request, 
 }
 
 // CreatePromoCode operation middleware
-func (sh *strictHandler) CreatePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+func (sh *strictHandler) CreatePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params CreatePromoCodeParams) {
 	var request CreatePromoCodeRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
+	request.Params = params
 
 	var body CreatePromoCodeJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -6860,12 +8630,13 @@ func (sh *strictHandler) CreatePromoCode(w http.ResponseWriter, r *http.Request,
 }
 
 // DeletePromoCode operation middleware
-func (sh *strictHandler) DeletePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath) {
+func (sh *strictHandler) DeletePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath, params DeletePromoCodeParams) {
 	var request DeletePromoCodeRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
 	request.PromoCode = promoCode
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.DeletePromoCode(ctx, request.(DeletePromoCodeRequestObject))
@@ -6916,12 +8687,13 @@ func (sh *strictHandler) GetPromoCode(w http.ResponseWriter, r *http.Request, or
 }
 
 // UpdatePromoCode operation middleware
-func (sh *strictHandler) UpdatePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath) {
+func (sh *strictHandler) UpdatePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath, params UpdatePromoCodeParams) {
 	var request UpdatePromoCodeRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
 	request.PromoCode = promoCode
+	request.Params = params
 
 	var body UpdatePromoCodeJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -6978,11 +8750,12 @@ func (sh *strictHandler) ListQuestions(w http.ResponseWriter, r *http.Request, o
 }
 
 // CreateQuestion operation middleware
-func (sh *strictHandler) CreateQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+func (sh *strictHandler) CreateQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params CreateQuestionParams) {
 	var request CreateQuestionRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
+	request.Params = params
 
 	var body CreateQuestionJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -7012,11 +8785,12 @@ func (sh *strictHandler) CreateQuestion(w http.ResponseWriter, r *http.Request, 
 }
 
 // ReorderQuestions operation middleware
-func (sh *strictHandler) ReorderQuestions(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+func (sh *strictHandler) ReorderQuestions(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params ReorderQuestionsParams) {
 	var request ReorderQuestionsRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
+	request.Params = params
 
 	var body ReorderQuestionsJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -7046,12 +8820,13 @@ func (sh *strictHandler) ReorderQuestions(w http.ResponseWriter, r *http.Request
 }
 
 // DeleteQuestion operation middleware
-func (sh *strictHandler) DeleteQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, question QuestionPath) {
+func (sh *strictHandler) DeleteQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, question QuestionPath, params DeleteQuestionParams) {
 	var request DeleteQuestionRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
 	request.Question = question
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.DeleteQuestion(ctx, request.(DeleteQuestionRequestObject))
@@ -7102,12 +8877,13 @@ func (sh *strictHandler) GetQuestion(w http.ResponseWriter, r *http.Request, org
 }
 
 // UpdateQuestion operation middleware
-func (sh *strictHandler) UpdateQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, question QuestionPath) {
+func (sh *strictHandler) UpdateQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, question QuestionPath, params UpdateQuestionParams) {
 	var request UpdateQuestionRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
 	request.Question = question
+	request.Params = params
 
 	var body UpdateQuestionJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -7164,11 +8940,12 @@ func (sh *strictHandler) ListQuotas(w http.ResponseWriter, r *http.Request, orga
 }
 
 // CreateQuota operation middleware
-func (sh *strictHandler) CreateQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+func (sh *strictHandler) CreateQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params CreateQuotaParams) {
 	var request CreateQuotaRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
+	request.Params = params
 
 	var body CreateQuotaJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -7198,12 +8975,13 @@ func (sh *strictHandler) CreateQuota(w http.ResponseWriter, r *http.Request, org
 }
 
 // DeleteQuota operation middleware
-func (sh *strictHandler) DeleteQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, quota QuotaPath) {
+func (sh *strictHandler) DeleteQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, quota QuotaPath, params DeleteQuotaParams) {
 	var request DeleteQuotaRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
 	request.Quota = quota
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.DeleteQuota(ctx, request.(DeleteQuotaRequestObject))
@@ -7254,12 +9032,13 @@ func (sh *strictHandler) GetQuota(w http.ResponseWriter, r *http.Request, organi
 }
 
 // UpdateQuota operation middleware
-func (sh *strictHandler) UpdateQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, quota QuotaPath) {
+func (sh *strictHandler) UpdateQuota(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, quota QuotaPath, params UpdateQuotaParams) {
 	var request UpdateQuotaRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
 	request.Quota = quota
+	request.Params = params
 
 	var body UpdateQuotaJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -7316,11 +9095,12 @@ func (sh *strictHandler) ListTicketTypes(w http.ResponseWriter, r *http.Request,
 }
 
 // CreateTicketType operation middleware
-func (sh *strictHandler) CreateTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+func (sh *strictHandler) CreateTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params CreateTicketTypeParams) {
 	var request CreateTicketTypeRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
+	request.Params = params
 
 	var body CreateTicketTypeJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -7350,11 +9130,12 @@ func (sh *strictHandler) CreateTicketType(w http.ResponseWriter, r *http.Request
 }
 
 // ReorderTicketTypes operation middleware
-func (sh *strictHandler) ReorderTicketTypes(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+func (sh *strictHandler) ReorderTicketTypes(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, params ReorderTicketTypesParams) {
 	var request ReorderTicketTypesRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
+	request.Params = params
 
 	var body ReorderTicketTypesJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -7384,12 +9165,13 @@ func (sh *strictHandler) ReorderTicketTypes(w http.ResponseWriter, r *http.Reque
 }
 
 // DeleteTicketType operation middleware
-func (sh *strictHandler) DeleteTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, ticketType TicketTypePath) {
+func (sh *strictHandler) DeleteTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, ticketType TicketTypePath, params DeleteTicketTypeParams) {
 	var request DeleteTicketTypeRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
 	request.TicketType = ticketType
+	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.DeleteTicketType(ctx, request.(DeleteTicketTypeRequestObject))
@@ -7440,12 +9222,13 @@ func (sh *strictHandler) GetTicketType(w http.ResponseWriter, r *http.Request, o
 }
 
 // UpdateTicketType operation middleware
-func (sh *strictHandler) UpdateTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, ticketType TicketTypePath) {
+func (sh *strictHandler) UpdateTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, ticketType TicketTypePath, params UpdateTicketTypeParams) {
 	var request UpdateTicketTypeRequestObject
 
 	request.Organizer = organizer
 	request.Event = event
 	request.TicketType = ticketType
+	request.Params = params
 
 	var body UpdateTicketTypeJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -7479,119 +9262,132 @@ func (sh *strictHandler) UpdateTicketType(w http.ResponseWriter, r *http.Request
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
+	"oPuxmh5cvehdf7r+nwEA",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

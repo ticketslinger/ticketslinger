@@ -19,6 +19,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
 	"github.com/ticketslinger/ticketslinger/api/internal/config"
 	"github.com/ticketslinger/ticketslinger/api/internal/db"
+	"github.com/ticketslinger/ticketslinger/api/internal/idempotency"
 	"github.com/ticketslinger/ticketslinger/api/internal/organizers"
 )
 
@@ -42,6 +43,7 @@ func New(d Deps) http.Handler {
 	if d.Keys == nil {
 		d.Keys = apikeys.New(d.Pool)
 	}
+	noStore := noStoreRoutes()
 	s := &server{Deps: d, public: publicRoutes()}
 	strict := NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc:  func(w http.ResponseWriter, r *http.Request, err error) { writeBadRequest(w, r, err) },
@@ -53,7 +55,9 @@ func New(d Deps) http.Handler {
 		BaseRouter: mux,
 		// Runs before the strict handler decodes the body, so an
 		// unauthenticated request is a 401 whatever it sends.
-		Middlewares: []MiddlewareFunc{s.authenticate},
+		// idempotent is listed first, so it runs inside authenticate and
+		// can scope keys by the caller.
+		Middlewares: []MiddlewareFunc{idempotency.Middleware(d.Pool, idempotencyScope, func(r *http.Request) bool { return noStore[r.Pattern] }), s.authenticate},
 		// Path-parameter parse failures from the generated wrapper.
 		ErrorHandlerFunc: writeBadRequest,
 	})
@@ -78,6 +82,25 @@ func publicRoutes() map[string]bool {
 		}
 	}
 	return public
+}
+
+// noStoreRoutes returns the mux patterns of operations marked
+// `x-idempotency-store: false`: their responses carry credentials, so they
+// are never kept for replay.
+func noStoreRoutes() map[string]bool {
+	spec, err := GetSwagger()
+	if err != nil {
+		panic(err)
+	}
+	out := map[string]bool{}
+	for path, item := range spec.Paths.Map() {
+		for method, op := range item.Operations() {
+			if v, ok := op.Extensions["x-idempotency-store"].(bool); ok && !v {
+				out[method+" /v1"+path] = true
+			}
+		}
+	}
+	return out
 }
 
 type ctxKey int
@@ -132,6 +155,20 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// idempotencyScope names the caller, so one caller can't replay another's
+// response to the same key.
+func idempotencyScope(r *http.Request) string {
+	a, ok := r.Context().Value(authKey).(authed)
+	switch {
+	case !ok:
+		return "anon"
+	case a.isKey():
+		return "key:" + a.key.KeyID.String()
+	default:
+		return "user:" + a.user.ID.String()
+	}
 }
 
 // clientIP is the peer's address, or X-Real-IP when the peer is a trusted

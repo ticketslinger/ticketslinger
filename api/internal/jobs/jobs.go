@@ -141,8 +141,8 @@ func (w *Worker) handle(ctx context.Context, kind string, payload []byte) (err e
 
 const sweepBatch = 1000
 
-// Sweep deletes expired sessions, webauthn challenges and email tokens, and
-// old abandoned checkouts, a batch at a time. Every step runs; the errors
+// Sweep deletes expired sessions, webauthn challenges, email tokens and
+// idempotency keys, and old abandoned checkouts, a batch at a time. Every step runs; the errors
 // come back joined.
 func Sweep(ctx context.Context, pool *pgxpool.Pool) error {
 	var errs []error
@@ -150,6 +150,7 @@ func Sweep(ctx context.Context, pool *pgxpool.Pool) error {
 		`delete from sessions where id in (select id from sessions where expires_at < now() or created_at < now() - interval '90 days' limit $1)`,
 		`delete from webauthn_challenges where id in (select id from webauthn_challenges where expires_at < now() limit $1)`,
 		`delete from email_tokens where token_hash in (select token_hash from email_tokens where expires_at < now() limit $1)`,
+		`delete from idempotency_keys where (scope, key) in (select scope, key from idempotency_keys where expires_at < now() limit $1)`,
 	} {
 		for {
 			tag, err := pool.Exec(ctx, q, sweepBatch)
