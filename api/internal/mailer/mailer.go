@@ -51,3 +51,15 @@ func (m *Memory) LastToken() string {
 	}
 	return u.Query().Get("token")
 }
+
+// LastLink returns the first link in the newest message sent to to, or "".
+func (m *Memory) LastLink(to string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := len(m.Sent) - 1; i >= 0; i-- {
+		if m.Sent[i].To == to {
+			return linkRe.FindString(m.Sent[i].Text)
+		}
+	}
+	return ""
+}

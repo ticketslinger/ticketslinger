@@ -1,0 +1,69 @@
+import { expect, type Page, test } from "@playwright/test";
+
+const API = process.env.E2E_API ?? "http://127.0.0.1:3001";
+
+test("sign up, verify, create an organizer, then reach its audit log only after a passkey sign-in", async ({
+  page,
+  context,
+}) => {
+  const cdp = await context.newCDPSession(page);
+  await cdp.send("WebAuthn.enable");
+  await cdp.send("WebAuthn.addVirtualAuthenticator", {
+    options: {
+      protocol: "ctap2",
+      transport: "internal",
+      hasResidentKey: true,
+      hasUserVerification: true,
+      isUserVerified: true,
+    },
+  });
+
+  const email = `e2e-${Date.now()}@example.com`;
+  await page.goto("/signup");
+  await page.getByLabel("Name").fill("Eve");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("a long test passphrase");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByText("Check your inbox")).toBeVisible();
+
+  const mail = await fetch(`${API}/__test/last-email?to=${encodeURIComponent(email)}`);
+  expect(mail.status).toBe(200);
+  await page.goto(await mail.text());
+  await expect(page.getByText("Your email is verified")).toBeVisible();
+
+  // Creating an organizer needs only a verified email, but reading its audit
+  // log needs a second factor, which this password-only session doesn't have.
+  await page.goto("/organizers/new");
+  await page.getByLabel("Organizer name").fill("Eve's Events");
+  await page.getByRole("button", { name: "Create organizer" }).click();
+  await expect(page.getByText("Eve's Events")).toBeVisible();
+  const before = await readAudit(page);
+  expect(before.status).toBe(403);
+  expect(before.body).toMatchObject({ error: { code: "mfa_required" } });
+
+  // A password-only session has to confirm the password to add a passkey.
+  await page.goto("/security");
+  await page.getByLabel("Password").fill("a long test passphrase");
+  await page.getByRole("button", { name: "Add a passkey" }).click();
+  await expect(page.getByText("Passkey added")).toBeVisible();
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page).toHaveURL(/\/signin$/);
+
+  await page.getByRole("button", { name: "Sign in with a passkey" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByText("Eve's Events")).toBeVisible();
+
+  // The passkey sign-in counts as a second factor, so the same request now works.
+  const after = await readAudit(page);
+  expect(after.status).toBe(200);
+  expect(after.body).toContainEqual(expect.objectContaining({ action: "organizer.created" }));
+});
+
+function readAudit(page: Page): Promise<{ status: number; body: unknown }> {
+  return page.evaluate(async () => {
+    const res = await fetch("/api/organizers/eve-s-events/audit");
+    return { status: res.status, body: await res.json() };
+  });
+}
