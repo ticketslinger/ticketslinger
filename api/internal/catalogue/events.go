@@ -184,7 +184,7 @@ func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 			// ponytail: P3 must refuse this once orders exist.
 			e.Status = "draft"
 		case "live":
-			if err := goLive(); err != nil {
+			if err := goLive(ctx, tx, e); err != nil {
 				return Event{}, err
 			}
 			e.Status = "live"
@@ -214,11 +214,19 @@ func sameEvent(a, b Event) bool {
 	return a == b
 }
 
-// goLive decides whether a draft may go on sale. The rule is that it has at
-// least one ticket type, and ticket types arrive with the next task, which
-// replaces this body and passes the event. Until then nothing can go live.
-func goLive() error {
-	return invalid("no_ticket_types", "Add at least one ticket type before you put the event on sale.")
+// goLive decides whether a draft may go on sale: it needs at least one
+// ticket type. It runs in the transaction that holds the event's row lock,
+// so a ticket type can't be deleted between the check and the status change.
+// The quota rule joins it in the next task.
+func goLive(ctx context.Context, tx pgx.Tx, e Event) error {
+	var n int
+	if err := tx.QueryRow(ctx, `select count(*) from ticket_types where event_id = $1`, e.ID).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return invalid("no_ticket_types", "Add at least one ticket type before you put the event on sale.")
+	}
+	return nil
 }
 
 // DeleteEvent removes a draft event and records event.deleted. Anything past

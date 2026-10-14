@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/oapi-codegen/nullable"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
@@ -145,4 +146,107 @@ func (s *server) DeleteEvent(ctx context.Context, req DeleteEventRequestObject) 
 		return nil, catalogueError(err)
 	}
 	return DeleteEvent204Response{}, nil
+}
+
+// orNil is the value of a nullable request field, or nil when it is null
+// or absent. Creating has no difference between the two.
+func orNil[T any](n nullable.Nullable[T]) *T {
+	if v, err := n.Get(); err == nil {
+		return &v
+	}
+	return nil
+}
+
+// nullOf is a stored nullable column as the response field: always present,
+// null when empty.
+func nullOf[T any](p *T) nullable.Nullable[T] {
+	if p == nil {
+		return nullable.NewNullNullable[T]()
+	}
+	return nullable.NewNullableWithValue(*p)
+}
+
+func toTicketType(t catalogue.TicketType) TicketType {
+	return TicketType{
+		Id: t.ID, EventId: t.EventID, Name: t.Name, Description: t.Description, PriceCents: t.PriceCents, TaxRateBp: nullOf(t.TaxRateBP),
+		PricesIncludeTax: nullOf(t.PricesIncludeTax), SalesStart: nullOf(t.SalesStart), SalesEnd: nullOf(t.SalesEnd), MinPerOrder: t.MinPerOrder,
+		MaxPerOrder: t.MaxPerOrder, Hidden: t.Hidden, Position: t.Position, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
+	}
+}
+
+func (s *server) ListTicketTypes(ctx context.Context, req ListTicketTypesRequestObject) (ListTicketTypesResponseObject, error) {
+	out := ListTicketTypes200JSONResponse{}
+	err := s.inOrganizer(ctx, req.Organizer, catalogueRead, func(_ organizers.Organizer, tx pgx.Tx) error {
+		list, err := catalogue.ListTicketTypes(ctx, tx, req.Event)
+		for _, t := range list {
+			out = append(out, toTicketType(t))
+		}
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) CreateTicketType(ctx context.Context, req CreateTicketTypeRequestObject) (CreateTicketTypeResponseObject, error) {
+	b := req.Body
+	in := catalogue.TicketTypeInput{Name: b.Name, PriceCents: b.PriceCents, TaxRateBP: orNil(b.TaxRateBp), PricesIncludeTax: orNil(b.PricesIncludeTax),
+		SalesStart: orNil(b.SalesStart), SalesEnd: orNil(b.SalesEnd), MinPerOrder: b.MinPerOrder, MaxPerOrder: b.MaxPerOrder}
+	if b.Description != nil {
+		in.Description = *b.Description
+	}
+	if b.Hidden != nil {
+		in.Hidden = *b.Hidden
+	}
+	var out CreateTicketType201JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		t, err := catalogue.CreateTicketType(ctx, tx, org.ID, req.Event, actorFrom(ctx), in)
+		out = CreateTicketType201JSONResponse(toTicketType(t))
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) GetTicketType(ctx context.Context, req GetTicketTypeRequestObject) (GetTicketTypeResponseObject, error) {
+	var out GetTicketType200JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, catalogueRead, func(_ organizers.Organizer, tx pgx.Tx) error {
+		t, err := catalogue.GetTicketType(ctx, tx, req.Event, req.TicketType)
+		out = GetTicketType200JSONResponse(toTicketType(t))
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) UpdateTicketType(ctx context.Context, req UpdateTicketTypeRequestObject) (UpdateTicketTypeResponseObject, error) {
+	b := req.Body
+	p := catalogue.TicketTypePatch{Name: b.Name, Description: b.Description, PriceCents: b.PriceCents, TaxRateBP: b.TaxRateBp,
+		PricesIncludeTax: b.PricesIncludeTax, SalesStart: b.SalesStart, SalesEnd: b.SalesEnd, MinPerOrder: b.MinPerOrder,
+		MaxPerOrder: b.MaxPerOrder, Hidden: b.Hidden}
+	var out UpdateTicketType200JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		t, err := catalogue.UpdateTicketType(ctx, tx, org.ID, req.Event, req.TicketType, actorFrom(ctx), p)
+		out = UpdateTicketType200JSONResponse(toTicketType(t))
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) DeleteTicketType(ctx context.Context, req DeleteTicketTypeRequestObject) (DeleteTicketTypeResponseObject, error) {
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		return catalogue.DeleteTicketType(ctx, tx, org.ID, req.Event, req.TicketType, actorFrom(ctx))
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return DeleteTicketType204Response{}, nil
 }

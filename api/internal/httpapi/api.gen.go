@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/oapi-codegen/nullable"
 	"github.com/oapi-codegen/runtime"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
@@ -307,6 +308,32 @@ type CreateOrganizer struct {
 	Slug string `json:"slug"`
 }
 
+// CreateTicketType defines model for CreateTicketType.
+type CreateTicketType struct {
+	Description *string `json:"description,omitempty"`
+	Hidden      *bool   `json:"hidden,omitempty"`
+
+	// MaxPerOrder Defaults to 10. Never below min_per_order.
+	MaxPerOrder *int `json:"max_per_order,omitempty"`
+
+	// MinPerOrder Defaults to 1.
+	MinPerOrder *int   `json:"min_per_order,omitempty"`
+	Name        string `json:"name"`
+
+	// PriceCents In cents: 2500 is $25. Up to $100,000.
+	PriceCents int64 `json:"price_cents"`
+
+	// PricesIncludeTax Overrides the event's setting. Send null to go back to the event's. Leave it out to keep it as it is.
+	PricesIncludeTax nullable.Nullable[bool] `json:"prices_include_tax,omitempty"`
+
+	// SalesEnd Must be after sales_start.
+	SalesEnd   nullable.Nullable[time.Time] `json:"sales_end,omitempty"`
+	SalesStart nullable.Nullable[time.Time] `json:"sales_start,omitempty"`
+
+	// TaxRateBp Overrides the event's tax rate. Send null to go back to the event's. Leave it out to keep it as it is.
+	TaxRateBp nullable.Nullable[int] `json:"tax_rate_bp,omitempty"`
+}
+
 // Error defines model for Error.
 type Error struct {
 	Error struct {
@@ -433,6 +460,55 @@ type SignupRequest struct {
 	Password string              `json:"password"`
 }
 
+// TicketType defines model for TicketType.
+type TicketType struct {
+	CreatedAt   time.Time          `json:"created_at"`
+	Description string             `json:"description"`
+	EventId     openapi_types.UUID `json:"event_id"`
+	Hidden      bool               `json:"hidden"`
+	Id          openapi_types.UUID `json:"id"`
+	MaxPerOrder int                `json:"max_per_order"`
+	MinPerOrder int                `json:"min_per_order"`
+	Name        string             `json:"name"`
+	Position    int                `json:"position"`
+	PriceCents  int64              `json:"price_cents"`
+
+	// PricesIncludeTax null means the event's setting.
+	PricesIncludeTax nullable.Nullable[bool]      `json:"prices_include_tax"`
+	SalesEnd         nullable.Nullable[time.Time] `json:"sales_end"`
+	SalesStart       nullable.Nullable[time.Time] `json:"sales_start"`
+
+	// TaxRateBp null means the event's rate.
+	TaxRateBp nullable.Nullable[int] `json:"tax_rate_bp"`
+	UpdatedAt time.Time              `json:"updated_at"`
+}
+
+// TicketTypeFields defines model for TicketTypeFields.
+type TicketTypeFields struct {
+	Description *string `json:"description,omitempty"`
+	Hidden      *bool   `json:"hidden,omitempty"`
+
+	// MaxPerOrder Defaults to 10. Never below min_per_order.
+	MaxPerOrder *int `json:"max_per_order,omitempty"`
+
+	// MinPerOrder Defaults to 1.
+	MinPerOrder *int    `json:"min_per_order,omitempty"`
+	Name        *string `json:"name,omitempty"`
+
+	// PriceCents In cents: 2500 is $25. Up to $100,000.
+	PriceCents *int64 `json:"price_cents,omitempty"`
+
+	// PricesIncludeTax Overrides the event's setting. Send null to go back to the event's. Leave it out to keep it as it is.
+	PricesIncludeTax nullable.Nullable[bool] `json:"prices_include_tax,omitempty"`
+
+	// SalesEnd Must be after sales_start.
+	SalesEnd   nullable.Nullable[time.Time] `json:"sales_end,omitempty"`
+	SalesStart nullable.Nullable[time.Time] `json:"sales_start,omitempty"`
+
+	// TaxRateBp Overrides the event's tax rate. Send null to go back to the event's. Leave it out to keep it as it is.
+	TaxRateBp nullable.Nullable[int] `json:"tax_rate_bp,omitempty"`
+}
+
 // TotpSetup defines model for TotpSetup.
 type TotpSetup struct {
 	OtpauthUrl string `json:"otpauth_url"`
@@ -482,6 +558,9 @@ type EventPath = openapi_types.UUID
 
 // OrganizerPath defines model for OrganizerPath.
 type OrganizerPath = string
+
+// TicketTypePath defines model for TicketTypePath.
+type TicketTypePath = openapi_types.UUID
 
 // FinishPasskeyLoginJSONBody defines parameters for FinishPasskeyLogin.
 type FinishPasskeyLoginJSONBody map[string]interface{}
@@ -549,6 +628,12 @@ type CreateEventJSONRequestBody = CreateEvent
 
 // UpdateEventJSONRequestBody defines body for UpdateEvent for application/json ContentType.
 type UpdateEventJSONRequestBody = UpdateEvent
+
+// CreateTicketTypeJSONRequestBody defines body for CreateTicketType for application/json ContentType.
+type CreateTicketTypeJSONRequestBody = CreateTicketType
+
+// UpdateTicketTypeJSONRequestBody defines body for UpdateTicketType for application/json ContentType.
+type UpdateTicketTypeJSONRequestBody = TicketTypeFields
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -627,6 +712,21 @@ type ServerInterface interface {
 
 	// (PATCH /organizers/{organizer}/events/{event})
 	UpdateEvent(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+
+	// (GET /organizers/{organizer}/events/{event}/ticket-types)
+	ListTicketTypes(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+
+	// (POST /organizers/{organizer}/events/{event}/ticket-types)
+	CreateTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+
+	// (DELETE /organizers/{organizer}/events/{event}/ticket-types/{ticketType})
+	DeleteTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, ticketType TicketTypePath)
+
+	// (GET /organizers/{organizer}/events/{event}/ticket-types/{ticketType})
+	GetTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, ticketType TicketTypePath)
+
+	// (PATCH /organizers/{organizer}/events/{event}/ticket-types/{ticketType})
+	UpdateTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, ticketType TicketTypePath)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -1184,6 +1284,208 @@ func (siw *ServerInterfaceWrapper) UpdateEvent(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// ListTicketTypes operation middleware
+func (siw *ServerInterfaceWrapper) ListTicketTypes(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListTicketTypes(w, r, organizer, event)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateTicketType operation middleware
+func (siw *ServerInterfaceWrapper) CreateTicketType(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateTicketType(w, r, organizer, event)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteTicketType operation middleware
+func (siw *ServerInterfaceWrapper) DeleteTicketType(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "ticketType" -------------
+	var ticketType TicketTypePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "ticketType", r.PathValue("ticketType"), &ticketType, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "ticketType", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteTicketType(w, r, organizer, event, ticketType)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetTicketType operation middleware
+func (siw *ServerInterfaceWrapper) GetTicketType(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "ticketType" -------------
+	var ticketType TicketTypePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "ticketType", r.PathValue("ticketType"), &ticketType, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "ticketType", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetTicketType(w, r, organizer, event, ticketType)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateTicketType operation middleware
+func (siw *ServerInterfaceWrapper) UpdateTicketType(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "ticketType" -------------
+	var ticketType TicketTypePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "ticketType", r.PathValue("ticketType"), &ticketType, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "ticketType", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateTicketType(w, r, organizer, event, ticketType)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -1329,6 +1631,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/organizers/{organizer}/events/{event}", wrapper.DeleteEvent)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/events/{event}", wrapper.GetEvent)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/organizers/{organizer}/events/{event}", wrapper.UpdateEvent)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/ticket-types", wrapper.ListTicketTypes)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/ticket-types", wrapper.CreateTicketType)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/ticket-types/{ticketType}", wrapper.DeleteTicketType)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/ticket-types/{ticketType}", wrapper.GetTicketType)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/ticket-types/{ticketType}", wrapper.UpdateTicketType)
 
 	return m
 }
@@ -2617,6 +2924,274 @@ func (response UpdateEvent422JSONResponse) VisitUpdateEventResponse(w http.Respo
 	return err
 }
 
+type ListTicketTypesRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+}
+
+type ListTicketTypesResponseObject interface {
+	VisitListTicketTypesResponse(w http.ResponseWriter) error
+}
+
+type ListTicketTypes200JSONResponse []TicketType
+
+func (response ListTicketTypes200JSONResponse) VisitListTicketTypesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTicketTypes404JSONResponse struct{ ErrorJSONResponse }
+
+func (response ListTicketTypes404JSONResponse) VisitListTicketTypesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTicketTypeRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+	Body      *CreateTicketTypeJSONRequestBody
+}
+
+type CreateTicketTypeResponseObject interface {
+	VisitCreateTicketTypeResponse(w http.ResponseWriter) error
+}
+
+type CreateTicketType201JSONResponse TicketType
+
+func (response CreateTicketType201JSONResponse) VisitCreateTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTicketType403JSONResponse struct{ ErrorJSONResponse }
+
+func (response CreateTicketType403JSONResponse) VisitCreateTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTicketType404JSONResponse Error
+
+func (response CreateTicketType404JSONResponse) VisitCreateTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTicketType422JSONResponse Error
+
+func (response CreateTicketType422JSONResponse) VisitCreateTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteTicketTypeRequestObject struct {
+	Organizer  OrganizerPath  `json:"organizer"`
+	Event      EventPath      `json:"event"`
+	TicketType TicketTypePath `json:"ticketType"`
+}
+
+type DeleteTicketTypeResponseObject interface {
+	VisitDeleteTicketTypeResponse(w http.ResponseWriter) error
+}
+
+type DeleteTicketType204Response struct {
+}
+
+func (response DeleteTicketType204Response) VisitDeleteTicketTypeResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteTicketType403JSONResponse struct{ ErrorJSONResponse }
+
+func (response DeleteTicketType403JSONResponse) VisitDeleteTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteTicketType404JSONResponse Error
+
+func (response DeleteTicketType404JSONResponse) VisitDeleteTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteTicketType409JSONResponse Error
+
+func (response DeleteTicketType409JSONResponse) VisitDeleteTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetTicketTypeRequestObject struct {
+	Organizer  OrganizerPath  `json:"organizer"`
+	Event      EventPath      `json:"event"`
+	TicketType TicketTypePath `json:"ticketType"`
+}
+
+type GetTicketTypeResponseObject interface {
+	VisitGetTicketTypeResponse(w http.ResponseWriter) error
+}
+
+type GetTicketType200JSONResponse TicketType
+
+func (response GetTicketType200JSONResponse) VisitGetTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetTicketType404JSONResponse struct{ ErrorJSONResponse }
+
+func (response GetTicketType404JSONResponse) VisitGetTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTicketTypeRequestObject struct {
+	Organizer  OrganizerPath  `json:"organizer"`
+	Event      EventPath      `json:"event"`
+	TicketType TicketTypePath `json:"ticketType"`
+	Body       *UpdateTicketTypeJSONRequestBody
+}
+
+type UpdateTicketTypeResponseObject interface {
+	VisitUpdateTicketTypeResponse(w http.ResponseWriter) error
+}
+
+type UpdateTicketType200JSONResponse TicketType
+
+func (response UpdateTicketType200JSONResponse) VisitUpdateTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTicketType403JSONResponse struct{ ErrorJSONResponse }
+
+func (response UpdateTicketType403JSONResponse) VisitUpdateTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTicketType404JSONResponse Error
+
+func (response UpdateTicketType404JSONResponse) VisitUpdateTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTicketType422JSONResponse Error
+
+func (response UpdateTicketType422JSONResponse) VisitUpdateTicketTypeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 
@@ -2694,6 +3269,21 @@ type StrictServerInterface interface {
 
 	// (PATCH /organizers/{organizer}/events/{event})
 	UpdateEvent(ctx context.Context, request UpdateEventRequestObject) (UpdateEventResponseObject, error)
+
+	// (GET /organizers/{organizer}/events/{event}/ticket-types)
+	ListTicketTypes(ctx context.Context, request ListTicketTypesRequestObject) (ListTicketTypesResponseObject, error)
+
+	// (POST /organizers/{organizer}/events/{event}/ticket-types)
+	CreateTicketType(ctx context.Context, request CreateTicketTypeRequestObject) (CreateTicketTypeResponseObject, error)
+
+	// (DELETE /organizers/{organizer}/events/{event}/ticket-types/{ticketType})
+	DeleteTicketType(ctx context.Context, request DeleteTicketTypeRequestObject) (DeleteTicketTypeResponseObject, error)
+
+	// (GET /organizers/{organizer}/events/{event}/ticket-types/{ticketType})
+	GetTicketType(ctx context.Context, request GetTicketTypeRequestObject) (GetTicketTypeResponseObject, error)
+
+	// (PATCH /organizers/{organizer}/events/{event}/ticket-types/{ticketType})
+	UpdateTicketType(ctx context.Context, request UpdateTicketTypeRequestObject) (UpdateTicketTypeResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -3454,70 +4044,231 @@ func (sh *strictHandler) UpdateEvent(w http.ResponseWriter, r *http.Request, org
 	}
 }
 
+// ListTicketTypes operation middleware
+func (sh *strictHandler) ListTicketTypes(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+	var request ListTicketTypesRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListTicketTypes(ctx, request.(ListTicketTypesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListTicketTypes")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListTicketTypesResponseObject); ok {
+		if err := validResponse.VisitListTicketTypesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateTicketType operation middleware
+func (sh *strictHandler) CreateTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+	var request CreateTicketTypeRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+
+	var body CreateTicketTypeJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateTicketType(ctx, request.(CreateTicketTypeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateTicketType")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateTicketTypeResponseObject); ok {
+		if err := validResponse.VisitCreateTicketTypeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteTicketType operation middleware
+func (sh *strictHandler) DeleteTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, ticketType TicketTypePath) {
+	var request DeleteTicketTypeRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+	request.TicketType = ticketType
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteTicketType(ctx, request.(DeleteTicketTypeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteTicketType")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteTicketTypeResponseObject); ok {
+		if err := validResponse.VisitDeleteTicketTypeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetTicketType operation middleware
+func (sh *strictHandler) GetTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, ticketType TicketTypePath) {
+	var request GetTicketTypeRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+	request.TicketType = ticketType
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetTicketType(ctx, request.(GetTicketTypeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetTicketType")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetTicketTypeResponseObject); ok {
+		if err := validResponse.VisitGetTicketTypeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateTicketType operation middleware
+func (sh *strictHandler) UpdateTicketType(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, ticketType TicketTypePath) {
+	var request UpdateTicketTypeRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+	request.TicketType = ticketType
+
+	var body UpdateTicketTypeJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateTicketType(ctx, request.(UpdateTicketTypeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateTicketType")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateTicketTypeResponseObject); ok {
+		if err := validResponse.VisitUpdateTicketTypeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // Base64 encoded, compressed with deflate, json marshaled OpenAPI spec.
 // Stored as a slice of fixed-width chunks rather than one concatenated
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"nSzvRTLr3xzTpw7/HgA=",
+	"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",
+	"/wMA",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

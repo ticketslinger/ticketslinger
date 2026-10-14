@@ -337,6 +337,43 @@ export interface paths {
         patch: operations["updateEvent"];
         trace?: never;
     };
+    "/organizers/{organizer}/events/{event}/ticket-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Any member, or any API key. In position order. */
+        get: operations["listTicketTypes"];
+        put?: never;
+        /** @description Owners and admins, or a write API key. It goes to the end of the list. */
+        post: operations["createTicketType"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/ticket-types/{ticketType}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Any member, or any API key. */
+        get: operations["getTicketType"];
+        put?: never;
+        post?: never;
+        /** @description Owners and admins, or a write API key. The last ticket type of a live event answers 409 last_ticket_type_live. */
+        delete: operations["deleteTicketType"];
+        options?: never;
+        head?: never;
+        /** @description Owners and admins, or a write API key. Send only what changes. */
+        patch: operations["updateTicketType"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -521,6 +558,58 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        TicketTypeFields: {
+            name?: string;
+            description?: string;
+            /**
+             * Format: int64
+             * @description In cents: 2500 is $25. Up to $100,000.
+             */
+            price_cents?: number;
+            /** @description Overrides the event's tax rate. Send null to go back to the event's. Leave it out to keep it as it is. */
+            tax_rate_bp?: number | null;
+            /** @description Overrides the event's setting. Send null to go back to the event's. Leave it out to keep it as it is. */
+            prices_include_tax?: boolean | null;
+            /** Format: date-time */
+            sales_start?: string | null;
+            /**
+             * Format: date-time
+             * @description Must be after sales_start.
+             */
+            sales_end?: string | null;
+            /** @description Defaults to 1. */
+            min_per_order?: number;
+            /** @description Defaults to 10. Never below min_per_order. */
+            max_per_order?: number;
+            hidden?: boolean;
+        };
+        CreateTicketType: components["schemas"]["TicketTypeFields"] & Record<string, never>;
+        TicketType: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            event_id: string;
+            name: string;
+            description: string;
+            /** Format: int64 */
+            price_cents: number;
+            /** @description null means the event's rate. */
+            tax_rate_bp: number | null;
+            /** @description null means the event's setting. */
+            prices_include_tax: boolean | null;
+            /** Format: date-time */
+            sales_start: string | null;
+            /** Format: date-time */
+            sales_end: string | null;
+            min_per_order: number;
+            max_per_order: number;
+            hidden: boolean;
+            position: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
     };
     responses: {
         /** @description Error */
@@ -535,6 +624,7 @@ export interface components {
     };
     parameters: {
         OrganizerPath: string;
+        TicketTypePath: string;
         EventPath: string;
     };
     requestBodies: never;
@@ -1172,6 +1262,141 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Event"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    listTicketTypes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketType"][];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    createTicketType: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTicketType"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketType"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    getTicketType: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                ticketType: components["parameters"]["TicketTypePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketType"];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    deleteTicketType: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                ticketType: components["parameters"]["TicketTypePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    updateTicketType: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                ticketType: components["parameters"]["TicketTypePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TicketTypeFields"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketType"];
                 };
             };
             403: components["responses"]["Error"];
