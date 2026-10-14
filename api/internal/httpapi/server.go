@@ -6,13 +6,16 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
 	"github.com/ticketslinger/ticketslinger/api/internal/config"
+	"github.com/ticketslinger/ticketslinger/api/internal/db"
 	"github.com/ticketslinger/ticketslinger/api/internal/organizers"
 )
 
@@ -29,6 +32,9 @@ type server struct {
 }
 
 func New(d Deps) http.Handler {
+	if d.Organizers == nil {
+		d.Organizers = organizers.New(d.Pool)
+	}
 	s := &server{Deps: d, public: publicRoutes()}
 	strict := NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc:  func(w http.ResponseWriter, r *http.Request, err error) { writeBadRequest(w, r, err) },
@@ -374,20 +380,113 @@ func (s *server) ConfirmTotp(ctx context.Context, req ConfirmTotpRequestObject) 
 	return ConfirmTotp204Response{}, nil
 }
 
-// Operations not built yet.
-
-func (s *server) ListOrganizers(context.Context, ListOrganizersRequestObject) (ListOrganizersResponseObject, error) {
-	return nil, errNotImplemented
+// inOrganizer runs fn inside a transaction scoped to the organizer named by
+// slug. Order matters: a non-member gets 404 before any role or MFA check, so
+// the existence of an organizer never leaks. Owners and admins need an MFA
+// session; roles limits who may call (empty means any member). Every
+// /organizers/{organizer}/... handler must go through here.
+func (s *server) inOrganizer(ctx context.Context, slug string, roles []string, fn func(org organizers.Organizer, tx pgx.Tx) error) error {
+	u, sess, ok := userFrom(ctx)
+	if !ok {
+		return unauthorized()
+	}
+	org, err := s.Organizers.Resolve(ctx, u.ID, slug)
+	if errors.Is(err, organizers.ErrNotFound) {
+		return notFound()
+	}
+	if err != nil {
+		return err
+	}
+	err = db.WithOrganizer(ctx, s.Pool, u.ID, org.ID, func(tx pgx.Tx, role string) error {
+		if len(roles) > 0 && !slices.Contains(roles, role) {
+			return &apiError{403, "forbidden_role", "Your role here doesn't allow that."}
+		}
+		if (role == "owner" || role == "admin") && !sess.MFA {
+			return &apiError{403, "mfa_required", "Sign in with a passkey or your authenticator app to manage this organizer."}
+		}
+		org.Role = role
+		return fn(org, tx)
+	})
+	if errors.Is(err, db.ErrNotMember) {
+		return notFound()
+	}
+	return err
 }
 
-func (s *server) CreateOrganizer(context.Context, CreateOrganizerRequestObject) (CreateOrganizerResponseObject, error) {
-	return nil, errNotImplemented
+func toOrganizer(o organizers.Organizer) Organizer {
+	return Organizer{Id: o.ID, Name: o.Name, Slug: o.Slug, Role: OrganizerRole(o.Role)}
 }
 
-func (s *server) GetOrganizer(context.Context, GetOrganizerRequestObject) (GetOrganizerResponseObject, error) {
-	return nil, errNotImplemented
+func (s *server) ListOrganizers(ctx context.Context, _ ListOrganizersRequestObject) (ListOrganizersResponseObject, error) {
+	u, _, ok := userFrom(ctx)
+	if !ok {
+		return nil, unauthorized()
+	}
+	list, err := s.Organizers.ListForUser(ctx, u.ID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(ListOrganizers200JSONResponse, 0, len(list))
+	for _, o := range list {
+		out = append(out, toOrganizer(o))
+	}
+	return out, nil
 }
 
-func (s *server) ListAudit(context.Context, ListAuditRequestObject) (ListAuditResponseObject, error) {
-	return nil, errNotImplemented
+func (s *server) CreateOrganizer(ctx context.Context, req CreateOrganizerRequestObject) (CreateOrganizerResponseObject, error) {
+	u, _, ok := userFrom(ctx)
+	if !ok {
+		return nil, unauthorized()
+	}
+	if !u.EmailVerified {
+		return nil, &apiError{403, "email_unverified", "Check your inbox and verify your email before creating an organizer."}
+	}
+	name := strings.TrimSpace(req.Body.Name)
+	if name == "" {
+		return nil, &apiError{422, "invalid_name", "Give your organizer a name."}
+	}
+	o, err := s.Organizers.Create(ctx, u.ID, name, req.Body.Slug)
+	if errors.Is(err, organizers.ErrSlugTaken) {
+		return nil, &apiError{409, "slug_taken", "Someone already uses that web address. Try another."}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return CreateOrganizer201JSONResponse(toOrganizer(o)), nil
+}
+
+func (s *server) GetOrganizer(ctx context.Context, req GetOrganizerRequestObject) (GetOrganizerResponseObject, error) {
+	var out Organizer
+	err := s.inOrganizer(ctx, req.Organizer, nil, func(org organizers.Organizer, _ pgx.Tx) error {
+		out = toOrganizer(org)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return GetOrganizer200JSONResponse(out), nil
+}
+
+func (s *server) ListAudit(ctx context.Context, req ListAuditRequestObject) (ListAuditResponseObject, error) {
+	out := ListAudit200JSONResponse{}
+	err := s.inOrganizer(ctx, req.Organizer, []string{"owner", "admin"}, func(_ organizers.Organizer, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `select id, action, entity_type, entity_id, actor_user_id, at
+			from audit_log order by at desc, id desc limit 100`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var e AuditEntry
+			if err := rows.Scan(&e.Id, &e.Action, &e.EntityType, &e.EntityId, &e.ActorUserId, &e.At); err != nil {
+				return err
+			}
+			out = append(out, e)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }

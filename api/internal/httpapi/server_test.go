@@ -38,15 +38,6 @@ func TestUnknownRouteIsJSONError(t *testing.T) {
 	}
 }
 
-func TestUnbuiltOperationIs501JSON(t *testing.T) {
-	srv, _ := newAuthServer(t)
-	_, body := do(t, "POST", srv.URL+"/v1/auth/signup", "", `{"email":"a@example.com","password":"a long passphrase","name":"A"}`)
-	tok, _ := body["session_token"].(string)
-	if code, body := do(t, "GET", srv.URL+"/v1/organizers", tok, ""); code != 501 || errCode(body) != "not_implemented" {
-		t.Fatalf("got %d %v", code, body)
-	}
-}
-
 // Every secured operation must answer 401 to an unauthenticated request with
 // an empty body, so authentication can't slip behind body decoding.
 func TestSecuredOperationsReject401BeforeBody(t *testing.T) {
