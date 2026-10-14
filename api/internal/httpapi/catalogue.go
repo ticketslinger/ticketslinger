@@ -438,3 +438,103 @@ func (s *server) DeletePromoCode(ctx context.Context, req DeletePromoCodeRequest
 	}
 	return DeletePromoCode204Response{}, nil
 }
+
+func toQuestion(q catalogue.Question) Question {
+	return Question{Id: q.ID, EventId: q.EventID, Label: q.Label, Kind: QuestionKind(q.Kind), Options: q.Options, Required: q.Required,
+		Scope: QuestionScope(q.Scope), AppliesToAll: q.AppliesToAll, AppliesTo: q.AppliesTo, Position: q.Position, CreatedAt: q.CreatedAt, UpdatedAt: q.UpdatedAt}
+}
+
+func (s *server) ListQuestions(ctx context.Context, req ListQuestionsRequestObject) (ListQuestionsResponseObject, error) {
+	out := ListQuestions200JSONResponse{}
+	err := s.inOrganizer(ctx, req.Organizer, catalogueRead, func(_ organizers.Organizer, tx pgx.Tx) error {
+		list, err := catalogue.ListQuestions(ctx, tx, req.Event)
+		for _, q := range list {
+			out = append(out, toQuestion(q))
+		}
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) CreateQuestion(ctx context.Context, req CreateQuestionRequestObject) (CreateQuestionResponseObject, error) {
+	b := req.Body
+	in := catalogue.QuestionInput{AppliesToAll: b.AppliesToAll}
+	if b.Options != nil {
+		in.Options = *b.Options
+	}
+	if b.Required != nil {
+		in.Required = *b.Required
+	}
+	if b.AppliesTo != nil {
+		in.AppliesTo = *b.AppliesTo
+	}
+	var out CreateQuestion201JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		// Checked after membership, so a stranger still gets 404.
+		switch {
+		case b.Label == nil:
+			return missingField("label", "what the buyer is asked")
+		case b.Kind == nil:
+			return missingField("kind", "text, select or checkbox")
+		case b.Scope == nil:
+			return missingField("scope", "order to ask once per order, ticket to ask for every ticket")
+		}
+		in.Label, in.Kind, in.Scope = *b.Label, *b.Kind, *b.Scope
+		q, err := catalogue.CreateQuestion(ctx, tx, org.ID, req.Event, actorFrom(ctx), in)
+		out = CreateQuestion201JSONResponse(toQuestion(q))
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) GetQuestion(ctx context.Context, req GetQuestionRequestObject) (GetQuestionResponseObject, error) {
+	var out GetQuestion200JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, catalogueRead, func(_ organizers.Organizer, tx pgx.Tx) error {
+		q, err := catalogue.GetQuestion(ctx, tx, req.Event, req.Question)
+		out = GetQuestion200JSONResponse(toQuestion(q))
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) UpdateQuestion(ctx context.Context, req UpdateQuestionRequestObject) (UpdateQuestionResponseObject, error) {
+	b := req.Body
+	p := catalogue.QuestionPatch{Label: b.Label, Options: b.Options, Required: b.Required, AppliesToAll: b.AppliesToAll, AppliesTo: b.AppliesTo, Position: b.Position}
+	if b.Kind != nil {
+		v := string(*b.Kind)
+		p.Kind = &v
+	}
+	if b.Scope != nil {
+		v := string(*b.Scope)
+		p.Scope = &v
+	}
+	var out UpdateQuestion200JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		q, err := catalogue.UpdateQuestion(ctx, tx, org.ID, req.Event, req.Question, actorFrom(ctx), p)
+		out = UpdateQuestion200JSONResponse(toQuestion(q))
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) DeleteQuestion(ctx context.Context, req DeleteQuestionRequestObject) (DeleteQuestionResponseObject, error) {
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		return catalogue.DeleteQuestion(ctx, tx, org.ID, req.Event, req.Question, actorFrom(ctx))
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return DeleteQuestion204Response{}, nil
+}

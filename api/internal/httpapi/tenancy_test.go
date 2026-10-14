@@ -67,10 +67,11 @@ func TestEverySecuredOperationHidesOtherTenants(t *testing.T) {
 	ticketType := h.must(h.do(owner, "POST", "/v1/organizers/acme/events/"+event+"/ticket-types", `{"name":"General","price_cents":2500}`), 201)["id"].(string)
 	quota := h.must(h.do(owner, "POST", "/v1/organizers/acme/events/"+event+"/quotas", `{"name":"Hall","size":100,"ticket_type_ids":["`+ticketType+`"]}`), 201)["id"].(string)
 	promoCode := h.must(h.do(owner, "POST", "/v1/organizers/acme/events/"+event+"/promo-codes", `{"code":"EARLY","kind":"percent","value":1000}`), 201)["id"].(string)
+	question := h.must(h.do(owner, "POST", "/v1/organizers/acme/events/"+event+"/questions", `{"label":"Dietary needs","kind":"text","scope":"order"}`), 201)["id"].(string)
 	// The other tenant's real resources, by path parameter name.
 	// challengeId only appears on a user-scoped operation, which the key run
 	// still calls; any well-formed id will do.
-	fixture := map[string]string{"organizer": "acme", "apiKey": acmeKey, "event": event, "ticketType": ticketType, "quota": quota, "promoCode": promoCode, "challengeId": "0190a0a0-0000-7000-8000-000000000000"}
+	fixture := map[string]string{"organizer": "acme", "apiKey": acmeKey, "event": event, "ticketType": ticketType, "quota": quota, "promoCode": promoCode, "question": question, "challengeId": "0190a0a0-0000-7000-8000-000000000000"}
 
 	t.Run("stranger", func(t *testing.T) {
 		walk(t, h, stranger, fixture, func(id string) (int, string) {

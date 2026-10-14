@@ -303,3 +303,35 @@ func TestPromoCodeOverHTTP(t *testing.T) {
 	h.must(h.do(owner, "DELETE", base+"/promo-codes/"+id, ""), 204)
 	h.must(h.do(owner, "GET", base+"/promo-codes/"+id, ""), 404)
 }
+
+func TestQuestionOverHTTP(t *testing.T) {
+	h := newHarness(t)
+	owner := h.signupWithMFA("owner@example.com")
+	h.createOrganizer(owner, "acme")
+	base := "/v1/organizers/acme/events/" + h.must(h.do(owner, "POST", "/v1/organizers/acme/events", eventBody), 201)["id"].(string)
+	for body, field := range map[string]string{`{"kind":"text","scope":"order"}`: "label", `{"label":"Q","scope":"order"}`: "kind", `{"label":"Q","kind":"text"}`: "scope"} {
+		if res := h.do(owner, "POST", base+"/questions", body); res.StatusCode != 422 || h.errorCode(res) != "missing_field" {
+			t.Errorf("missing %s: %d %q", field, res.StatusCode, h.errorCode(res))
+		}
+	}
+	if res := h.do(owner, "POST", base+"/questions", `{"label":"Q","kind":"select","scope":"order","options":["a"]}`); res.StatusCode != 422 || h.errorCode(res) != "bad_options" {
+		t.Fatalf("one option: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	q := h.must(h.do(owner, "POST", base+"/questions", `{"label":"Meal","kind":"select","scope":"ticket","required":true,"options":["Beef","Veg"]}`), 201)
+	id := q["id"].(string)
+	if q["position"] != float64(1) || q["required"] != true || q["applies_to_all"] != true || len(q["options"].([]any)) != 2 {
+		t.Fatalf("created: %v", q)
+	}
+	if res := h.do(owner, "PATCH", base+"/questions/"+id, `{"kind":"checkbox"}`); res.StatusCode != 200 {
+		t.Fatalf("away from select: %d", res.StatusCode)
+	}
+	if res := h.do(owner, "PATCH", base+"/questions/"+id, `{"kind":"select"}`); res.StatusCode != 422 || h.errorCode(res) != "options_required_with_kind" {
+		t.Fatalf("select alone: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	if list := h.do(owner, "GET", base+"/questions", ""); list.StatusCode != 200 {
+		t.Fatalf("list: %d", list.StatusCode)
+	}
+	h.must(h.do(owner, "GET", base+"/questions/"+id, ""), 200)
+	h.must(h.do(owner, "DELETE", base+"/questions/"+id, ""), 204)
+	h.must(h.do(owner, "GET", base+"/questions/"+id, ""), 404)
+}

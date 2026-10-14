@@ -218,6 +218,84 @@ func (e PromoCodeFieldsKind) Valid() bool {
 	}
 }
 
+// Defines values for QuestionKind.
+const (
+	QuestionKindCheckbox QuestionKind = "checkbox"
+	QuestionKindSelect   QuestionKind = "select"
+	QuestionKindText     QuestionKind = "text"
+)
+
+// Valid indicates whether the value is a known member of the QuestionKind enum.
+func (e QuestionKind) Valid() bool {
+	switch e {
+	case QuestionKindCheckbox:
+		return true
+	case QuestionKindSelect:
+		return true
+	case QuestionKindText:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for QuestionScope.
+const (
+	QuestionScopeOrder  QuestionScope = "order"
+	QuestionScopeTicket QuestionScope = "ticket"
+)
+
+// Valid indicates whether the value is a known member of the QuestionScope enum.
+func (e QuestionScope) Valid() bool {
+	switch e {
+	case QuestionScopeOrder:
+		return true
+	case QuestionScopeTicket:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for QuestionFieldsKind.
+const (
+	QuestionFieldsKindCheckbox QuestionFieldsKind = "checkbox"
+	QuestionFieldsKindSelect   QuestionFieldsKind = "select"
+	QuestionFieldsKindText     QuestionFieldsKind = "text"
+)
+
+// Valid indicates whether the value is a known member of the QuestionFieldsKind enum.
+func (e QuestionFieldsKind) Valid() bool {
+	switch e {
+	case QuestionFieldsKindCheckbox:
+		return true
+	case QuestionFieldsKindSelect:
+		return true
+	case QuestionFieldsKindText:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for QuestionFieldsScope.
+const (
+	QuestionFieldsScopeOrder  QuestionFieldsScope = "order"
+	QuestionFieldsScopeTicket QuestionFieldsScope = "ticket"
+)
+
+// Valid indicates whether the value is a known member of the QuestionFieldsScope enum.
+func (e QuestionFieldsScope) Valid() bool {
+	switch e {
+	case QuestionFieldsScopeOrder:
+		return true
+	case QuestionFieldsScopeTicket:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UpdateEventFeeMode.
 const (
 	UpdateEventFeeModeAbsorb UpdateEventFeeMode = "absorb"
@@ -364,6 +442,27 @@ type CreatePromoCode struct {
 	// ValidUntil Must be after valid_from.
 	ValidUntil nullable.Nullable[time.Time] `json:"valid_until,omitempty"`
 	Value      *int64                       `json:"value"`
+}
+
+// CreateQuestion defines model for CreateQuestion.
+type CreateQuestion struct {
+	// AppliesTo Ticket types the question covers when applies_to_all is false. On a patch the list replaces the current one.
+	AppliesTo *[]openapi_types.UUID `json:"applies_to,omitempty"`
+
+	// AppliesToAll true (the default) asks it for every ticket type; then applies_to must be empty (422 applies_to_conflict). false limits it to applies_to, which must not be empty (422 applies_to_required). If every listed ticket type is later deleted, the question is never asked.
+	AppliesToAll *bool   `json:"applies_to_all,omitempty"`
+	Kind         *string `json:"kind"`
+	Label        *string `json:"label"`
+
+	// Options A select needs 2 to 30, different ignoring capitals (422 bad_options). Text and checkbox questions have none. On a patch the list replaces the current one.
+	Options *[]string `json:"options,omitempty"`
+
+	// Position Patch only. Moves this question; the others keep their positions.
+	Position *int `json:"position,omitempty"`
+
+	// Required Defaults to false.
+	Required *bool   `json:"required,omitempty"`
+	Scope    *string `json:"scope"`
 }
 
 // CreateQuota defines model for CreateQuota.
@@ -567,6 +666,57 @@ type PromoCodeFields struct {
 // PromoCodeFieldsKind defines model for PromoCodeFields.Kind.
 type PromoCodeFieldsKind string
 
+// Question defines model for Question.
+type Question struct {
+	AppliesTo    []openapi_types.UUID `json:"applies_to"`
+	AppliesToAll bool                 `json:"applies_to_all"`
+	CreatedAt    time.Time            `json:"created_at"`
+	EventId      openapi_types.UUID   `json:"event_id"`
+	Id           openapi_types.UUID   `json:"id"`
+	Kind         QuestionKind         `json:"kind"`
+	Label        string               `json:"label"`
+	Options      []string             `json:"options"`
+	Position     int                  `json:"position"`
+	Required     bool                 `json:"required"`
+	Scope        QuestionScope        `json:"scope"`
+	UpdatedAt    time.Time            `json:"updated_at"`
+}
+
+// QuestionKind defines model for Question.Kind.
+type QuestionKind string
+
+// QuestionScope defines model for Question.Scope.
+type QuestionScope string
+
+// QuestionFields defines model for QuestionFields.
+type QuestionFields struct {
+	// AppliesTo Ticket types the question covers when applies_to_all is false. On a patch the list replaces the current one.
+	AppliesTo *[]openapi_types.UUID `json:"applies_to,omitempty"`
+
+	// AppliesToAll true (the default) asks it for every ticket type; then applies_to must be empty (422 applies_to_conflict). false limits it to applies_to, which must not be empty (422 applies_to_required). If every listed ticket type is later deleted, the question is never asked.
+	AppliesToAll *bool               `json:"applies_to_all,omitempty"`
+	Kind         *QuestionFieldsKind `json:"kind,omitempty"`
+	Label        *string             `json:"label,omitempty"`
+
+	// Options A select needs 2 to 30, different ignoring capitals (422 bad_options). Text and checkbox questions have none. On a patch the list replaces the current one.
+	Options *[]string `json:"options,omitempty"`
+
+	// Position Patch only. Moves this question; the others keep their positions.
+	Position *int `json:"position,omitempty"`
+
+	// Required Defaults to false.
+	Required *bool `json:"required,omitempty"`
+
+	// Scope order: asked once per order. ticket: asked for every ticket.
+	Scope *QuestionFieldsScope `json:"scope,omitempty"`
+}
+
+// QuestionFieldsKind defines model for QuestionFields.Kind.
+type QuestionFieldsKind string
+
+// QuestionFieldsScope order: asked once per order. ticket: asked for every ticket.
+type QuestionFieldsScope string
+
 // Quota defines model for Quota.
 type Quota struct {
 	CreatedAt     time.Time            `json:"created_at"`
@@ -704,6 +854,9 @@ type OrganizerPath = string
 // PromoCodePath defines model for PromoCodePath.
 type PromoCodePath = openapi_types.UUID
 
+// QuestionPath defines model for QuestionPath.
+type QuestionPath = openapi_types.UUID
+
 // QuotaPath defines model for QuotaPath.
 type QuotaPath = openapi_types.UUID
 
@@ -782,6 +935,12 @@ type CreatePromoCodeJSONRequestBody = CreatePromoCode
 
 // UpdatePromoCodeJSONRequestBody defines body for UpdatePromoCode for application/json ContentType.
 type UpdatePromoCodeJSONRequestBody = PromoCodeFields
+
+// CreateQuestionJSONRequestBody defines body for CreateQuestion for application/json ContentType.
+type CreateQuestionJSONRequestBody = CreateQuestion
+
+// UpdateQuestionJSONRequestBody defines body for UpdateQuestion for application/json ContentType.
+type UpdateQuestionJSONRequestBody = QuestionFields
 
 // CreateQuotaJSONRequestBody defines body for CreateQuota for application/json ContentType.
 type CreateQuotaJSONRequestBody = CreateQuota
@@ -887,6 +1046,21 @@ type ServerInterface interface {
 
 	// (PATCH /organizers/{organizer}/events/{event}/promo-codes/{promoCode})
 	UpdatePromoCode(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, promoCode PromoCodePath)
+
+	// (GET /organizers/{organizer}/events/{event}/questions)
+	ListQuestions(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+
+	// (POST /organizers/{organizer}/events/{event}/questions)
+	CreateQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
+
+	// (DELETE /organizers/{organizer}/events/{event}/questions/{question})
+	DeleteQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, question QuestionPath)
+
+	// (GET /organizers/{organizer}/events/{event}/questions/{question})
+	GetQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, question QuestionPath)
+
+	// (PATCH /organizers/{organizer}/events/{event}/questions/{question})
+	UpdateQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, question QuestionPath)
 
 	// (GET /organizers/{organizer}/events/{event}/quotas)
 	ListQuotas(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath)
@@ -1676,6 +1850,208 @@ func (siw *ServerInterfaceWrapper) UpdatePromoCode(w http.ResponseWriter, r *htt
 	handler.ServeHTTP(w, r)
 }
 
+// ListQuestions operation middleware
+func (siw *ServerInterfaceWrapper) ListQuestions(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListQuestions(w, r, organizer, event)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateQuestion operation middleware
+func (siw *ServerInterfaceWrapper) CreateQuestion(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateQuestion(w, r, organizer, event)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteQuestion operation middleware
+func (siw *ServerInterfaceWrapper) DeleteQuestion(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "question" -------------
+	var question QuestionPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "question", r.PathValue("question"), &question, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "question", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteQuestion(w, r, organizer, event, question)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetQuestion operation middleware
+func (siw *ServerInterfaceWrapper) GetQuestion(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "question" -------------
+	var question QuestionPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "question", r.PathValue("question"), &question, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "question", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetQuestion(w, r, organizer, event, question)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateQuestion operation middleware
+func (siw *ServerInterfaceWrapper) UpdateQuestion(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "organizer" -------------
+	var organizer OrganizerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "organizer", r.PathValue("organizer"), &organizer, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "organizer", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "event" -------------
+	var event EventPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "event", r.PathValue("event"), &event, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "event", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "question" -------------
+	var question QuestionPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "question", r.PathValue("question"), &question, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "question", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateQuestion(w, r, organizer, event, question)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListQuotas operation middleware
 func (siw *ServerInterfaceWrapper) ListQuotas(w http.ResponseWriter, r *http.Request) {
 
@@ -2240,6 +2616,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/promo-codes/{promoCode}", wrapper.DeletePromoCode)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/promo-codes/{promoCode}", wrapper.GetPromoCode)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/promo-codes/{promoCode}", wrapper.UpdatePromoCode)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/questions", wrapper.ListQuestions)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/questions", wrapper.CreateQuestion)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/questions/{question}", wrapper.DeleteQuestion)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/questions/{question}", wrapper.GetQuestion)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/organizers/{organizer}/events/{event}/questions/{question}", wrapper.UpdateQuestion)
 
 	return m
 }
@@ -3810,6 +4191,260 @@ func (response UpdatePromoCode422JSONResponse) VisitUpdatePromoCodeResponse(w ht
 	return err
 }
 
+type ListQuestionsRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+}
+
+type ListQuestionsResponseObject interface {
+	VisitListQuestionsResponse(w http.ResponseWriter) error
+}
+
+type ListQuestions200JSONResponse []Question
+
+func (response ListQuestions200JSONResponse) VisitListQuestionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListQuestions404JSONResponse struct{ ErrorJSONResponse }
+
+func (response ListQuestions404JSONResponse) VisitListQuestionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateQuestionRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+	Body      *CreateQuestionJSONRequestBody
+}
+
+type CreateQuestionResponseObject interface {
+	VisitCreateQuestionResponse(w http.ResponseWriter) error
+}
+
+type CreateQuestion201JSONResponse Question
+
+func (response CreateQuestion201JSONResponse) VisitCreateQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateQuestion403JSONResponse struct{ ErrorJSONResponse }
+
+func (response CreateQuestion403JSONResponse) VisitCreateQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateQuestion404JSONResponse Error
+
+func (response CreateQuestion404JSONResponse) VisitCreateQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateQuestion422JSONResponse Error
+
+func (response CreateQuestion422JSONResponse) VisitCreateQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteQuestionRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+	Question  QuestionPath  `json:"question"`
+}
+
+type DeleteQuestionResponseObject interface {
+	VisitDeleteQuestionResponse(w http.ResponseWriter) error
+}
+
+type DeleteQuestion204Response struct {
+}
+
+func (response DeleteQuestion204Response) VisitDeleteQuestionResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteQuestion403JSONResponse struct{ ErrorJSONResponse }
+
+func (response DeleteQuestion403JSONResponse) VisitDeleteQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteQuestion404JSONResponse Error
+
+func (response DeleteQuestion404JSONResponse) VisitDeleteQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetQuestionRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+	Question  QuestionPath  `json:"question"`
+}
+
+type GetQuestionResponseObject interface {
+	VisitGetQuestionResponse(w http.ResponseWriter) error
+}
+
+type GetQuestion200JSONResponse Question
+
+func (response GetQuestion200JSONResponse) VisitGetQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetQuestion404JSONResponse struct{ ErrorJSONResponse }
+
+func (response GetQuestion404JSONResponse) VisitGetQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateQuestionRequestObject struct {
+	Organizer OrganizerPath `json:"organizer"`
+	Event     EventPath     `json:"event"`
+	Question  QuestionPath  `json:"question"`
+	Body      *UpdateQuestionJSONRequestBody
+}
+
+type UpdateQuestionResponseObject interface {
+	VisitUpdateQuestionResponse(w http.ResponseWriter) error
+}
+
+type UpdateQuestion200JSONResponse Question
+
+func (response UpdateQuestion200JSONResponse) VisitUpdateQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateQuestion403JSONResponse struct{ ErrorJSONResponse }
+
+func (response UpdateQuestion403JSONResponse) VisitUpdateQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateQuestion404JSONResponse Error
+
+func (response UpdateQuestion404JSONResponse) VisitUpdateQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateQuestion422JSONResponse Error
+
+func (response UpdateQuestion422JSONResponse) VisitUpdateQuestionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListQuotasRequestObject struct {
 	Organizer OrganizerPath `json:"organizer"`
 	Event     EventPath     `json:"event"`
@@ -4466,6 +5101,21 @@ type StrictServerInterface interface {
 
 	// (PATCH /organizers/{organizer}/events/{event}/promo-codes/{promoCode})
 	UpdatePromoCode(ctx context.Context, request UpdatePromoCodeRequestObject) (UpdatePromoCodeResponseObject, error)
+
+	// (GET /organizers/{organizer}/events/{event}/questions)
+	ListQuestions(ctx context.Context, request ListQuestionsRequestObject) (ListQuestionsResponseObject, error)
+
+	// (POST /organizers/{organizer}/events/{event}/questions)
+	CreateQuestion(ctx context.Context, request CreateQuestionRequestObject) (CreateQuestionResponseObject, error)
+
+	// (DELETE /organizers/{organizer}/events/{event}/questions/{question})
+	DeleteQuestion(ctx context.Context, request DeleteQuestionRequestObject) (DeleteQuestionResponseObject, error)
+
+	// (GET /organizers/{organizer}/events/{event}/questions/{question})
+	GetQuestion(ctx context.Context, request GetQuestionRequestObject) (GetQuestionResponseObject, error)
+
+	// (PATCH /organizers/{organizer}/events/{event}/questions/{question})
+	UpdateQuestion(ctx context.Context, request UpdateQuestionRequestObject) (UpdateQuestionResponseObject, error)
 
 	// (GET /organizers/{organizer}/events/{event}/quotas)
 	ListQuotas(ctx context.Context, request ListQuotasRequestObject) (ListQuotasResponseObject, error)
@@ -5408,6 +6058,158 @@ func (sh *strictHandler) UpdatePromoCode(w http.ResponseWriter, r *http.Request,
 	}
 }
 
+// ListQuestions operation middleware
+func (sh *strictHandler) ListQuestions(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+	var request ListQuestionsRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListQuestions(ctx, request.(ListQuestionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListQuestions")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListQuestionsResponseObject); ok {
+		if err := validResponse.VisitListQuestionsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateQuestion operation middleware
+func (sh *strictHandler) CreateQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
+	var request CreateQuestionRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+
+	var body CreateQuestionJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateQuestion(ctx, request.(CreateQuestionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateQuestion")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateQuestionResponseObject); ok {
+		if err := validResponse.VisitCreateQuestionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteQuestion operation middleware
+func (sh *strictHandler) DeleteQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, question QuestionPath) {
+	var request DeleteQuestionRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+	request.Question = question
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteQuestion(ctx, request.(DeleteQuestionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteQuestion")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteQuestionResponseObject); ok {
+		if err := validResponse.VisitDeleteQuestionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetQuestion operation middleware
+func (sh *strictHandler) GetQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, question QuestionPath) {
+	var request GetQuestionRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+	request.Question = question
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetQuestion(ctx, request.(GetQuestionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetQuestion")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetQuestionResponseObject); ok {
+		if err := validResponse.VisitGetQuestionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateQuestion operation middleware
+func (sh *strictHandler) UpdateQuestion(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath, question QuestionPath) {
+	var request UpdateQuestionRequestObject
+
+	request.Organizer = organizer
+	request.Event = event
+	request.Question = question
+
+	var body UpdateQuestionJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateQuestion(ctx, request.(UpdateQuestionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateQuestion")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateQuestionResponseObject); ok {
+		if err := validResponse.VisitUpdateQuestionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListQuotas operation middleware
 func (sh *strictHandler) ListQuotas(w http.ResponseWriter, r *http.Request, organizer OrganizerPath, event EventPath) {
 	var request ListQuotasRequestObject
@@ -5717,95 +6519,104 @@ func (sh *strictHandler) UpdateTicketType(w http.ResponseWriter, r *http.Request
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
+	"tg8iNTu+PsH3CPzfAA==",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,
