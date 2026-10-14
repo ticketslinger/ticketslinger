@@ -36,18 +36,62 @@ func opID(op *openapi3.Operation) string {
 	return strings.ToLower(op.OperationID[:1]) + op.OperationID[1:]
 }
 
+// sessionOnly lists tenant operations an API key may never call, even for
+// its own organizer: they need a person behind a signed-in session.
+var sessionOnly = map[string]string{
+	"listAudit":    "the audit log is for people, not integrations, in this release",
+	"listApiKeys":  "keys don't manage keys",
+	"createApiKey": "keys don't mint keys",
+	"revokeApiKey": "keys don't revoke keys",
+}
+
 // Every secured operation not in userScoped, called by a signed-in mfa user
 // against another tenant's real resources, must answer 404. A new operation
 // is checked automatically; one with a path parameter the fixture can't fill
 // fails until the fixture seeds it.
+//
+// The walk runs again as a write API key of a third organizer: tenant
+// operations answer 404 as for a stranger, and anything that needs a person
+// (userScoped, sessionOnly) answers 403 session_required.
 func TestEverySecuredOperationHidesOtherTenants(t *testing.T) {
 	h := newHarness(t)
 	owner := h.signupWithMFA("owner@example.com")
 	h.createOrganizer(owner, "acme")
+	acmeKey, _ := h.createKey(owner, "acme", "write")
 	stranger := h.signupWithMFA("stranger@example.com")
+	third := h.signupWithMFA("third@example.com")
+	h.createOrganizer(third, "third")
+	_, thirdKey := h.createKey(third, "third", "write")
 	// The other tenant's real resources, by path parameter name.
-	fixture := map[string]string{"organizer": "acme"}
+	// challengeId only appears on a user-scoped operation, which the key run
+	// still calls; any well-formed id will do.
+	fixture := map[string]string{"organizer": "acme", "apiKey": acmeKey, "challengeId": "0190a0a0-0000-7000-8000-000000000000"}
 
+	t.Run("stranger", func(t *testing.T) {
+		walk(t, h, stranger, fixture, func(id string) (int, string) {
+			if _, ok := userScoped[id]; ok {
+				return 0, "" // skipped
+			}
+			return http.StatusNotFound, ""
+		})
+	})
+	t.Run("key", func(t *testing.T) {
+		walk(t, h, thirdKey, fixture, func(id string) (int, string) {
+			_, user := userScoped[id]
+			_, sess := sessionOnly[id]
+			if user || sess {
+				return http.StatusForbidden, "session_required"
+			}
+			return http.StatusNotFound, ""
+		})
+	})
+}
+
+// walk calls every secured operation with token and checks the status (and
+// error code, if want gives one); a zero status skips the operation.
+func walk(t *testing.T, h *harness, token string, fixture map[string]string, want func(id string) (int, string)) {
+	defer func(old *testing.T) { h.t = old }(h.t)
+	h.t = t
 	spec, err := httpapi.GetSwagger()
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +106,8 @@ func TestEverySecuredOperationHidesOtherTenants(t *testing.T) {
 			if op.Security != nil && len(*op.Security) == 0 {
 				continue // public; TestPublicOperationsAreExactlyThese pins the set
 			}
-			if _, ok := userScoped[id]; ok {
+			status, code := want(id)
+			if status == 0 {
 				continue
 			}
 			url := param.ReplaceAllStringFunc(path, func(m string) string {
@@ -72,20 +117,22 @@ func TestEverySecuredOperationHidesOtherTenants(t *testing.T) {
 				}
 				return v
 			})
-			res := h.do(stranger, method, "/v1"+url, `{}`)
-			if res.StatusCode != http.StatusNotFound {
-				t.Errorf("%s %s (%s) as non-member: got %d, want 404", method, url, id, res.StatusCode)
+			res := h.do(token, method, "/v1"+url, `{}`)
+			if got := h.errorCode(res); res.StatusCode != status || (code != "" && got != code) {
+				t.Errorf("%s %s (%s): got %d %q, want %d %q", method, url, id, res.StatusCode, got, status, code)
 			}
 			checked++
 		}
 	}
-	for id := range userScoped {
-		if !seen[id] {
-			t.Errorf("userScoped lists %s, which isn't in the spec", id)
+	for _, list := range []map[string]string{userScoped, sessionOnly} {
+		for id := range list {
+			if !seen[id] {
+				t.Errorf("%s is listed but isn't in the spec", id)
+			}
 		}
 	}
 	if checked == 0 {
-		t.Fatal("no tenant operations checked; the walk is broken")
+		t.Fatal("no operations checked; the walk is broken")
 	}
 }
 

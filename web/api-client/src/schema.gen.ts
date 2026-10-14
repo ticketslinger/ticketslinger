@@ -265,6 +265,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/api-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Owners and admins only, from a signed-in session. An API key gets 403 session_required. */
+        get: operations["listApiKeys"];
+        put?: never;
+        /** @description Owners and admins only, from a signed-in session. The token is in this response and nowhere else, ever. */
+        post: operations["createApiKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/api-keys/{apiKey}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Owners and admins only, from a signed-in session. The key stops working at once; revoking it again changes nothing. */
+        delete: operations["revokeApiKey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -336,8 +371,11 @@ export interface components {
             id: string;
             name: string;
             slug: string;
-            /** @enum {string} */
-            role: "owner" | "admin" | "checkin";
+            /**
+             * @description Your role here. An API key sees its own scope as key:read or key:write.
+             * @enum {string}
+             */
+            role: "owner" | "admin" | "checkin" | "key:read" | "key:write";
         };
         AuditEntry: {
             /** Format: uuid */
@@ -348,8 +386,44 @@ export interface components {
             entity_id: string;
             /** Format: uuid */
             actor_user_id?: string;
+            /**
+             * Format: uuid
+             * @description Set instead of actor_user_id when an API key did it.
+             */
+            actor_api_key_id?: string;
             /** Format: date-time */
             at: string;
+        };
+        CreateApiKey: {
+            name: string;
+            /**
+             * @description write can also read.
+             * @enum {string}
+             */
+            scope: "read" | "write";
+        };
+        ApiKey: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description The first 8 characters after tsk_, so you can tell your keys apart. */
+            prefix: string;
+            /** @enum {string} */
+            scope: "read" | "write";
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description Accurate to about a minute. Absent if never used.
+             */
+            last_used_at?: string;
+            /** Format: date-time */
+            revoked_at?: string;
+        };
+        ApiKeyCreated: {
+            api_key: components["schemas"]["ApiKey"];
+            /** @description The key itself. Copy it now: we only keep a hash, so it can't be shown again. */
+            token: string;
         };
     };
     responses: {
@@ -796,6 +870,82 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AuditEntry"][];
                 };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    listApiKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKey"][];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    createApiKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateApiKey"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKeyCreated"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    revokeApiKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                apiKey: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];

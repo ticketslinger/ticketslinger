@@ -104,3 +104,11 @@ func (h *harness) createOrganizer(token, slug string) {
 	h.t.Helper()
 	h.must(h.do(token, "POST", "/v1/organizers", `{"name":"`+slug+`","slug":"`+slug+`"}`), 201)
 }
+
+// createKey makes an API key for slug with the owner's session and returns
+// its id and plaintext.
+func (h *harness) createKey(token, slug, scope string) (id, plain string) {
+	h.t.Helper()
+	b := h.must(h.do(token, "POST", "/v1/organizers/"+slug+"/api-keys", `{"name":"CI","scope":"`+scope+`"}`), 201)
+	return b["api_key"].(map[string]any)["id"].(string), b["token"].(string)
+}

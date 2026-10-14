@@ -109,6 +109,9 @@ func newToken() (string, []byte, error) {
 		return "", nil, err
 	}
 	tok := base64.RawURLEncoding.EncodeToString(b)
+	if strings.HasPrefix(tok, "tsk_") { // API keys own that prefix (1 in 16.7M)
+		return newToken()
+	}
 	return tok, hashToken(tok), nil
 }
 
