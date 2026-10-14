@@ -2,12 +2,17 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/oapi-codegen/nullable"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/organizers"
+	"github.com/ticketslinger/ticketslinger/api/internal/ratelimit"
+	"github.com/ticketslinger/ticketslinger/api/internal/sales"
 )
 
 // providerError logs what the payment provider said and answers 503. The
@@ -18,7 +23,7 @@ func providerError(ctx context.Context, op string, err error) error {
 }
 
 func (s *server) paymentsStatus(ctx context.Context, tx pgx.Tx, org organizers.Organizer) (PaymentsStatus, error) {
-	st := PaymentsStatus{Provider: None}
+	st := PaymentsStatus{Provider: PaymentsStatusProviderNone}
 	if s.Payments != nil {
 		st.Provider = PaymentsStatusProvider(s.Payments.Name())
 	}
@@ -116,4 +121,167 @@ func (s *server) RefreshPayments(ctx context.Context, req RefreshPaymentsRequest
 		return nil, err
 	}
 	return RefreshPayments200JSONResponse(out), nil
+}
+
+// salesError maps the sales package's errors to the API's. sales.ErrBusy
+// passes through to writeError (503 try_again with Retry-After).
+func salesError(err error) error {
+	var so sales.SoldOut
+	var done sales.CheckoutCompleted
+	switch {
+	case errors.As(err, &so):
+		available := make([]Availability, len(so.Available))
+		for i, a := range so.Available {
+			available[i] = Availability{TicketTypeId: a.TicketTypeID, Remaining: a.Remaining}
+		}
+		return detailError{&apiError{409, "sold_out", "Not enough tickets left for that. Here's what's still available."},
+			map[string]any{"available": available}}
+	case errors.As(err, &done):
+		return detailError{&apiError{409, "checkout_completed", "You've already paid for these. Your order is " + done.OrderCode + ", and the link to your tickets is in your email."},
+			map[string]any{"order_code": done.OrderCode}}
+	case errors.Is(err, sales.ErrCheckoutExpired):
+		return &apiError{410, "checkout_expired", "Your 15 minutes ran out and the tickets went back on sale. Start again and we'll hold them for you."}
+	case errors.Is(err, sales.ErrPaymentsNotConfigured):
+		return errPaymentsNotConfigured
+	case errors.Is(err, sales.ErrPaymentsUnavailable):
+		return errPaymentsUnavailable
+	}
+	return catalogueError(err)
+}
+
+var errTooManyTries = &apiError{429, "rate_limited", "That's a lot of tries from one connection. Give it a minute, then try again."}
+
+// allow counts one request from the caller's address against l.
+func allow(ctx context.Context, l *ratelimit.Limiter) error {
+	if !l.Allow(ratelimit.AddrKey(clientFrom(ctx).ip), time.Now()) {
+		return errTooManyTries
+	}
+	return nil
+}
+
+func (s *server) GetStorefrontEvent(ctx context.Context, req GetStorefrontEventRequestObject) (GetStorefrontEventResponseObject, error) {
+	code := ""
+	if req.Params.Code != nil {
+		code = *req.Params.Code
+	}
+	// Each read with a code is a guess at one: count them, so codes can't be
+	// tried at speed.
+	if code != "" {
+		if err := allow(ctx, s.codeLimit); err != nil {
+			return nil, err
+		}
+	}
+	ev, err := s.Sales.StorefrontEvent(ctx, req.Organizer, req.EventSlug, code)
+	if err != nil {
+		return nil, salesError(err)
+	}
+	out := StorefrontEvent{TicketTypes: []StorefrontTicketType{}, Questions: []StorefrontQuestion{}, Promo: nullable.NewNullNullable[StorefrontPromo]()}
+	out.Organizer.Name, out.Organizer.Slug = ev.Organizer.Name, ev.Organizer.Slug
+	e := ev.Event
+	out.Event.Id, out.Event.Slug, out.Event.Name, out.Event.Description = e.ID, e.Slug, e.Name, e.Description
+	out.Event.VenueName, out.Event.VenueAddress, out.Event.Timezone = e.VenueName, e.VenueAddress, e.Timezone
+	out.Event.StartsAt, out.Event.EndsAt = e.StartsAt, e.EndsAt
+	out.Event.FeeMode, out.Event.State = StorefrontEventEventFeeMode(e.FeeMode), StorefrontEventEventState(e.State)
+	for _, t := range ev.TicketTypes {
+		out.TicketTypes = append(out.TicketTypes, StorefrontTicketType{Id: t.ID, Name: t.Name, Description: t.Description, PriceCents: t.PriceCents,
+			MinPerOrder: t.MinPerOrder, MaxPerOrder: t.MaxPerOrder, Remaining: t.Remaining, OnSale: t.OnSale,
+			SalesStart: nullOf(t.SalesStart), SalesEnd: nullOf(t.SalesEnd), Unlocked: t.Unlocked})
+	}
+	if p := ev.Promo; p != nil {
+		out.Promo.Set(StorefrontPromo{Code: p.Code, Kind: StorefrontPromoKind(p.Kind), Value: p.Value})
+	}
+	for _, q := range ev.Questions {
+		out.Questions = append(out.Questions, StorefrontQuestion{Id: q.ID, Label: q.Label, Kind: StorefrontQuestionKind(q.Kind),
+			Options: q.Options, Required: q.Required, Scope: StorefrontQuestionScope(q.Scope), AppliesToAll: q.AppliesToAll, AppliesTo: q.AppliesTo})
+	}
+	return GetStorefrontEvent200JSONResponse(out), nil
+}
+
+func toCheckout(c sales.Checkout) Checkout {
+	out := Checkout{Id: c.ID, EventId: c.EventID, Status: CheckoutStatus(c.Status), ExpiresAt: c.ExpiresAt, Items: []CheckoutItem{},
+		PromoCode: nullable.NewNullNullable[string]()}
+	for _, it := range c.Items {
+		out.Items = append(out.Items, CheckoutItem{TicketTypeId: it.TicketTypeID, Quantity: it.Quantity})
+	}
+	if c.PromoCode != "" {
+		out.PromoCode.Set(c.PromoCode)
+	}
+	if c.Token != "" {
+		out.Token = &c.Token
+	}
+	if c.OrderURL != "" {
+		out.OrderCode, out.OrderUrl = &c.OrderCode, &c.OrderURL
+	}
+	q := c.Quote
+	out.Quote = Quote{Tickets: []QuoteTicket{}, SubtotalCents: q.SubtotalCents, DiscountCents: q.DiscountCents, TaxCents: q.TaxCents,
+		FeeCents: q.FeeCents, TotalCents: q.TotalCents, FeeMode: QuoteFeeMode(q.FeeMode)}
+	for _, t := range q.Tickets {
+		out.Quote.Tickets = append(out.Quote.Tickets, QuoteTicket{TicketTypeId: t.TicketTypeID, PriceCents: t.PriceCents, DiscountCents: t.DiscountCents,
+			TaxCents: t.TaxCents, FeeCents: t.FeeCents, ChargeCents: t.ChargeCents})
+	}
+	return out
+}
+
+// CreateCheckout counts the attempt against the caller's address first, then
+// checks Turnstile, then holds the tickets.
+func (s *server) CreateCheckout(ctx context.Context, req CreateCheckoutRequestObject) (CreateCheckoutResponseObject, error) {
+	if err := allow(ctx, s.checkoutLimit); err != nil {
+		return nil, err
+	}
+	tok, err := turnstileToken(req.Body.TurnstileToken)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Turnstile.Verify(ctx, tok, clientFrom(ctx).ip); err != nil {
+		if te := turnstileError(ctx, err); te != nil {
+			return nil, te
+		}
+		return nil, err
+	}
+	in := sales.CheckoutInput{Organizer: req.Body.Organizer, Event: req.Body.Event}
+	if req.Body.PromoCode != nil {
+		in.PromoCode = *req.Body.PromoCode
+	}
+	for _, it := range req.Body.Items {
+		in.Items = append(in.Items, sales.Item{TicketTypeID: it.TicketTypeId, Quantity: it.Quantity})
+	}
+	c, err := s.Sales.CreateCheckout(ctx, in)
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return CreateCheckout201JSONResponse(toCheckout(c)), nil
+}
+
+func (s *server) GetCheckout(ctx context.Context, req GetCheckoutRequestObject) (GetCheckoutResponseObject, error) {
+	c, err := s.Sales.GetCheckout(ctx, req.Token)
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return GetCheckout200JSONResponse(toCheckout(c)), nil
+}
+
+func (s *server) PayCheckout(ctx context.Context, req PayCheckoutRequestObject) (PayCheckoutResponseObject, error) {
+	if err := allow(ctx, s.payLimit); err != nil {
+		return nil, err
+	}
+	d := sales.Details{Email: string(req.Body.Email)}
+	if req.Body.Attendees != nil {
+		d.Attendees = *req.Body.Attendees
+	}
+	if req.Body.Answers != nil {
+		for _, a := range *req.Body.Answers {
+			d.Answers = append(d.Answers, sales.Answer{QuestionID: a.QuestionId, TicketIndex: a.TicketIndex, Value: a.Value})
+		}
+	}
+	ps, err := s.Sales.Pay(ctx, req.Token, d)
+	if err != nil {
+		return nil, salesError(err)
+	}
+	out := PayCheckout200JSONResponse{Kind: PaymentStartKind(ps.Kind), AmountCents: ps.AmountCents}
+	if ps.Kind == "free" {
+		out.OrderCode, out.OrderUrl = &ps.OrderCode, &ps.OrderURL
+	} else {
+		out.ClientSecret, out.PublishableKey, out.Account = &ps.ClientSecret, &ps.PublishableKey, &ps.Account
+	}
+	return out, nil
 }

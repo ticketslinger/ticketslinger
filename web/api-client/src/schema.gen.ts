@@ -572,6 +572,74 @@ export interface paths {
         patch: operations["updateQuestion"];
         trace?: never;
     };
+    "/storefront/{organizer}/{eventSlug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Anyone. A live event as buyers see it, by its storefront address; a draft or unknown event is 404. Hidden ticket types show only with a code that unlocks them (unlocked is true on those), and so do questions asked only of hidden types. promo is the code's terms when it works right now, and null otherwise: a code that doesn't work is simply no code here. state is ended once ends_at has passed, and then nothing is on sale. remaining counts what's sold and held right now. Reads that send a code count against the client address, 30 a minute (an IPv6 /64 counts as one), then 429 rate_limited; reads without one are never limited. */
+        get: operations["getStorefrontEvent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/checkouts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Anyone. Holds the tickets for 15 minutes and returns the checkout with its token, the buyer's only key to it: we keep just a hash, so it can't be shown again. Not enough left is 409 sold_out, with error.available listing what's left of every ticket type the buyer can see. A paid ticket needs an organizer whose Stripe account can take cards (409 payments_not_ready) and a server with a payment provider (503 payments_not_configured); free carts need neither. Nothing is held when either is refused. A code that takes nothing off and unlocks nothing in this cart is 422 promo_not_applicable. When the server has Turnstile on, send a turnstile_token: a missing or refused one is 422 turnstile_failed, and 503 turnstile_unavailable means Cloudflare couldn't check it just now. 10 checkouts a minute per client address (an IPv6 /64 counts as one), then 429 rate_limited. 503 try_again with Retry-After: 1 when the organizer is reshuffling capacity at that moment. Its response carries the checkout token, so we never keep it: a retry with the same key runs again and holds a fresh checkout (the first one's hold simply runs out), and a duplicate sent while the first is running gets 409 idempotency_in_progress. */
+        post: operations["createCheckout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/checkouts/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Whoever has the token. status is expired once the hold has run out without payment. A completed checkout carries order_code and order_url, the buyer's link to their tickets. */
+        get: operations["getCheckout"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/checkouts/{token}/pay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Whoever has the token. Saves the buyer's email, names and answers, and starts paying: the first call gives the hold 5 more minutes. Calling it again (say, with a corrected email) updates the order and returns the same payment, never a second one. kind stripe or test: confirm the payment with client_secret (Stripe.js, with stripeAccount set to account). kind free: the order is already paid, and order_url is the buyer's link to it. 410 checkout_expired once the hold has run out; 409 checkout_completed when it's already paid (error.order_code says which order). 422 bad_email (field email); 422 bad_attendee when there are more names than tickets or one is over 120 characters (field attendees); 422 missing_answer for a required question left blank, and 422 bad_answer for an answer that isn't one of a select's options, a checkbox that isn't true or false, an answer over 1,000 characters, a question that isn't asked of that ticket, or a ticket_index out of range. Both name the answer as field answers.<question_id>.<ticket_index>, with -1 for questions asked once per order. A required checkbox has to be true. 422 below_minimum_charge when a paid order comes to less than $0.50. 409 payments_not_ready when the organizer's Stripe account can't take cards right now; 409 price_changed if the order's saved total no longer matches its tickets (start a new checkout); 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached (the hold stays, so try again); 503 try_again with Retry-After: 1 when capacity is being reshuffled at that moment. 20 calls a minute per client address, then 429 rate_limited. Its response carries the payment's client secret, so we never keep it: a retry with the same key runs again and gets the same payment back, and a duplicate sent while the first is running gets 409 idempotency_in_progress. */
+        post: operations["payCheckout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -582,7 +650,192 @@ export interface components {
                 message: string;
                 /** @description The request property this error is about, when there is one (e.g. price_cents, applies_to, options[2]). */
                 field?: string;
+                /** @description On 409 sold_out: what's left of every ticket type the buyer can see. */
+                available?: components["schemas"]["Availability"][];
+                /** @description On 409 checkout_completed: the order this checkout became. */
+                order_code?: string;
             };
+        };
+        Availability: {
+            /** Format: uuid */
+            ticket_type_id: string;
+            remaining: number;
+        };
+        StorefrontEvent: {
+            organizer: {
+                name: string;
+                slug: string;
+            };
+            event: {
+                /** Format: uuid */
+                id: string;
+                slug: string;
+                name: string;
+                description: string;
+                venue_name: string;
+                venue_address: string;
+                timezone: string;
+                /** Format: date-time */
+                starts_at: string;
+                /** Format: date-time */
+                ends_at: string;
+                /** @enum {string} */
+                fee_mode: "absorb" | "pass";
+                /** @enum {string} */
+                state: "on_sale" | "ended";
+            };
+            /** @description In position order. */
+            ticket_types: components["schemas"]["StorefrontTicketType"][];
+            /** @description The code's terms when it works right now; null otherwise. */
+            promo: components["schemas"]["StorefrontPromo"] | null;
+            /** @description In position order. */
+            questions: components["schemas"]["StorefrontQuestion"][];
+        };
+        StorefrontPromo: {
+            code: string;
+            /** @enum {string} */
+            kind: "percent" | "amount";
+            /**
+             * Format: int64
+             * @description percent: basis points. amount: cents off each ticket it covers. 0 is an access code: it unlocks, never discounts.
+             */
+            value: number;
+        };
+        StorefrontTicketType: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            description: string;
+            /** Format: int64 */
+            price_cents: number;
+            min_per_order: number;
+            max_per_order: number;
+            remaining: number;
+            /** @description Whether it can be bought right now: the event hasn't ended and its sales window is open. */
+            on_sale: boolean;
+            /** Format: date-time */
+            sales_start: string | null;
+            /** Format: date-time */
+            sales_end: string | null;
+            /** @description A hidden ticket type that the request's code shows. */
+            unlocked: boolean;
+        };
+        StorefrontQuestion: {
+            /** Format: uuid */
+            id: string;
+            label: string;
+            /** @enum {string} */
+            kind: "text" | "select" | "checkbox";
+            options: string[];
+            required: boolean;
+            /** @enum {string} */
+            scope: "order" | "ticket";
+            applies_to_all: boolean;
+            /** @description When applies_to_all is false: the ticket types it's asked of, among those shown. */
+            applies_to: string[];
+        };
+        CheckoutItem: {
+            /** Format: uuid */
+            ticket_type_id: string;
+            quantity: number;
+        };
+        CreateCheckout: {
+            /** @description The organizer's slug, as in the storefront address. */
+            organizer: string;
+            /** @description The event's slug. */
+            event: string;
+            /** @description Each ticket type once. Up to 100 tickets in all (422 too_many_tickets), and each type's min_per_order to max_per_order (422 quantity_out_of_range). */
+            items: components["schemas"]["CheckoutItem"][];
+            /** @description Spaces around it and capitals don't matter. */
+            promo_code?: string;
+            turnstile_token?: components["schemas"]["TurnstileToken"];
+        };
+        QuoteTicket: {
+            /** Format: uuid */
+            ticket_type_id: string;
+            /** Format: int64 */
+            price_cents: number;
+            /** Format: int64 */
+            discount_cents: number;
+            /** Format: int64 */
+            tax_cents: number;
+            /** Format: int64 */
+            fee_cents: number;
+            /**
+             * Format: int64
+             * @description What the buyer pays for this ticket, before a passed-on fee.
+             */
+            charge_cents: number;
+        };
+        Quote: {
+            tickets: components["schemas"]["QuoteTicket"][];
+            /** Format: int64 */
+            subtotal_cents: number;
+            /** Format: int64 */
+            discount_cents: number;
+            /** Format: int64 */
+            tax_cents: number;
+            /**
+             * Format: int64
+             * @description Our service fee. The buyer pays it on top when fee_mode is pass; with absorb it comes out of the organizer's price.
+             */
+            fee_cents: number;
+            /** Format: int64 */
+            total_cents: number;
+            /** @enum {string} */
+            fee_mode: "absorb" | "pass";
+        };
+        Checkout: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            event_id: string;
+            /** @description Only when it's created. Keep it: it's the only key to this checkout. */
+            token?: string;
+            /** @enum {string} */
+            status: "open" | "paying" | "completed" | "expired";
+            /** Format: date-time */
+            expires_at: string;
+            items: components["schemas"]["CheckoutItem"][];
+            promo_code: string | null;
+            quote: components["schemas"]["Quote"];
+            /** @description Once completed. */
+            order_code?: string;
+            /** @description Once completed: the buyer's link to their tickets. */
+            order_url?: string;
+        };
+        CheckoutAnswer: {
+            /** Format: uuid */
+            question_id: string;
+            /** @description -1 for a question asked once per order; otherwise which ticket, from 0, counting through the checkout's items in order. */
+            ticket_index: number;
+            /** @description For a select, one of its options; for a checkbox, true or false. */
+            value: string;
+        };
+        PayCheckout: {
+            /** @description Where the tickets go: one plain address, like ada@example.com (422 bad_email). */
+            email: string;
+            /** @description Optional names, one per ticket in the same order as ticket_index. */
+            attendees?: string[];
+            answers?: components["schemas"]["CheckoutAnswer"][];
+        };
+        PaymentStart: {
+            /**
+             * @description test is the built-in fake provider, for development.
+             * @enum {string}
+             */
+            kind: "stripe" | "test" | "free";
+            /** @description For stripe and test: confirm the payment with it. */
+            client_secret?: string;
+            publishable_key?: string;
+            /** @description The organizer's Stripe account, for Stripe.js's stripeAccount option. */
+            account?: string;
+            /** Format: int64 */
+            amount_cents: number;
+            /** @description For free: the order, already paid. */
+            order_code?: string;
+            /** @description For free: the buyer's link to their tickets. */
+            order_url?: string;
         };
         Health: {
             status: string;
@@ -992,6 +1245,8 @@ export interface components {
         QuestionPath: string;
         TicketTypePath: string;
         EventPath: string;
+        /** @description The token createCheckout returned. */
+        CheckoutTokenPath: string;
     };
     requestBodies: never;
     headers: never;
@@ -2520,6 +2775,128 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+        };
+    };
+    getStorefrontEvent: {
+        parameters: {
+            query?: {
+                /** @description A promo or access code, as the buyer typed it. */
+                code?: string;
+            };
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                eventSlug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorefrontEvent"];
+                };
+            };
+            404: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    createCheckout: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCheckout"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Checkout"];
+                };
+            };
+            400: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    getCheckout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The token createCheckout returned. */
+                token: components["parameters"]["CheckoutTokenPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Checkout"];
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    payCheckout: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                /** @description The token createCheckout returned. */
+                token: components["parameters"]["CheckoutTokenPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PayCheckout"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentStart"];
+                };
+            };
+            400: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            410: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
+	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 	"github.com/ticketslinger/ticketslinger/api/internal/pricing"
 	"github.com/ticketslinger/ticketslinger/api/internal/system"
 )
@@ -28,10 +29,10 @@ import (
 type Service struct {
 	Pool *pgxpool.Pool
 	Fee  pricing.Fee
-	// Added by later tasks:
-	// Payments      plugin.PaymentProvider // Task 10; nil means paid tickets can't be sold
-	// StorefrontURL string                 // Task 10: base for order links
-	// SecretKey     []byte                 // Task 10: TS_SECRET_KEY, signs order links
+	// Payments takes card payments; nil means paid tickets can't be sold.
+	Payments      plugin.PaymentProvider
+	StorefrontURL string // TS_STOREFRONT_URL: base for order links
+	SecretKey     []byte // TS_SECRET_KEY: order links are signed with a key derived from it
 }
 
 type Item struct {
@@ -54,6 +55,7 @@ type Checkout struct {
 	PromoCode                string
 	Quote                    pricing.Quote
 	OrderCode                string // once completed
+	OrderURL                 string // once completed: the buyer's link to their order
 }
 
 type Availability struct {
@@ -87,6 +89,9 @@ func newToken() (string, []byte) {
 func (s *Service) CreateCheckout(ctx context.Context, in CheckoutInput) (Checkout, error) {
 	if err := checkItems(in.Items); err != nil {
 		return Checkout{}, err
+	}
+	if len(in.PromoCode) > 64 { // longer than any code, even with spaces around it
+		return Checkout{}, errPromoInvalid
 	}
 	org, event, err := s.resolveLive(ctx, in.Organizer, in.Event)
 	if err != nil {
@@ -171,6 +176,13 @@ func (s *Service) hold(ctx context.Context, org, event uuid.UUID, hash []byte, i
 		if !applies(p, in.Items, tts) {
 			return errPromoNotHere
 		}
+		out.Quote = pricing.Compute(lines(tts, in.Items, p), p.pricing(), ev.feeMode, s.Fee)
+		// Never hold seats nobody can pay for.
+		if out.Quote.TotalCents > 0 {
+			if _, err := s.paymentsReady(ctx, tx, org); err != nil {
+				return err
+			}
+		}
 		// 3. Fit: every quota a requested type belongs to has room.
 		if err := fits(ctx, tx, event, sizes, need(in.Items, links), uuid.Nil, p); err != nil {
 			return err
@@ -190,12 +202,9 @@ func (s *Service) hold(ctx context.Context, org, event uuid.UUID, hash []byte, i
 		for i, it := range in.Items {
 			qty[i] = it.Quantity
 		}
-		if _, err := tx.Exec(ctx, `insert into holds (organizer_id, event_id, checkout_id, ticket_type_id, quantity)
-			select $1, $2, $3, unnest($4::uuid[]), unnest($5::int[])`, org, event, out.ID, ids, qty); err != nil {
-			return err
-		}
-		out.Quote = pricing.Compute(lines(tts, in.Items, p), p.pricing(), ev.feeMode, s.Fee)
-		return nil
+		_, err = tx.Exec(ctx, `insert into holds (organizer_id, event_id, checkout_id, ticket_type_id, quantity)
+			select $1, $2, $3, unnest($4::uuid[]), unnest($5::int[])`, org, event, out.ID, ids, qty)
+		return err
 	})
 	return out, err
 }
@@ -446,50 +455,58 @@ func soldOut(ctx context.Context, tx pgx.Tx, event uuid.UUID, p *promo) error {
 	return SoldOut{Available: avail}
 }
 
-// GetCheckout finds a checkout by its token. Unknown tokens are ErrNotFound.
-func (s *Service) GetCheckout(ctx context.Context, token string) (Checkout, error) {
-	hash := HashToken(token)
+// checkoutOrg is the organizer of the checkout with this token, or
+// ErrNotFound.
+func (s *Service) checkoutOrg(ctx context.Context, token string) (uuid.UUID, error) {
 	var org *uuid.UUID
-	if err := s.Pool.QueryRow(ctx, `select checkout_scope($1)`, hash).Scan(&org); err != nil {
-		return Checkout{}, err
+	if err := s.Pool.QueryRow(ctx, `select checkout_scope($1)`, HashToken(token)).Scan(&org); err != nil {
+		return uuid.Nil, err
 	}
 	if org == nil {
-		return Checkout{}, catalogue.ErrNotFound
+		return uuid.Nil, catalogue.ErrNotFound
+	}
+	return *org, nil
+}
+
+// GetCheckout finds a checkout by its token. Unknown tokens are ErrNotFound.
+// A completed one carries its order's code and link: the token proves it's
+// the buyer asking.
+func (s *Service) GetCheckout(ctx context.Context, token string) (Checkout, error) {
+	org, err := s.checkoutOrg(ctx, token)
+	if err != nil {
+		return Checkout{}, err
 	}
 	var out Checkout
-	err := system.Run(ctx, s.Pool, *org, func(tx pgx.Tx) error {
+	err = system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error {
 		var p promo
-		var promoID *uuid.UUID
+		var promoID, orderID *uuid.UUID
 		var feeMode string
 		if err := tx.QueryRow(ctx, `select c.id, c.organizer_id, c.event_id,
 				case when c.status <> 'completed' and c.expires_at <= statement_timestamp() then 'expired' else c.status end,
 				c.expires_at, c.promo_code_id, coalesce(p.code, ''), coalesce(p.kind, ''), coalesce(p.value, 0), e.fee_mode,
-				coalesce((select code from orders o where o.checkout_id = c.id), '')
+				o.id, coalesce(o.code, '')
 			from checkouts c join events e on e.id = c.event_id left join promo_codes p on p.id = c.promo_code_id
-			where c.token_hash = $1`, hash).Scan(&out.ID, &out.OrganizerID, &out.EventID, &out.Status, &out.ExpiresAt,
-			&promoID, &p.code, &p.kind, &p.value, &feeMode, &out.OrderCode); errors.Is(err, pgx.ErrNoRows) {
+			left join orders o on o.checkout_id = c.id
+			where c.token_hash = $1`, HashToken(token)).Scan(&out.ID, &out.OrganizerID, &out.EventID, &out.Status, &out.ExpiresAt,
+			&promoID, &p.code, &p.kind, &p.value, &feeMode, &orderID, &out.OrderCode); errors.Is(err, pgx.ErrNoRows) {
 			return catalogue.ErrNotFound // purged since checkout_scope looked
 		} else if err != nil {
 			return err
 		}
-		rows, _ := tx.Query(ctx, `select ticket_type_id, quantity from holds where checkout_id = $1 order by id`, out.ID)
-		items, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Item])
-		if err != nil {
-			return err
+		if out.Status != "completed" {
+			out.OrderCode = "" // pending: not the buyer's yet
+		} else if orderID != nil {
+			out.OrderURL = s.orderURL(out.OrderCode, *orderID)
 		}
-		out.Items = items
 		var pp *promo
 		if promoID != nil {
 			p.id = *promoID
 			pp = &p
 			out.PromoCode = p.code
 		}
-		tts, err := ticketTypes(ctx, tx, out.EventID, itemIDs(items), pp)
-		if err != nil {
-			return err
-		}
-		out.Quote = pricing.Compute(lines(tts, items, pp), pp.pricing(), feeMode, s.Fee)
-		return nil
+		var err error
+		out.Items, out.Quote, err = s.cart(ctx, tx, out.ID, out.EventID, pp, feeMode)
+		return err
 	})
 	return out, err
 }

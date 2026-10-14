@@ -31,7 +31,7 @@ type Config struct {
 	StripePublishableKey string // TS_STRIPE_PUBLISHABLE_KEY: pk_, same mode; required with a secret key
 	StripeWebhookSecret  string // TS_STRIPE_WEBHOOK_SECRET: whsec_; required with a secret key
 	StorefrontURL        string // TS_STOREFRONT_URL
-	// Cloudflare Turnstile on sign-up and repeated failed sign-ins. Off when the secret is unset.
+	// Cloudflare Turnstile on sign-up, repeated failed sign-ins and checkouts. Off when the secret is unset.
 	TurnstileSecret    string // TS_TURNSTILE_SECRET
 	TurnstileVerifyURL string // TS_TURNSTILE_VERIFY_URL, Cloudflare's siteverify by default
 }

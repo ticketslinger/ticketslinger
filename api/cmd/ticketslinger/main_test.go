@@ -105,9 +105,10 @@ func TestTestMailReturnsTheNewestLinkForThatAddress(t *testing.T) {
 
 func TestWorkerSendsQueuedEmail(t *testing.T) {
 	m := &mailer.Memory{}
-	h := newWorker(nil, m).Handlers["send_email"]
-	if h == nil {
-		t.Fatal("serve's worker has no send_email handler")
+	w := newWorker(nil, m, config.Config{})
+	h := w.Handlers["send_email"]
+	if h == nil || w.Handlers["order_confirmation"] == nil {
+		t.Fatal("serve's worker is missing the send_email or order_confirmation handler")
 	}
 	if err := h(context.Background(), []byte(`{"to":"a@example.com","subject":"Hi","text":"Hello"}`)); err != nil || len(m.Sent) != 1 {
 		t.Fatalf("err=%v sent=%d", err, len(m.Sent))

@@ -25,6 +25,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/payments"
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
+	"github.com/ticketslinger/ticketslinger/api/internal/sales"
 	"github.com/ticketslinger/ticketslinger/api/internal/turnstile"
 )
 
@@ -73,7 +74,7 @@ func serve() error {
 		return errors.New("TS_SECRET_KEY is required (base64 of 32 random bytes, e.g. `openssl rand -base64 32`)")
 	}
 	if cfg.TurnstileSecret == "" {
-		slog.Warn("TS_TURNSTILE_SECRET is unset: sign-up and repeated failed sign-ins go without a Turnstile check")
+		slog.Warn("TS_TURNSTILE_SECRET is unset: sign-up, repeated failed sign-ins and checkouts go without a Turnstile check")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
@@ -95,7 +96,7 @@ func serve() error {
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
 	workerDone := make(chan struct{})
-	go func() { newWorker(pool, mailer.Log{}).Run(ctx); close(workerDone) }()
+	go func() { newWorker(pool, mailer.Log{}, cfg).Run(ctx); close(workerDone) }()
 	select {
 	case err := <-errc:
 		return err
@@ -112,8 +113,13 @@ func serve() error {
 }
 
 // newWorker is the job worker with every handler registered.
-func newWorker(pool *pgxpool.Pool, m mailer.Mailer) *jobs.Worker {
-	return &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{"send_email": jobs.SendEmail(m)}}
+func newWorker(pool *pgxpool.Pool, m mailer.Mailer, cfg config.Config) *jobs.Worker {
+	// Order emails only read orders and rebuild links: no fee or provider needed.
+	shop := &sales.Service{Pool: pool, StorefrontURL: cfg.StorefrontURL, SecretKey: cfg.SecretKey}
+	return &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{
+		"send_email":               jobs.SendEmail(m),
+		sales.OrderConfirmationJob: shop.OrderConfirmation(m),
+	}}
 }
 
 // newHandler builds the API. In test mode it sends mail to memory and adds
@@ -140,9 +146,10 @@ func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Hand
 		}
 		mail = mem
 	}
+	ts := &turnstile.Verifier{Secret: cfg.TurnstileSecret, URL: cfg.TurnstileVerifyURL, Client: &http.Client{Timeout: 2 * time.Second}}
 	h := httpapi.New(httpapi.Deps{Pool: pool, Auth: auth.NewService(pool, mail, auth.Options{RPID: cfg.WebAuthnRPID, Origin: cfg.DashboardOrigin, SecretKey: cfg.SecretKey,
-		Turnstile: &turnstile.Verifier{Secret: cfg.TurnstileSecret, URL: cfg.TurnstileVerifyURL, Client: &http.Client{Timeout: 2 * time.Second}}}),
-		Config: cfg, Payments: paymentProvider(cfg, testMode)})
+		Turnstile: ts}),
+		Config: cfg, Payments: paymentProvider(cfg, testMode), Turnstile: ts})
 	if testMode {
 		h = testMail(h, mem)
 	}

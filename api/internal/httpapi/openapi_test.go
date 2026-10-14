@@ -188,6 +188,10 @@ func sample(t *testing.T, name string, parts []*openapi3.Schema) any {
 		return "2027-03-01T22:00:00Z"
 	case "price_cents":
 		return 2500 // a paid ticket costs at least 50
+	case "email":
+		return "walk@example.com"
+	case "items":
+		return []any{map[string]any{"ticket_type_id": "0190a0a0-0000-7000-8000-000000000001", "quantity": 1}} // a checkout needs one
 	}
 	switch {
 	case len(s.Enum) > 0:

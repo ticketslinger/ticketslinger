@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -23,6 +24,9 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/idempotency"
 	"github.com/ticketslinger/ticketslinger/api/internal/organizers"
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
+	"github.com/ticketslinger/ticketslinger/api/internal/pricing"
+	"github.com/ticketslinger/ticketslinger/api/internal/ratelimit"
+	"github.com/ticketslinger/ticketslinger/api/internal/sales"
 	"github.com/ticketslinger/ticketslinger/api/internal/turnstile"
 )
 
@@ -34,11 +38,18 @@ type Deps struct {
 	Config     config.Config
 	// Payments takes card payments; nil when none is configured.
 	Payments plugin.PaymentProvider
+	// Sales sells tickets; nil builds one from Pool, Payments and Config.
+	Sales *sales.Service
+	// Turnstile guards checkout creation; nil turns it off.
+	Turnstile *turnstile.Verifier
 }
 
 type server struct {
 	Deps
 	public map[string]bool // mux patterns ("POST /v1/auth/login") whose spec says security: []
+	// Per client address (ratelimit.AddrKey): checkouts created, pay calls,
+	// and storefront reads that try a code.
+	checkoutLimit, payLimit, codeLimit *ratelimit.Limiter
 }
 
 func New(d Deps) http.Handler {
@@ -48,8 +59,13 @@ func New(d Deps) http.Handler {
 	if d.Keys == nil {
 		d.Keys = apikeys.New(d.Pool)
 	}
+	if d.Sales == nil {
+		d.Sales = &sales.Service{Pool: d.Pool, Fee: pricing.Fee{BP: d.Config.PlatformFeeBP, Cents: d.Config.PlatformFeeCents},
+			Payments: d.Payments, StorefrontURL: d.Config.StorefrontURL, SecretKey: d.Config.SecretKey}
+	}
 	noStore := noStoreRoutes()
-	s := &server{Deps: d, public: publicRoutes()}
+	s := &server{Deps: d, public: publicRoutes(), checkoutLimit: ratelimit.New(10, time.Minute), payLimit: ratelimit.New(20, time.Minute),
+		codeLimit: ratelimit.New(30, time.Minute)}
 	strict := NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc:  func(w http.ResponseWriter, r *http.Request, err error) { writeBadRequest(w, r, err) },
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) { writeError(w, err) },

@@ -2,9 +2,25 @@
 package ratelimit
 
 import (
+	"net/netip"
 	"sync"
 	"time"
 )
+
+// AddrKey is the address a client's requests count against: an IPv4
+// address, an IPv6 /64 (one host usually owns a whole /64, so single
+// addresses would hand out endless fresh counters), or "" when the address
+// is unknown.
+func AddrKey(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	switch {
+	case err != nil:
+		return ""
+	case a.Is6():
+		return netip.PrefixFrom(a, 64).Masked().String()
+	}
+	return a.String()
+}
 
 // Limiter is a fixed-window counter per key.
 // ponytail: in-process limiter, fine for one API instance; move to Postgres or Redis when the API runs on more than one machine
