@@ -93,6 +93,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Starts setting up an authenticator app. Unless this session passed a second factor, send the current password. Once the account has a passkey, only a session that passed one may start (403 mfa_required). */
         post: operations["startTotp"];
         delete?: never;
         options?: never;
@@ -125,7 +126,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts adding a passkey. Unless this session passed a second factor, send the current password. */
+        /** @description Starts adding a passkey. Unless this session passed a second factor, send the current password. Once the account has a passkey or authenticator app, only a session that passed one may add another (403 mfa_required). */
         post: operations["beginPasskeyRegistration"];
         delete?: never;
         options?: never;
@@ -471,10 +472,10 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
                 "application/json": {
-                    password: string;
+                    password?: string;
                 };
             };
         };
@@ -489,6 +490,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     confirmTotp: {
@@ -541,6 +543,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             423: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };

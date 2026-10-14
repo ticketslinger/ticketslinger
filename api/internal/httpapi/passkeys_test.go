@@ -67,6 +67,15 @@ func TestPasskeyEndpoints(t *testing.T) {
 	if st, b := do(t, "POST", srv.URL+"/v1/auth/passkeys/register", sess["session_token"].(string), ""); st != 200 {
 		t.Fatalf("mfa session begin register: %d %v", st, b)
 	}
+
+	// Now the account has a passkey, the password session can't add a second
+	// factor of any kind, even with the right password.
+	if st, b := do(t, "POST", srv.URL+"/v1/auth/passkeys/register", tok, `{"password":"a long passphrase"}`); st != 403 || errCode(b) != "mfa_required" {
+		t.Fatalf("password session adding a second passkey: %d %v", st, b)
+	}
+	if st, b := do(t, "POST", srv.URL+"/v1/auth/totp", tok, `{"password":"a long passphrase"}`); st != 403 || errCode(b) != "mfa_required" {
+		t.Fatalf("password session starting totp: %d %v", st, b)
+	}
 }
 
 // The passkey sign-in routes are public: no token must not mean 401.

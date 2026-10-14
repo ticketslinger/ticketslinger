@@ -100,11 +100,15 @@ func (s *Service) consumeChallenge(ctx context.Context, id uuid.UUID, kind strin
 }
 
 // BeginPasskeyRegistration starts adding a passkey to the signed-in user.
-// Unless the session already passed a second factor, the current password is
-// required, so a stolen session token can't plant a passkey of its own.
+// Once the account has a second factor, only a session that passed one may
+// add another (see checkEnrolment). The first passkey on a password session
+// needs the current password, so a stolen session token can't plant one.
 func (s *Service) BeginPasskeyRegistration(ctx context.Context, userID uuid.UUID, mfa bool, password string) (uuid.UUID, *protocol.CredentialCreation, error) {
 	if s.waErr != nil {
 		return uuid.Nil, nil, s.waErr
+	}
+	if err := s.checkEnrolment(ctx, userID, mfa); err != nil {
+		return uuid.Nil, nil, err
 	}
 	if !mfa {
 		if password == "" {
@@ -125,6 +129,26 @@ func (s *Service) BeginPasskeyRegistration(ctx context.Context, userID uuid.UUID
 	}
 	id, err := s.saveChallenge(ctx, &userID, "register", sd)
 	return id, creation, err
+}
+
+// checkEnrolment refuses to add a second factor from a session that hasn't
+// passed one when the account already has a passkey or an authenticator app.
+// A password alone would otherwise let whoever knows it enrol their own
+// factor and then sign in with it as mfa.
+func (s *Service) checkEnrolment(ctx context.Context, userID uuid.UUID, mfa bool) error {
+	if mfa {
+		return nil
+	}
+	var has bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT totp_enabled_at IS NOT NULL OR EXISTS (SELECT 1 FROM passkeys WHERE user_id = $1)
+		   FROM users WHERE id = $1`, userID).Scan(&has); err != nil {
+		return err
+	}
+	if has {
+		return ErrMFARequired
+	}
+	return nil
 }
 
 // FinishPasskeyRegistration verifies the authenticator's attestation (the

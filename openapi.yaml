@@ -50,10 +50,12 @@ paths:
   /auth/totp:
     post:
       operationId: startTotp
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [password], properties: { password: { type: string } } } } } }
+      description: Starts setting up an authenticator app. Unless this session passed a second factor, send the current password. Once the account has a passkey, only a session that passed one may start (403 mfa_required).
+      requestBody: { required: false, content: { application/json: { schema: { type: object, properties: { password: { type: string } } } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TotpSetup" } } } }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /auth/totp/confirm:
     post:
       operationId: confirmTotp
@@ -64,11 +66,12 @@ paths:
   /auth/passkeys/register:
     post:
       operationId: beginPasskeyRegistration
-      description: Starts adding a passkey. Unless this session passed a second factor, send the current password.
+      description: Starts adding a passkey. Unless this session passed a second factor, send the current password. Once the account has a passkey or authenticator app, only a session that passed one may add another (403 mfa_required).
       requestBody: { required: false, content: { application/json: { schema: { type: object, properties: { password: { type: string } } } } } }
       responses:
         "200": { description: Options, content: { application/json: { schema: { $ref: "#/components/schemas/WebAuthnChallenge" } } } }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
         "423": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
   /auth/passkeys/register/{challengeId}:

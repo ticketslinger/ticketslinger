@@ -174,6 +174,9 @@ func TestTOTPEndpoints(t *testing.T) {
 	if st, _ := do(t, "POST", srv.URL+"/v1/auth/totp", "", ""); st != 401 {
 		t.Fatalf("unauthenticated start: %d", st)
 	}
+	if st, b := do(t, "POST", srv.URL+"/v1/auth/totp", tok, ""); st != 401 || errCode(b) != "password_required" {
+		t.Fatalf("no password: %d %v", st, b)
+	}
 	if st, _ := do(t, "POST", srv.URL+"/v1/auth/totp", tok, `{"password":"wrong password!"}`); st != 401 {
 		t.Fatalf("wrong password: %d", st)
 	}
@@ -188,7 +191,11 @@ func TestTOTPEndpoints(t *testing.T) {
 	if st, _ := do(t, "POST", srv.URL+"/v1/auth/totp/confirm", tok, `{"code":"`+code+`"}`); st != 204 {
 		t.Fatalf("confirm: %d", st)
 	}
-	if st, e := do(t, "POST", srv.URL+"/v1/auth/totp", tok, `{"password":"a long passphrase"}`); st != 409 {
-		t.Fatalf("restart while enabled: %d %v", st, e)
+	// The session predates the authenticator, so it hasn't passed it.
+	if st, e := do(t, "POST", srv.URL+"/v1/auth/totp", tok, `{"password":"a long passphrase"}`); st != 403 || errCode(e) != "mfa_required" {
+		t.Fatalf("restart from a password session: %d %v", st, e)
+	}
+	if st, e := do(t, "POST", srv.URL+"/v1/auth/passkeys/register", tok, `{"password":"a long passphrase"}`); st != 403 || errCode(e) != "mfa_required" {
+		t.Fatalf("passkey from a password session: %d %v", st, e)
 	}
 }

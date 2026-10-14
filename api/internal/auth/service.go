@@ -34,6 +34,7 @@ var (
 	ErrPasswordTooLong  = errors.New("auth: password too long")
 	ErrInvalidName      = errors.New("auth: invalid name")
 	ErrPasswordRequired = errors.New("auth: password required")
+	ErrMFARequired      = errors.New("auth: mfa required")
 )
 
 const (

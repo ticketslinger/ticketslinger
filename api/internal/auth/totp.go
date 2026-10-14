@@ -108,11 +108,25 @@ func recordTOTPStep(ctx context.Context, tx pgx.Tx, id uuid.UUID, step int64, en
 
 // StartTOTP begins enrolment: it stores a fresh encrypted secret, not yet
 // enabled, and returns it with the otpauth:// URL for a QR code. Calling it
-// again before confirming replaces the pending secret. The current password
-// is required, so a stolen session token can't lock the owner out; a wrong
-// one counts toward the login lockout.
-func (s *Service) StartTOTP(ctx context.Context, userID uuid.UUID, password string) (string, string, error) {
-	email, err := s.reauthenticate(ctx, userID, password)
+// again before confirming replaces the pending secret. A password session
+// must send the current password, so a stolen session token can't lock the
+// owner out (a wrong one counts toward the login lockout), and may only do
+// so while the account has no second factor (see checkEnrolment). An mfa
+// session needs no password.
+func (s *Service) StartTOTP(ctx context.Context, userID uuid.UUID, mfa bool, password string) (string, string, error) {
+	if err := s.checkEnrolment(ctx, userID, mfa); err != nil {
+		return "", "", err
+	}
+	var email string
+	var err error
+	switch {
+	case mfa:
+		err = s.pool.QueryRow(ctx, `SELECT email FROM users WHERE id = $1`, userID).Scan(&email)
+	case password == "":
+		return "", "", ErrPasswordRequired
+	default:
+		email, err = s.reauthenticate(ctx, userID, password)
+	}
 	if err != nil {
 		return "", "", err
 	}

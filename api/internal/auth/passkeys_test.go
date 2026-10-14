@@ -10,6 +10,7 @@ import (
 	"github.com/descope/virtualwebauthn"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pquerna/otp/totp"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
@@ -333,4 +334,46 @@ func TestPasskeyLoginFromAnotherOriginIsRefused(t *testing.T) {
 	if _, _, err := s.FinishPasskeyLogin(ctx, lid, []byte(asr), "", ""); !errors.Is(err, auth.ErrBadCredentials) {
 		t.Fatalf("assertion from another origin: got %v, want ErrBadCredentials", err)
 	}
+}
+
+// Once an account has a second factor, adding another one needs a session
+// that passed it: a password alone must not plant an attacker's passkey or
+// authenticator.
+func TestSecondFactorEnrolmentNeedsMFAOnceOneExists(t *testing.T) {
+	ctx := context.Background()
+	refused := func(t *testing.T, s *auth.Service, u auth.User) {
+		t.Helper()
+		if _, _, err := s.BeginPasskeyRegistration(ctx, u.ID, false, "a long passphrase"); !errors.Is(err, auth.ErrMFARequired) {
+			t.Errorf("passkey with password-only session: got %v, want ErrMFARequired", err)
+		}
+		if _, _, err := s.StartTOTP(ctx, u.ID, false, "a long passphrase"); !errors.Is(err, auth.ErrMFARequired) {
+			t.Errorf("totp with password-only session: got %v, want ErrMFARequired", err)
+		}
+		if _, _, err := s.BeginPasskeyRegistration(ctx, u.ID, true, ""); err != nil {
+			t.Errorf("passkey with mfa session: %v", err)
+		}
+	}
+
+	t.Run("has a passkey", func(t *testing.T) {
+		s, _ := newSvcPool(t)
+		u := signup(t, s, "a@example.com")
+		register(t, s, u, newDevice(u.ID)) // the first factor may use the password
+		refused(t, s, u)
+		if secret, _, err := s.StartTOTP(ctx, u.ID, true, ""); err != nil || secret == "" { // an mfa session needs no password
+			t.Errorf("totp with mfa session: %q %v", secret, err)
+		}
+	})
+	t.Run("has totp", func(t *testing.T) {
+		s, _ := newSvcPool(t)
+		u := signup(t, s, "a@example.com")
+		secret, _, err := s.StartTOTP(ctx, u.ID, false, "a long passphrase") // first factor
+		if err != nil {
+			t.Fatal(err)
+		}
+		code, _ := totp.GenerateCode(secret, time.Now())
+		if err := s.ConfirmTOTP(ctx, u.ID, code); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, s, u)
+	})
 }
