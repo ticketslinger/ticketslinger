@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"net/url"
 	"os"
 	"testing"
@@ -18,8 +19,11 @@ import (
 // a pool connected as ts_app. The database is dropped when the test ends.
 func New(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	ownerURL, appURL := os.Getenv("TEST_DATABASE_URL_OWNER"), os.Getenv("TEST_DATABASE_URL_APP")
-	if ownerURL == "" || appURL == "" {
+	ownerURL, appURL, skip, err := requireURLs(os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skip {
 		t.Skip("TEST_DATABASE_URL_OWNER/APP not set; run `make dev-db`")
 	}
 	ctx := context.Background()
@@ -49,6 +53,19 @@ func New(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 	return pool
+}
+
+// requireURLs reads the test database URLs. When they are missing, it asks
+// for a skip locally but returns an error under CI so tests cannot pass vacuously.
+func requireURLs(getenv func(string) string) (owner, app string, skip bool, err error) {
+	owner, app = getenv("TEST_DATABASE_URL_OWNER"), getenv("TEST_DATABASE_URL_APP")
+	if owner != "" && app != "" {
+		return owner, app, false, nil
+	}
+	if getenv("CI") != "" {
+		return "", "", false, errors.New("TEST_DATABASE_URL_OWNER/APP must be set when CI is set; refusing to skip database tests")
+	}
+	return "", "", true, nil
 }
 
 func withDB(t *testing.T, raw, name string) string {
