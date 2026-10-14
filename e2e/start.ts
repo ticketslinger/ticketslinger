@@ -1,11 +1,13 @@
 // Starts the whole stack for the end-to-end suite: a fresh database, the API
-// in test mode on :3001, and the built dashboard on :3002. Playwright runs it.
+// in test mode on :3001, the built storefront on :3003 and the built dashboard
+// on :3002. Playwright runs it.
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SQL } from "bun";
 
 const root = join(import.meta.dir, "..");
 const dashboard = join(root, "web/dashboard");
+const storefront = join(root, "web/storefront");
 const pg = process.env.E2E_PG ?? "localhost:54329";
 const DB = "ticketslinger_e2e";
 const url = (role: string, db: string) => `postgres://${role}:${role}@${pg}/${db}?sslmode=disable`;
@@ -20,6 +22,10 @@ const apiEnv = {
   TS_HTTP_ADDR: "127.0.0.1:3001",
   TS_PUBLIC_URL: "http://127.0.0.1:3001",
   TS_DASHBOARD_ORIGIN: "http://localhost:3002",
+  // Order links in emails and on the checkout point here.
+  TS_STOREFRONT_URL: "http://localhost:3003",
+  // The storefront reaches the API on loopback and forwards each buyer's address.
+  TS_TRUSTED_PROXIES: "127.0.0.1/32,::1/128",
   TS_WEBAUTHN_RPID: "localhost",
   TS_TEST_MODE: "1",
   // Test mode always takes payments through the built-in fake provider.
@@ -43,6 +49,7 @@ await admin.close();
 run(["go", "build", "-o", bin, "./cmd/ticketslinger"], { cwd: join(root, "api") });
 run([bin, "migrate"], { env: apiEnv });
 run(["bun", "run", "build"], { cwd: dashboard });
+run(["bun", "run", "build"], { cwd: storefront });
 
 const children = [Bun.spawn([bin, "serve"], { env: apiEnv, stdout: "inherit", stderr: "inherit" })];
 const stop = (code: number) => {
@@ -52,17 +59,38 @@ const stop = (code: number) => {
 process.on("SIGTERM", () => stop(0));
 process.on("SIGINT", () => stop(0));
 
-for (let i = 0; ; i++) {
-  if (
-    await fetch("http://127.0.0.1:3001/v1/health").then(
-      (r) => r.ok,
-      () => false,
+async function ready(url: string) {
+  for (let i = 0; ; i++) {
+    if (
+      await fetch(url).then(
+        (r) => r.ok,
+        () => false,
+      )
     )
-  )
-    break;
-  if (i === 100) stop(1);
-  await Bun.sleep(100);
+      return;
+    if (i === 100) stop(1);
+    await Bun.sleep(100);
+  }
 }
+
+await ready("http://127.0.0.1:3001/v1/health");
+
+children.push(
+  Bun.spawn(["bun", "server/index.ts"], {
+    cwd: storefront,
+    env: {
+      ...process.env,
+      TS_API_URL: "http://127.0.0.1:3001/v1",
+      TS_STOREFRONT_PORT: "3003",
+      TS_STOREFRONT_STATIC: "./dist",
+      // Cloudflare's published test site key: the widget always passes.
+      TS_TURNSTILE_SITEKEY: "1x00000000000000000000AA",
+    },
+    stdout: "inherit",
+    stderr: "inherit",
+  }),
+);
+await ready("http://127.0.0.1:3003/healthz");
 
 children.push(
   Bun.spawn(["bun", "server/index.ts"], {
@@ -82,6 +110,6 @@ children.push(
   }),
 );
 
-// If either server dies, take the other down too so Playwright sees the failure.
+// If any server dies, take the others down too so Playwright sees the failure.
 await Promise.race(children.map((c) => c.exited));
 stop(1);

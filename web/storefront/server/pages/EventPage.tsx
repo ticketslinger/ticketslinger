@@ -26,7 +26,7 @@ export type EventPageProps = {
 const fmt = (iso: string, timeZone: string, o: Intl.DateTimeFormatOptions) =>
   new Intl.DateTimeFormat("en-US", { timeZone, ...o }).format(new Date(iso)).replace(/\s/g, " ");
 
-const when = (iso: string, tz: string) =>
+export const when = (iso: string, tz: string) =>
   fmt(iso, tz, {
     weekday: "long",
     month: "long",

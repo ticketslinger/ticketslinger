@@ -630,7 +630,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Whoever has the token. status is expired once the hold has run out without payment. A completed checkout carries order_code and order_url, the buyer's link to their tickets. */
+        /** @description Whoever has the token. status is expired once the hold has run out without payment. A completed checkout carries order_code and order_url, the buyer's link to their tickets. event carries what the checkout page needs: the event's names, the cart's ticket type names and the questions asked of them. */
         get: operations["getCheckout"];
         put?: never;
         post?: never;
@@ -837,6 +837,24 @@ export interface components {
             order_code?: string;
             /** @description Once completed: the buyer's link to their tickets. */
             order_url?: string;
+            event?: components["schemas"]["CheckoutEvent"];
+        };
+        /** @description getCheckout only: what the checkout page shows and asks. */
+        CheckoutEvent: {
+            /** @description The organizer's slug, for the way back to the event. */
+            organizer: string;
+            slug: string;
+            name: string;
+            timezone: string;
+            /** @description The cart's ticket types. */
+            ticket_types: components["schemas"]["TicketName"][];
+            /** @description In position order: the ones asked of the cart's ticket types. */
+            questions: components["schemas"]["StorefrontQuestion"][];
+        };
+        TicketName: {
+            /** Format: uuid */
+            id: string;
+            name: string;
         };
         CheckoutAnswer: {
             /** Format: uuid */

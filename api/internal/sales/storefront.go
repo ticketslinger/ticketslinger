@@ -116,19 +116,25 @@ func (s *Service) StorefrontEvent(ctx context.Context, org, event, code string) 
 		}); err != nil {
 			return err
 		}
-		rows, _ = tx.Query(ctx, `select q.id, q.label, q.kind, q.scope,
-				array(select o from jsonb_array_elements_text(q.options) with ordinality x(o, n) order by n),
-				q.required, q.applies_to_all,
-				array(select a.ticket_type_id from question_applies_to a where a.question_id = q.id and a.ticket_type_id = any($2) order by a.ticket_type_id)
-			from questions q
-			where q.event_id = $1 and (q.applies_to_all or exists (select 1 from question_applies_to a where a.question_id = q.id and a.ticket_type_id = any($2)))
-			order by q.position, q.id`, eventID, visible)
-		out.Questions, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (StorefrontQuestion, error) {
-			var q StorefrontQuestion
-			err := r.Scan(&q.ID, &q.Label, &q.Kind, &q.Scope, &q.Options, &q.Required, &q.AppliesToAll, &q.AppliesTo)
-			return q, err
-		})
+		out.Questions, err = questionsFor(ctx, tx, eventID, visible)
 		return err
 	})
 	return out, err
+}
+
+// questionsFor is the event's questions asked of any of types, in position
+// order, with applies_to narrowed to those types.
+func questionsFor(ctx context.Context, tx pgx.Tx, event uuid.UUID, types []uuid.UUID) ([]StorefrontQuestion, error) {
+	rows, _ := tx.Query(ctx, `select q.id, q.label, q.kind, q.scope,
+			array(select o from jsonb_array_elements_text(q.options) with ordinality x(o, n) order by n),
+			q.required, q.applies_to_all,
+			array(select a.ticket_type_id from question_applies_to a where a.question_id = q.id and a.ticket_type_id = any($2) order by a.ticket_type_id)
+		from questions q
+		where q.event_id = $1 and (q.applies_to_all or exists (select 1 from question_applies_to a where a.question_id = q.id and a.ticket_type_id = any($2)))
+		order by q.position, q.id`, event, types)
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (StorefrontQuestion, error) {
+		var q StorefrontQuestion
+		err := r.Scan(&q.ID, &q.Label, &q.Kind, &q.Scope, &q.Options, &q.Required, &q.AppliesToAll, &q.AppliesTo)
+		return q, err
+	})
 }

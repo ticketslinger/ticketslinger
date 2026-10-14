@@ -11,6 +11,7 @@
     "build": "tsc --noEmit && bun build.ts"
   },
   "dependencies": {
+    "@stripe/stripe-js": "10.1.0",
     "@ticketslinger/api-client": "workspace:*",
     "hono": "4.13.13",
     "preact": "11.0.1",

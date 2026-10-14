@@ -719,7 +719,7 @@ paths:
     get:
       operationId: getCheckout
       security: []
-      description: "Whoever has the token. status is expired once the hold has run out without payment. A completed checkout carries order_code and order_url, the buyer's link to their tickets."
+      description: "Whoever has the token. status is expired once the hold has run out without payment. A completed checkout carries order_code and order_url, the buyer's link to their tickets. event carries what the checkout page needs: the event's names, the cart's ticket type names and the questions asked of them."
       parameters: [{ $ref: "#/components/parameters/CheckoutTokenPath" }]
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Checkout" } } } }
@@ -893,6 +893,22 @@ components:
         quote: { $ref: "#/components/schemas/Quote" }
         order_code: { type: string, description: Once completed. }
         order_url: { type: string, description: "Once completed: the buyer's link to their tickets." }
+        event: { $ref: "#/components/schemas/CheckoutEvent" }
+    CheckoutEvent:
+      type: object
+      description: "getCheckout only: what the checkout page shows and asks."
+      required: [organizer, slug, name, timezone, ticket_types, questions]
+      properties:
+        organizer: { type: string, description: "The organizer's slug, for the way back to the event." }
+        slug: { type: string }
+        name: { type: string }
+        timezone: { type: string }
+        ticket_types: { type: array, items: { $ref: "#/components/schemas/TicketName" }, description: "The cart's ticket types." }
+        questions: { type: array, items: { $ref: "#/components/schemas/StorefrontQuestion" }, description: "In position order: the ones asked of the cart's ticket types." }
+    TicketName:
+      type: object
+      required: [id, name]
+      properties: { id: { type: string, format: uuid }, name: { type: string } }
     CheckoutAnswer:
       type: object
       required: [question_id, ticket_index, value]

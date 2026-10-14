@@ -549,3 +549,349 @@ test("big bodies are refused", async () => {
   expect(res.status).toBe(413);
   expect(calls).toHaveLength(0);
 });
+
+// --- Checkout and order pages ---
+
+const checkoutEvent = {
+  organizer: "acme",
+  slug: "gala",
+  name: "Gala </script><script>alert(1)</script>",
+  timezone: "America/Denver",
+  ticket_types: [{ id: "t1", name: "General" }],
+  questions: [
+    {
+      id: "q1",
+      label: "Dietary needs",
+      kind: "text",
+      options: [],
+      required: true,
+      scope: "order",
+      applies_to_all: true,
+      applies_to: [],
+    },
+  ],
+};
+const checkout = (over: Record<string, unknown> = {}) => ({
+  id: "c1",
+  event_id: "e1",
+  status: "open",
+  expires_at: "2027-05-02T01:15:00Z",
+  items: [{ ticket_type_id: "t1", quantity: 2 }],
+  promo_code: "FRIENDS",
+  quote: {
+    tickets: [1, 2].map(() => ({
+      ticket_type_id: "t1",
+      price_cents: 2500,
+      discount_cents: 250,
+      tax_cents: 0,
+      fee_cents: 95,
+      charge_cents: 2250,
+    })),
+    subtotal_cents: 5000,
+    discount_cents: 500,
+    tax_cents: 0,
+    fee_cents: 190,
+    total_cents: 4690,
+    fee_mode: "pass",
+  },
+  event: checkoutEvent,
+  ...over,
+});
+const ORDER_URL = `http://localhost:3003/orders/TS-7K2QF?t=${TOK}`;
+
+test("the checkout page carries its data, the island and Stripe's policy", async () => {
+  const { a, calls } = app(() => Response.json(checkout()));
+  const res = await a.request(`/checkout/${TOK}`, { headers: { "x-real-ip": "203.0.113.9" } });
+  const html = await res.text();
+  expect(res.status).toBe(200);
+  expect(new URL(calls[0].url).pathname).toBe(`/v1/checkouts/${TOK}`);
+  expect(calls[0].headers.get("x-real-ip")).toBe("203.0.113.9");
+  expect(res.headers.get("cache-control")).toBe("no-store");
+  expect(res.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+  const policy = res.headers.get("content-security-policy") ?? "";
+  expect(policy).toContain("script-src 'self' https://js.stripe.com");
+  expect(policy).toContain("https://hooks.stripe.com");
+  expect(policy).toContain("connect-src 'self' https://api.stripe.com");
+  expect(policy).not.toContain("cloudflare");
+  expect(html).toContain('<script type="module" src="/assets/checkout.js"></script>');
+  const block = html.match(/<script type="application\/json" id="checkout-data">(.*?)<\/script>/s);
+  expect(block).not.toBeNull();
+  // The event's name can't end the block early.
+  expect(block?.[1]).not.toContain("<");
+  const data = JSON.parse(block?.[1] ?? "");
+  expect(data).toMatchObject({
+    token: TOK,
+    expires_at: "2027-05-02T01:15:00Z",
+    items: [{ ticket_type_id: "t1", quantity: 2 }],
+    ticket_names: { t1: "General" },
+    event_name: checkoutEvent.name,
+    timezone: "America/Denver",
+    organizer: "acme",
+    event_slug: "gala",
+  });
+  expect(data.questions).toHaveLength(1);
+  expect(data.quote.total_cents).toBe(4690);
+  // The quote is on the page before any script runs.
+  expect(html).toContain("2 × General");
+  expect(html).toContain("Service fee");
+  expect(html).toContain("$1.90");
+  expect(html).toContain("$46.90");
+  expect(html).not.toMatch(/style="/);
+});
+
+test("a completed checkout goes to its order", async () => {
+  const { a } = app(() =>
+    Response.json(checkout({ status: "completed", order_code: "TS-7K2QF", order_url: ORDER_URL })),
+  );
+  const res = await a.request(`/checkout/${TOK}`);
+  expect(res.status).toBe(303);
+  expect(res.headers.get("location")).toBe(`/orders/TS-7K2QF?t=${TOK}`);
+  expect(res.headers.get("cache-control")).toBe("no-store");
+});
+
+test("an expired checkout says so and links back, with no script", async () => {
+  const { a } = app(() => Response.json(checkout({ status: "expired" })));
+  const res = await a.request(`/checkout/${TOK}`);
+  const html = await res.text();
+  expect(res.status).toBe(410);
+  expect(html).toContain("Your 15 minutes ran out and the tickets went back on sale.");
+  expect(html).toContain('href="/acme/gala"');
+  expect(html).not.toContain("checkout.js");
+  expect(res.headers.get("content-security-policy")).not.toContain("stripe");
+});
+
+test("an unknown or malformed checkout token is the 404 page", async () => {
+  const { a, calls } = app(() => apiError(404, "not_found"));
+  expect((await a.request(`/checkout/${TOK}`)).status).toBe(404);
+  expect((await a.request("/checkout/tok")).status).toBe(404);
+  expect(calls).toHaveLength(1);
+});
+
+const payReq = (
+  key: string | undefined,
+  body = '{"email":"ada@example.com"}',
+  type = "application/json",
+) => ({
+  method: "POST",
+  body,
+  headers: {
+    "content-type": type,
+    "x-real-ip": "203.0.113.9",
+    cookie: "a=b",
+    ...(key ? { "idempotency-key": key } : {}),
+  },
+});
+
+test("pay is passed through with the key, the buyer's address and nothing else", async () => {
+  const { a, calls } = app(() =>
+    Response.json({ kind: "test", client_secret: "pi_1_secret", amount_cents: 4690 }),
+  );
+  const res = await a.request(`/api/checkouts/${TOK}/pay`, payReq(KEY));
+  expect(res.status).toBe(200);
+  expect(res.headers.get("cache-control")).toBe("no-store");
+  expect(await res.json()).toMatchObject({ kind: "test", amount_cents: 4690 });
+  const call = calls[0];
+  expect(call.method).toBe("POST");
+  expect(new URL(call.url).pathname).toBe(`/v1/checkouts/${TOK}/pay`);
+  expect(call.headers.get("idempotency-key")).toBe(KEY);
+  expect(call.headers.get("x-real-ip")).toBe("203.0.113.9");
+  expect(call.headers.get("cookie")).toBeNull();
+  expect(await call.json()).toEqual({ email: "ada@example.com" });
+});
+
+test("pay errors keep their status, code and Retry-After", async () => {
+  const { a } = app(
+    () =>
+      new Response(JSON.stringify({ error: { code: "idempotency_in_progress", message: "m" } }), {
+        status: 409,
+        headers: { "content-type": "application/json", "retry-after": "1" },
+      }),
+  );
+  const res = await a.request(`/api/checkouts/${TOK}/pay`, payReq(KEY));
+  expect(res.status).toBe(409);
+  expect(res.headers.get("retry-after")).toBe("1");
+  expect((await res.json()).error.code).toBe("idempotency_in_progress");
+});
+
+test("pay refuses a bad token, key, type or body without asking the API", async () => {
+  const { a, calls } = app(() => Response.json({}));
+  const statuses = await Promise.all([
+    a.request("/api/checkouts/tok/pay", payReq(KEY)),
+    a.request(`/api/checkouts/${TOK}/pay`, payReq(undefined)),
+    a.request(`/api/checkouts/${TOK}/pay`, payReq("k-1")),
+    a.request(
+      `/api/checkouts/${TOK}/pay`,
+      payReq(KEY, "email=a", "application/x-www-form-urlencoded"),
+    ),
+    a.request(`/api/checkouts/${TOK}/pay`, payReq(KEY, "{not json")),
+  ]).then((rs) => rs.map((r) => r.status));
+  expect(statuses).toEqual([404, 400, 400, 415, 400]);
+  expect(calls).toHaveLength(0);
+});
+
+test("the island reads the checkout through the same origin", async () => {
+  const { a, calls } = app(() => Response.json(checkout({ status: "paying" })));
+  const res = await a.request(`/api/checkouts/${TOK}`, { headers: { "x-real-ip": "203.0.113.9" } });
+  expect(res.status).toBe(200);
+  expect((await res.json()).status).toBe("paying");
+  expect(calls[0].headers.get("x-real-ip")).toBe("203.0.113.9");
+  expect((await a.request("/api/checkouts/tok")).status).toBe(404);
+  expect(calls).toHaveLength(1);
+});
+
+const order = {
+  code: "TS-7K2QF",
+  status: "paid",
+  email: "ada@example.com",
+  event: {
+    name: "Spring Gala",
+    starts_at: "2027-05-02T01:00:00Z",
+    ends_at: "2027-05-02T05:00:00Z",
+    timezone: "America/Denver",
+    venue_name: "The Hall",
+    venue_address: "",
+    organizer_name: "Acme",
+  },
+  totals: {
+    subtotal_cents: 5000,
+    discount_cents: 500,
+    tax_cents: 0,
+    fee_cents: 190,
+    total_cents: 4690,
+  },
+  tickets: [
+    {
+      id: "k1",
+      ticket_type_name: "General",
+      attendee_name: "Ada",
+      status: "valid",
+      qr: "x".repeat(22),
+    },
+    {
+      id: "k2",
+      ticket_type_name: "General",
+      attendee_name: "<b>Grace</b>",
+      status: "valid",
+      qr: "y".repeat(22),
+    },
+  ],
+};
+
+test("the order page lists each ticket and says to keep the link private", async () => {
+  const { a, calls } = app(() => Response.json(order));
+  const res = await a.request(`/orders/TS-7K2QF?t=${TOK}`, {
+    headers: { "x-real-ip": "203.0.113.9" },
+  });
+  const html = await res.text();
+  expect(res.status).toBe(200);
+  const url = new URL(calls[0].url);
+  expect(url.pathname).toBe("/v1/orders/TS-7K2QF");
+  expect(url.searchParams.get("token")).toBe(TOK);
+  expect(calls[0].headers.get("x-real-ip")).toBe("203.0.113.9");
+  expect(res.headers.get("cache-control")).toBe("no-store");
+  expect(res.headers.get("content-security-policy")).not.toContain("script-src");
+  expect(html).not.toContain("<script");
+  expect(html).toContain("Ticket 1: General");
+  expect(html).toContain("Ada");
+  expect(html).toContain("&lt;b>Grace&lt;/b>");
+  expect(html).toContain("Keep this link to yourself: anyone with it can see your tickets.");
+  // The QR values aren't shown until there's a code to scan.
+  expect(html).not.toContain("x".repeat(22));
+});
+
+test("an order link that doesn't work is a 404 that says to check the email", async () => {
+  const { a, calls } = app(() => apiError(404, "not_found"));
+  for (const path of [`/orders/TS-7K2QF?t=${TOK}`, "/orders/TS-7K2QF", `/orders/nope?t=${TOK}`]) {
+    const res = await a.request(path);
+    expect(res.status).toBe(404);
+    expect(await res.text()).toContain(
+      "That link doesn't open an order. Check your email for the latest one.",
+    );
+  }
+  expect(calls).toHaveLength(1);
+});
+
+test("the health check answers without the API", async () => {
+  const { a, calls } = app(() => Response.json({}));
+  const res = await a.request("/healthz");
+  expect(res.status).toBe(200);
+  expect(calls).toHaveLength(0);
+});
+
+test("a completed checkout's link can't send the buyer to another site", async () => {
+  for (const order_url of [
+    `http://localhost:3003//evil.example/orders/TS-7K2QF?t=${TOK}`,
+    `http://localhost:3003/\\evil.example/orders/TS-7K2QF?t=${TOK}`,
+  ]) {
+    const { a } = app(() =>
+      Response.json(checkout({ status: "completed", order_code: "TS-7K2QF", order_url })),
+    );
+    const res = await a.request(`/checkout/${TOK}`);
+    const to = res.headers.get("location");
+    if (res.status === 303) expect(to).toBe(`/orders/TS-7K2QF?t=${TOK}`);
+    else expect(res.status).toBe(502);
+    expect(to ?? "").not.toContain("evil");
+  }
+  const { a } = app(() =>
+    Response.json(
+      checkout({ status: "completed", order_code: "TS-7K2QF", order_url: "/orders/x?t=y" }),
+    ),
+  );
+  expect((await a.request(`/checkout/${TOK}`)).status).toBe(502);
+});
+
+test("too many checkout reads is the slow-down page", async () => {
+  const { a } = app(() => apiError(429, "rate_limited"));
+  const res = await a.request(`/checkout/${TOK}`);
+  expect(res.status).toBe(429);
+  expect(await res.text()).toContain("That's a lot of tries. Wait a minute and try again.");
+});
+
+// The visible lines add up to the total, whether tax is on top or already in the price.
+const sumsUp = (html: string) => {
+  const quote = html.match(/<ul class="quote">(.*?)<\/ul>/s)?.[1] ?? "";
+  const cents = (s: string) => Number(s.replace(/[^0-9]/g, ""));
+  const rows = [
+    ...quote.matchAll(/<li( class="total")?><span>[^<]*<\/span><span>([^<]*)<\/span><\/li>/g),
+  ];
+  const total = rows.find((r) => r[1]);
+  const sum = rows
+    .filter((r) => !r[1])
+    .reduce((n, r) => n + (r[2].startsWith("−") ? -cents(r[2]) : cents(r[2])), 0);
+  return { sum, total: cents(total?.[2] ?? "") };
+};
+
+const taxed = (inclusive: boolean) => {
+  // $25 at 8.25%: inclusive keeps $25.00 with $1.91 inside; exclusive adds $2.06.
+  const t = inclusive
+    ? { price_cents: 2500, discount_cents: 0, tax_cents: 191, fee_cents: 96, charge_cents: 2500 }
+    : { price_cents: 2500, discount_cents: 0, tax_cents: 206, fee_cents: 100, charge_cents: 2706 };
+  return checkout({
+    items: [{ ticket_type_id: "t1", quantity: 1 }],
+    quote: {
+      tickets: [{ ticket_type_id: "t1", ...t }],
+      subtotal_cents: 2500,
+      discount_cents: 0,
+      tax_cents: t.tax_cents,
+      fee_cents: t.fee_cents,
+      total_cents: t.charge_cents + t.fee_cents,
+      fee_mode: "pass",
+    },
+  });
+};
+
+test("tax on top is its own line, and the lines add up", async () => {
+  const { a } = app(() => Response.json(taxed(false)));
+  const html = await (await a.request(`/checkout/${TOK}`)).text();
+  expect(html).toContain("<span>Tax</span><span>$2.06</span>");
+  expect(html).not.toContain("Includes");
+  expect(sumsUp(html)).toEqual({ sum: 2806, total: 2806 });
+});
+
+test("tax inside the price is noted under the total, and the lines add up", async () => {
+  const { a } = app(() => Response.json(taxed(true)));
+  const html = await (await a.request(`/checkout/${TOK}`)).text();
+  expect(html).not.toContain("<span>Tax</span>");
+  expect(html).toContain("Includes $1.91 tax");
+  expect(sumsUp(html)).toEqual({ sum: 2596, total: 2596 });
+});
