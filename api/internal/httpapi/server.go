@@ -25,12 +25,12 @@ type Deps struct {
 
 type server struct {
 	Deps
-	public map[string]bool // Go operation names whose spec says security: []
+	public map[string]bool // mux patterns ("POST /v1/auth/login") whose spec says security: []
 }
 
 func New(d Deps) http.Handler {
-	s := &server{Deps: d, public: publicOperations()}
-	strict := NewStrictHandlerWithOptions(s, []StrictMiddlewareFunc{s.authenticate}, StrictHTTPServerOptions{
+	s := &server{Deps: d, public: publicRoutes()}
+	strict := NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc:  func(w http.ResponseWriter, r *http.Request, err error) { writeBadRequest(w, r, err) },
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) { writeError(w, err) },
 	})
@@ -38,6 +38,9 @@ func New(d Deps) http.Handler {
 	HandlerWithOptions(strict, StdHTTPServerOptions{
 		BaseURL:    "/v1",
 		BaseRouter: mux,
+		// Runs before the strict handler decodes the body, so an
+		// unauthenticated request is a 401 whatever it sends.
+		Middlewares: []MiddlewareFunc{s.authenticate},
 		// Path-parameter parse failures from the generated wrapper.
 		ErrorHandlerFunc: writeBadRequest,
 	})
@@ -45,19 +48,19 @@ func New(d Deps) http.Handler {
 	return requestID(recoverer(limitBody(mux)))
 }
 
-// publicOperations reads the embedded spec once and returns the operations
-// that opt out of the global session requirement with an explicit `security: []`.
-func publicOperations() map[string]bool {
+// publicRoutes reads the embedded spec once and returns the mux patterns of
+// operations that opt out of the global session requirement with an explicit
+// `security: []`. Anything not listed needs a session.
+func publicRoutes() map[string]bool {
 	spec, err := GetSwagger()
 	if err != nil {
 		panic(err)
 	}
 	public := map[string]bool{}
-	for _, item := range spec.Paths.Map() {
-		for _, op := range item.Operations() {
+	for path, item := range spec.Paths.Map() {
+		for method, op := range item.Operations() {
 			if op.Security != nil && len(*op.Security) == 0 {
-				// oapi-codegen names operations by upper-casing the first letter of the operationId.
-				public[strings.ToUpper(op.OperationID[:1])+op.OperationID[1:]] = true
+				public[method+" /v1"+path] = true
 			}
 		}
 	}
@@ -79,28 +82,30 @@ type authed struct {
 	token string
 }
 
-// authenticate records the caller's address and, for every operation that
-// isn't public, requires a valid bearer session.
-func (s *server) authenticate(next StrictHandlerFunc, op string) StrictHandlerFunc {
-	public := s.public[op]
-	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, req any) (any, error) {
-		ctx = context.WithValue(ctx, clientKey, client{clientIP(r, s.Config.TrustedProxies), r.UserAgent()})
-		if public {
-			return next(ctx, w, r, req)
+// authenticate records the caller's address and, for every route that
+// isn't public, requires a valid bearer session. r.Pattern is the mux pattern
+// the generated wrapper registered; a route not found in the public set needs a session.
+func (s *server) authenticate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), clientKey, client{clientIP(r, s.Config.TrustedProxies), r.UserAgent()})
+		if !s.public[r.Pattern] {
+			token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if !ok || token == "" {
+				writeError(w, unauthorized())
+				return
+			}
+			u, sess, err := s.Auth.Authenticate(ctx, token)
+			if err != nil {
+				if errors.Is(err, auth.ErrBadToken) {
+					err = unauthorized()
+				}
+				writeError(w, err)
+				return
+			}
+			ctx = context.WithValue(ctx, authKey, authed{u, sess, token})
 		}
-		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || token == "" {
-			return nil, unauthorized()
-		}
-		u, sess, err := s.Auth.Authenticate(ctx, token)
-		if errors.Is(err, auth.ErrBadToken) {
-			return nil, unauthorized()
-		}
-		if err != nil {
-			return nil, err
-		}
-		return next(context.WithValue(ctx, authKey, authed{u, sess, token}), w, r, req)
-	}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // clientIP is the peer's address, or X-Real-IP when the peer is a trusted
