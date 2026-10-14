@@ -20,6 +20,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/config"
 	"github.com/ticketslinger/ticketslinger/api/internal/db"
 	"github.com/ticketslinger/ticketslinger/api/internal/httpapi"
+	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 )
 
@@ -86,6 +87,8 @@ func serve() error {
 	}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
+	workerDone := make(chan struct{})
+	go func() { newWorker(pool, mailer.Log{}).Run(ctx); close(workerDone) }()
 	select {
 	case err := <-errc:
 		return err
@@ -93,7 +96,17 @@ func serve() error {
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return srv.Shutdown(shutdownCtx)
+	err = srv.Shutdown(shutdownCtx)
+	select {
+	case <-workerDone:
+	case <-shutdownCtx.Done():
+	}
+	return err
+}
+
+// newWorker is the job worker with every handler registered.
+func newWorker(pool *pgxpool.Pool, m mailer.Mailer) *jobs.Worker {
+	return &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{"send_email": jobs.SendEmail(m)}}
 }
 
 // newHandler builds the API. In test mode it sends mail to memory and adds

@@ -102,3 +102,14 @@ func TestTestMailReturnsTheNewestLinkForThatAddress(t *testing.T) {
 		t.Fatalf("no mail: got %d, want 404", code)
 	}
 }
+
+func TestWorkerSendsQueuedEmail(t *testing.T) {
+	m := &mailer.Memory{}
+	h := newWorker(nil, m).Handlers["send_email"]
+	if h == nil {
+		t.Fatal("serve's worker has no send_email handler")
+	}
+	if err := h(context.Background(), []byte(`{"to":"a@example.com","subject":"Hi","text":"Hello"}`)); err != nil || len(m.Sent) != 1 {
+		t.Fatalf("err=%v sent=%d", err, len(m.Sent))
+	}
+}
