@@ -296,3 +296,13 @@ func DeleteTicketType(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, 
 	}
 	return audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "ticket_type.deleted", EntityType: "ticket_type", EntityID: id, Before: before})
 }
+
+// ReorderTicketTypes gives the event's ticket types positions 1..n in the
+// order of ids, which must be exactly the current set, and records
+// ticket_type.reordered. The same order again writes nothing.
+func ReorderTicketTypes(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor audit.Actor, ids []uuid.UUID) ([]TicketType, error) {
+	if err := reorder(ctx, tx, org, event, actor, "ticket_types", "ticket_type.reordered", ids); err != nil {
+		return nil, err
+	}
+	return ListTicketTypes(ctx, tx, event)
+}

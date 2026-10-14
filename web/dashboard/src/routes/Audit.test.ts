@@ -4,6 +4,7 @@ import { describeAction as say, who } from "./Audit";
 test("audit actions read as plain words", () => {
   expect(say("event.created")).toBe("Event created");
   expect(say("ticket_type.updated")).toBe("Ticket type changed");
+  expect(say("ticket_type.reordered")).toBe("Ticket type reordered");
   expect(say("quota.deleted")).toBe("Capacity deleted");
   expect(say("api_key.revoked")).toBe("API key revoked");
   expect(say("seat.teleported")).toBe("seat.teleported");

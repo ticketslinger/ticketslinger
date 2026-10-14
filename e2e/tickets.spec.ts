@@ -67,4 +67,20 @@ test("add capacity and a ticket to a draft event, with a bad price caught inline
   await page.getByRole("button", { name: "Add ticket" }).click();
   await expect(page.getByRole("cell", { name: "$12.50" })).toBeVisible();
   await expect(page.getByRole("row", { name: /Whole fair 1,200 General/ })).toBeVisible();
+
+  // A second ticket goes to the end; one click puts it first and focus goes with it.
+  await page.getByRole("button", { name: "Add a ticket" }).click();
+  await page.getByLabel("Name").fill("VIP");
+  await page.getByLabel("Price (USD)").fill("40");
+  await page.getByRole("checkbox", { name: /Whole fair/ }).check();
+  await page.getByRole("button", { name: "Add ticket" }).click();
+  const tickets = page
+    .getByRole("row")
+    .filter({ hasText: /General|VIP/ })
+    .filter({ hasText: "$" });
+  await expect(tickets.nth(0)).toContainText("General");
+  await page.getByRole("button", { name: "Move VIP up" }).click();
+  await expect(tickets.nth(0)).toContainText("VIP");
+  await expect(page.getByRole("button", { name: "Move VIP up" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Move VIP down" })).toBeFocused();
 });

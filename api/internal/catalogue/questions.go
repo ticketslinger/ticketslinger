@@ -266,3 +266,12 @@ func DeleteQuestion(ctx context.Context, tx pgx.Tx, org, event, id uuid.UUID, ac
 	}
 	return audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "question.deleted", EntityType: "question", EntityID: id, Before: before})
 }
+
+// ReorderQuestions is ReorderTicketTypes for the event's questions, audited
+// as question.reordered.
+func ReorderQuestions(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, actor audit.Actor, ids []uuid.UUID) ([]Question, error) {
+	if err := reorder(ctx, tx, org, event, actor, "questions", "question.reordered", ids); err != nil {
+		return nil, err
+	}
+	return ListQuestions(ctx, tx, event)
+}

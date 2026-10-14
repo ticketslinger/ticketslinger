@@ -5,14 +5,7 @@ import { FormDialog, type Problem, Remove, TicketPicker, useProblem } from "../f
 import { ErrorText, Field, useAction, useLoad } from "../ui";
 import type { Event } from "./EventForm";
 import { canEdit, type Org } from "./Organizer";
-import {
-  addOption,
-  duplicateAt,
-  moveOption,
-  removeOption,
-  renameOption,
-  swapPositions,
-} from "./optionList";
+import { addOption, duplicateAt, moveOption, removeOption, renameOption } from "./optionList";
 
 type Question = components["schemas"]["Question"];
 type TicketType = components["schemas"]["TicketType"];
@@ -381,23 +374,18 @@ export function Questions({ org, event }: { org: Org; event: Event }) {
 
   const step = (i: number, dir: -1 | 1) =>
     move.run(async () => {
-      const swap = swapPositions(list, i, dir);
-      if (!swap) return;
-      const id = list[i]?.id;
+      const ids = list.map((x) => x.id);
+      const id = ids[i];
       const edge = i + dir === 0 || i + dir === list.length - 1;
       focusAfter.current = `qs-${id}-${arrow[edge ? (-dir as -1 | 1) : dir]}`;
-      const patch = (s: { id: string; position: number }) =>
-        api.PATCH("/organizers/{organizer}/events/{event}/questions/{question}", {
-          params: { path: { ...path, question: s.id } },
-          body: { position: s.position },
-        });
       try {
-        must(await patch(swap[0] as (typeof swap)[0]));
-        must(await patch(swap[1] as (typeof swap)[0]));
+        must(
+          await api.PUT("/organizers/{organizer}/events/{event}/questions/order", {
+            params: { path },
+            body: { ids: moveOption(ids, i, dir) },
+          }),
+        );
       } catch (e) {
-        // Put the first one back if the second failed, so two questions don't share a place.
-        const a = list[i];
-        if (a) await patch({ id: a.id, position: a.position }).catch(() => {});
         focusAfter.current = undefined;
         await qs.reload();
         throw e;

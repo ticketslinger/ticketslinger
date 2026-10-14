@@ -6,7 +6,6 @@ import {
   moveOption,
   removeOption,
   renameOption,
-  swapPositions,
 } from "./optionList";
 
 test("adding, renaming and removing options returns new lists", () => {
@@ -37,22 +36,4 @@ test("duplicates ignore capitals and spaces, the way the API does", () => {
   // sharp s has no one-letter capital, so the API keeps it apart from SS
   expect(duplicateAt(["ß", "SS"])).toBe(-1);
   expect(foldOption("Ǆ")).toBe(foldOption("ǆ"));
-});
-
-test("moving a question swaps positions with its neighbour", () => {
-  const qs = [
-    { id: "a", position: 1 },
-    { id: "b", position: 3 },
-    { id: "c", position: 4 },
-  ];
-  expect(swapPositions(qs, 1, -1)).toEqual([
-    { id: "b", position: 1 },
-    { id: "a", position: 3 },
-  ]);
-  expect(swapPositions(qs, 1, 1)).toEqual([
-    { id: "b", position: 4 },
-    { id: "c", position: 3 },
-  ]);
-  expect(swapPositions(qs, 0, -1)).toBeNull();
-  expect(swapPositions(qs, 2, 1)).toBeNull();
 });

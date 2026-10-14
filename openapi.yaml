@@ -258,6 +258,19 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/ticket-types/order:
+    put:
+      operationId: reorderTicketTypes
+      description: "Owners and admins, or a write API key. Send every ticket type id of this event once, in the order you want; they take positions 1 to n together, or none changes. Anything else, a missing, repeated or foreign id included, is 422 order_mismatch. The same order again changes nothing. Returns the list."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/OrderIds" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/TicketType" } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/ticket-types/{ticketType}:
     get:
       operationId: getTicketType
@@ -431,6 +444,19 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateQuestion" } } } }
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Question" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/questions/order:
+    put:
+      operationId: reorderQuestions
+      description: "Owners and admins, or a write API key. Send every question id of this event once, in the order you want; they take positions 1 to n together, or none changes. Anything else, a missing, repeated or foreign id included, is 422 order_mismatch. The same order again changes nothing. Returns the list."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/OrderIds" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Question" } } } } }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
@@ -714,7 +740,7 @@ components:
         scope: { type: string, enum: [order, ticket] }
         applies_to_all: { type: boolean }
         applies_to: { type: array, items: { type: string, format: uuid } }
-        position: { type: integer }
+        position: { type: integer, minimum: 1, description: "1 is first. Change it with a PATCH, or all at once with the order endpoint." }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     TicketTypeFields:
@@ -734,6 +760,11 @@ components:
       allOf:
         - { $ref: "#/components/schemas/TicketTypeFields" }
         - { type: object, required: [name, price_cents], properties: { price_cents: { type: integer, format: int64, minimum: 0, maximum: 10000000, x-go-type: "*int64" }, quota_ids: { type: array, items: { type: string, format: uuid }, description: "Quotas of this event to join. Optional on a draft; a live event needs at least one (409 live_needs_capacity). An id from another event is 422 unknown_quota." } } }
+    OrderIds:
+      type: object
+      required: [ids]
+      properties:
+        ids: { type: array, items: { type: string, format: uuid } }
     TicketType:
       type: object
       required: [id, event_id, name, description, price_cents, tax_rate_bp, prices_include_tax, sales_start, sales_end, min_per_order, max_per_order, hidden, position, created_at, updated_at]
@@ -750,6 +781,6 @@ components:
         min_per_order: { type: integer }
         max_per_order: { type: integer }
         hidden: { type: boolean }
-        position: { type: integer }
+        position: { type: integer, minimum: 1, description: "1 is first. Change it with the order endpoint." }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }

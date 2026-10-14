@@ -1,5 +1,5 @@
 import type { components } from "@ticketslinger/api-client";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, must } from "../api";
 import { FormDialog, LOCAL, MAX_CENTS, type Problem, Remove, toggle, useProblem } from "../forms";
 import { dollarsInput, formatCents, parseDollars } from "../money";
@@ -7,6 +7,9 @@ import { formatWhen, fromLocalInput, toLocalInput } from "../time";
 import { ErrorText, Field, useAction, useLoad } from "../ui";
 import { bpToPercent, type Event, percentToBp } from "./EventForm";
 import { canEdit, type Org } from "./Organizer";
+import { moveOption } from "./optionList";
+
+const arrow = { "-1": "up", "1": "down" } as const;
 
 type TicketType = components["schemas"]["TicketType"];
 type Quota = components["schemas"]["Quota"];
@@ -493,11 +496,41 @@ export function Tickets({ org, event }: { org: Org; event: Event }) {
   const editor = canEdit(org);
   const tz = event.timezone;
   const reload = () => Promise.all([types.reload(), caps.reload()]);
+  const move = useAction();
+  const focusAfter = useRef<string | undefined>(undefined);
   const tickets = types.data ?? [];
   const quotas = caps.data ?? [];
   const names = new Map(tickets.map((t) => [t.id, t.name]));
   const covered = new Set(quotas.flatMap((q) => q.ticket_type_ids));
   const uncovered = tickets.filter((t) => !covered.has(t.id));
+
+  // After a move, focus follows the ticket; at an end that arrow is disabled, so use the other.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the reloaded list is the trigger
+  useEffect(() => {
+    if (!focusAfter.current) return;
+    document.getElementById(focusAfter.current)?.focus();
+    focusAfter.current = undefined;
+  }, [types.data]);
+
+  const step = (i: number, dir: -1 | 1) =>
+    move.run(async () => {
+      const ids = tickets.map((x) => x.id);
+      const edge = i + dir === 0 || i + dir === ids.length - 1;
+      focusAfter.current = `tt-${ids[i]}-${arrow[edge ? (-dir as -1 | 1) : dir]}`;
+      try {
+        must(
+          await api.PUT("/organizers/{organizer}/events/{event}/ticket-types/order", {
+            params: { path },
+            body: { ids: moveOption(ids, i, dir) },
+          }),
+        );
+      } catch (e) {
+        focusAfter.current = undefined;
+        await types.reload();
+        throw e;
+      }
+      await types.reload();
+    });
 
   return (
     <>
@@ -510,7 +543,7 @@ export function Tickets({ org, event }: { org: Org; event: Event }) {
             </button>
           )}
         </div>
-        <ErrorText>{types.error?.message}</ErrorText>
+        <ErrorText>{types.error?.message ?? move.error}</ErrorText>
         {!types.data && !types.error && <p className="muted">Loading…</p>}
         {types.data?.length === 0 && (
           <p>
@@ -539,7 +572,7 @@ export function Tickets({ org, event }: { org: Org; event: Event }) {
                 </tr>
               </thead>
               <tbody>
-                {tickets.map((t) => (
+                {tickets.map((t, i) => (
                   <tr key={t.id}>
                     <td>
                       {t.name} {t.hidden && <span className="pill">Hidden</span>}
@@ -556,6 +589,26 @@ export function Tickets({ org, event }: { org: Org; event: Event }) {
                     {editor && (
                       <td className="actions-cell">
                         <div className="row">
+                          <button
+                            type="button"
+                            id={`tt-${t.id}-up`}
+                            className="inline secondary"
+                            aria-label={`Move ${t.name} up`}
+                            disabled={i === 0 || move.busy}
+                            onClick={() => step(i, -1)}
+                          >
+                            Up
+                          </button>
+                          <button
+                            type="button"
+                            id={`tt-${t.id}-down`}
+                            className="inline secondary"
+                            aria-label={`Move ${t.name} down`}
+                            disabled={i === tickets.length - 1 || move.busy}
+                            onClick={() => step(i, 1)}
+                          >
+                            Down
+                          </button>
                           <button
                             type="button"
                             className="inline secondary"

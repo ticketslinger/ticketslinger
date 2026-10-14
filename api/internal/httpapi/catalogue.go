@@ -538,3 +538,33 @@ func (s *server) DeleteQuestion(ctx context.Context, req DeleteQuestionRequestOb
 	}
 	return DeleteQuestion204Response{}, nil
 }
+
+func (s *server) ReorderTicketTypes(ctx context.Context, req ReorderTicketTypesRequestObject) (ReorderTicketTypesResponseObject, error) {
+	out := ReorderTicketTypes200JSONResponse{}
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		list, err := catalogue.ReorderTicketTypes(ctx, tx, org.ID, req.Event, actorFrom(ctx), req.Body.Ids)
+		for _, t := range list {
+			out = append(out, toTicketType(t))
+		}
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
+
+func (s *server) ReorderQuestions(ctx context.Context, req ReorderQuestionsRequestObject) (ReorderQuestionsResponseObject, error) {
+	out := ReorderQuestions200JSONResponse{}
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		list, err := catalogue.ReorderQuestions(ctx, tx, org.ID, req.Event, actorFrom(ctx), req.Body.Ids)
+		for _, q := range list {
+			out = append(out, toQuestion(q))
+		}
+		return err
+	})
+	if err != nil {
+		return nil, catalogueError(err)
+	}
+	return out, nil
+}
