@@ -14,7 +14,7 @@ test("connect Stripe, come back ready, and see the empty Orders tab", async ({ p
   await page.getByRole("link", { name: "Payments" }).click();
   await expect(page.getByText("Connect Stripe to sell paid tickets.")).toBeVisible();
   // The test provider sends us straight back with ?return=1.
-  await page.getByRole("button", { name: "Connect Stripe" }).click();
+  await page.getByRole("button", { name: "Create a Stripe account" }).click();
   await expect(page.getByText("You're ready to take payments.")).toBeVisible();
 
   await page.goto("/o/pia-pays/events/new");

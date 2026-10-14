@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -24,6 +26,9 @@ type Fake struct {
 	refunds   map[string]bool // ids made
 	refundLog []plugin.RefundInput
 	fail      error
+	links     int    // link URLs handed out
+	linkAs    string // LinkReturns
+	unlinked  []string
 }
 
 var _ plugin.PaymentProvider = (*Fake)(nil)
@@ -153,4 +158,59 @@ func (f *Fake) Refunds() []plugin.RefundInput {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]plugin.RefundInput(nil), f.refundLog...)
+}
+
+// LinkURL "authorizes" at once: it sends the organizer straight back to
+// redirectURI with a fresh code, as Stripe does when they approve.
+func (f *Fake) LinkURL(state, redirectURI, _ string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.links++
+	return redirectURI + "?code=fake_code_" + strconv.Itoa(f.links) + "&state=" + url.QueryEscape(state), nil
+}
+
+// LinkReturns makes every later CompleteLink return id (collision tests).
+func (f *Fake) LinkReturns(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.linkAs = id
+}
+
+var errBadCode = &plugin.ProviderError{Op: "fake: oauth token", Refused: true, Status: 400, Type: "invalid_grant", Code: "invalid_grant"}
+
+// CompleteLink turns fake_code_<n> into acct_fakelink<n>, already able to
+// take payments.
+func (f *Fake) CompleteLink(_ context.Context, code string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.failed(); err != nil {
+		return "", err
+	}
+	n, ok := strings.CutPrefix(code, "fake_code_")
+	if _, err := strconv.Atoi(n); !ok || err != nil {
+		return "", errBadCode
+	}
+	id := "acct_fakelink" + n
+	if f.linkAs != "" {
+		id = f.linkAs
+	}
+	f.onboarded[id] = true
+	return id, nil
+}
+
+func (f *Fake) Unlink(_ context.Context, account string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.failed(); err != nil {
+		return err
+	}
+	f.unlinked = append(f.unlinked, account)
+	return nil
+}
+
+// Unlinked lists the accounts Unlink was called for, oldest first.
+func (f *Fake) Unlinked() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.unlinked...)
 }

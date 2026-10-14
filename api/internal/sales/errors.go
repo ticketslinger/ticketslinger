@@ -33,11 +33,13 @@ type CheckoutCompleted struct{ OrderCode string }
 
 func (CheckoutCompleted) Error() string { return "checkout_completed" }
 
-// The payment provider's side. Both are 503 over HTTP; nothing was held or
-// written when either comes back.
+// The payment provider's side. All are 503 over HTTP; nothing was held or
+// written when any comes back. Unavailable may work on a retry; refused
+// means the provider said no and will say it again.
 var (
 	ErrPaymentsNotConfigured = errors.New("sales: no payment provider")
 	ErrPaymentsUnavailable   = errors.New("sales: payment provider unavailable")
+	ErrPaymentsRefused       = errors.New("sales: payment provider refused")
 )
 
 // errPaymentsNotReady: the organizer's Stripe account can't take cards

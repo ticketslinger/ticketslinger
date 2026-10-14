@@ -272,7 +272,8 @@ func goLive(ctx context.Context, tx pgx.Tx, e Event) error {
 	}
 	var unpaid bool
 	if err := tx.QueryRow(ctx, `select exists (select 1 from ticket_types where event_id = $1 and price_cents > 0)
-		and not (select o.stripe_charges_enabled from organizers o join events e on e.organizer_id = o.id where e.id = $1)`, e.ID).Scan(&unpaid); err != nil {
+		and not (select o.stripe_charges_enabled and o.stripe_disconnected_at is null
+			from organizers o join events e on e.organizer_id = o.id where e.id = $1)`, e.ID).Scan(&unpaid); err != nil {
 		return err
 	}
 	if unpaid {

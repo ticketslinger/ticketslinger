@@ -18,6 +18,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/httpapi"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/payments"
+	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
 	"github.com/ticketslinger/ticketslinger/api/internal/turnstile"
 )
@@ -31,13 +32,18 @@ type shop struct {
 }
 
 func newShop(t *testing.T, v *turnstile.Verifier) shop {
+	return newShopWith(t, v, payments.NewFake())
+}
+
+// newShopWith is newShop selling through p.
+func newShopWith(t *testing.T, v *turnstile.Verifier, p plugin.PaymentProvider) shop {
 	pool := testdb.New(t)
 	m := &mailer.Memory{}
 	svc := auth.NewService(pool, m, auth.Options{RPID: "localhost", Origin: "http://localhost:5173", SecretKey: []byte("0123456789abcdef0123456789abcdef")})
 	cfg := config.Config{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.MustParsePrefix("::1/128")},
 		StorefrontURL: "http://localhost:3003", SecretKey: []byte("0123456789abcdef0123456789abcdef"), PlatformFeeBP: 200, PlatformFeeCents: 50,
 		StripeWebhookSecret: webhookSecret}
-	srv := startServer(t, httpapi.New(httpapi.Deps{Pool: pool, Auth: svc, Payments: payments.NewFake(), Config: cfg, Turnstile: v}))
+	srv := startServer(t, httpapi.New(httpapi.Deps{Pool: pool, Auth: svc, Payments: p, Config: cfg, Turnstile: v}))
 	h := &harness{t, srv, m, pool, clientFor(t, srv.URL)}
 	owner := h.signupWithMFA("owner@example.com")
 	h.createOrganizer(owner, "acme")

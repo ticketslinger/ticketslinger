@@ -8,6 +8,8 @@ test("audit actions read as plain words", () => {
   expect(say("quota.deleted")).toBe("Capacity deleted");
   expect(say("api_key.revoked")).toBe("API key revoked");
   expect(say("order.cancelled_late")).toBe("Order cancelled (refund queued)");
+  expect(say("organizer.stripe_linked")).toBe("Organizer linked a Stripe account");
+  expect(say("organizer.stripe_disconnected")).toBe("Organizer disconnected from Stripe");
   expect(say("seat.teleported")).toBe("seat.teleported");
 });
 

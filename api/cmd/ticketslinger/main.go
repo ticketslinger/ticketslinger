@@ -174,7 +174,7 @@ func paymentProvider(cfg config.Config, testMode bool) plugin.PaymentProvider {
 	case testMode:
 		return payments.NewFake()
 	case cfg.StripeSecretKey != "":
-		return payments.NewStripe(cfg.StripeSecretKey, cfg.StripePublishableKey, nil)
+		return payments.NewStripe(cfg.StripeSecretKey, cfg.StripePublishableKey, cfg.StripeClientID, nil)
 	}
 	return nil
 }

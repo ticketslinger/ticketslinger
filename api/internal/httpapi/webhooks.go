@@ -1,11 +1,13 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/stripe/stripe-go/v87"
 	"github.com/stripe/stripe-go/v87/webhook"
 )
 
@@ -24,8 +26,23 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, &apiError{400, "bad_request", "That request couldn't be read."})
 		return
 	}
-	ev, err := webhook.ConstructEventWithOptions(payload, r.Header.Get("Stripe-Signature"), s.Config.StripeWebhookSecret,
-		webhook.ConstructEventOptions{Tolerance: 5 * time.Minute})
+	sig := r.Header.Get("Stripe-Signature")
+	// The signature first, before anything in the body is believed.
+	if err := webhook.ValidatePayloadWithTolerance(payload, sig, s.Config.StripeWebhookSecret, webhookTolerance); err != nil {
+		slog.WarnContext(r.Context(), "stripe webhook refused", "err", err)
+		writeError(w, &apiError{400, "bad_signature", "Signature check failed."})
+		return
+	}
+	// Every event must be in the API version stripe-go reads, except
+	// account.application.deauthorized: Stripe sends those in the account's
+	// default version whatever the endpoint asks for, and we read only its
+	// account. ConstructEventWithOptions checks the signature again.
+	var peek struct {
+		Type string `json:"type"`
+	}
+	_ = json.Unmarshal(payload, &peek)
+	ev, err := webhook.ConstructEventWithOptions(payload, sig, s.Config.StripeWebhookSecret, webhook.ConstructEventOptions{
+		Tolerance: webhookTolerance, IgnoreAPIVersionMismatch: peek.Type == string(stripe.EventTypeAccountApplicationDeauthorized)})
 	if err != nil {
 		slog.WarnContext(r.Context(), "stripe webhook refused", "err", err)
 		writeError(w, &apiError{400, "bad_signature", "Signature check failed."})
@@ -37,6 +54,8 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"received": true})
 }
+
+const webhookTolerance = 5 * time.Minute
 
 // privateAnswers keeps a buyer's order page out of caches and referrers: it
 // carries the tickets' QR values.

@@ -76,3 +76,33 @@ func TestFake(t *testing.T) {
 		t.Fatalf("refunds %+v", r)
 	}
 }
+
+func TestFakeLinks(t *testing.T) {
+	f := payments.NewFake()
+	ctx := context.Background()
+	u, err := f.LinkURL("st-1", "http://localhost:3002/stripe/oauth/callback", "o@example.com")
+	if err != nil || u != "http://localhost:3002/stripe/oauth/callback?code=fake_code_1&state=st-1" {
+		t.Fatalf("url %q err %v", u, err)
+	}
+	id, err := f.CompleteLink(ctx, "fake_code_1")
+	if err != nil || id != "acct_fakelink1" {
+		t.Fatalf("id %q err %v", id, err)
+	}
+	if st, err := f.Account(ctx, id); err != nil || !st.ChargesEnabled {
+		t.Fatalf("a linked account takes payments: %+v %v", st, err)
+	}
+	if _, err := f.CompleteLink(ctx, "ac_real"); !errors.Is(err, plugin.ErrRefused) {
+		t.Fatalf("unknown code: %v", err)
+	}
+	f.LinkReturns("acct_fakelink9")
+	if id, _ := f.CompleteLink(ctx, "fake_code_2"); id != "acct_fakelink9" {
+		t.Fatalf("LinkReturns: %q", id)
+	}
+	f.FailNext(errors.New("down"))
+	if err := f.Unlink(ctx, id); err == nil || len(f.Unlinked()) != 0 {
+		t.Fatalf("failed unlink: %v %v", err, f.Unlinked())
+	}
+	if err := f.Unlink(ctx, id); err != nil || len(f.Unlinked()) != 1 || f.Unlinked()[0] != "acct_fakelink1" {
+		t.Fatalf("unlink: %v %v", err, f.Unlinked())
+	}
+}

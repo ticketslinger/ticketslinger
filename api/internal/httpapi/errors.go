@@ -50,12 +50,20 @@ func locked() error {
 	return &apiError{423, "locked", "Too many wrong passwords. Your account is paused for 15 minutes."}
 }
 
-// The payment provider's errors. Both are 5xx, so Idempotency-Key never
-// keeps them and a retry runs fresh.
+// The payment provider's errors. All are 5xx, so Idempotency-Key never
+// keeps them and a retry runs fresh. Unavailable might work in a minute;
+// refused won't, until someone fixes what Stripe objected to.
 var (
 	errPaymentsNotConfigured = &apiError{503, "payments_not_configured", "This server isn't set up to take card payments yet. Free tickets still work. Paid ones need Stripe keys from whoever runs it."}
 	errPaymentsUnavailable   = &apiError{503, "payments_unavailable", "We couldn't reach Stripe just now. Try again in a minute."}
+	errPaymentsRefused       = &apiError{503, "payments_refused", "Stripe turned this down. We've logged the details and we'll look into it."}
+	errOAuthNotConfigured    = &apiError{503, "oauth_not_configured", "This server can't link an existing Stripe account yet. You can still create a new one here."}
 	errNotConnected          = &apiError{409, "not_connected", "There's no Stripe account to check yet. Connect one first."}
+	errNothingToDisconnect   = &apiError{409, "not_connected", "There's no Stripe account connected, so there's nothing to disconnect."}
+	errAlreadyConnected      = &apiError{409, "already_connected", "This organizer already has a Stripe account connected. Disconnect it first, then link the other one."}
+	errAccountInUse          = &apiError{409, "account_in_use", "That Stripe account is already taking payments for another organizer here. Disconnect it there first, or use a different account."}
+	errPaymentsInProgress    = &apiError{409, "payments_in_progress", "Someone's paying for tickets right now. Give it a few minutes, then disconnect."}
+	errInvalidState          = &apiError{400, "invalid_state", "That link has expired. Start again from your organizer's Payments page."}
 )
 
 // errTurnstileUnavailable: Cloudflare couldn't check a Turnstile token. A 5xx,

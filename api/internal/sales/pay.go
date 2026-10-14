@@ -136,6 +136,9 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 	})
 	if err != nil {
 		slog.ErrorContext(ctx, "payment intent", "order", order.ID, "err", err)
+		if errors.Is(err, plugin.ErrRefused) {
+			return PaymentStart{}, ErrPaymentsRefused
+		}
 		return PaymentStart{}, ErrPaymentsUnavailable
 	}
 	// A Pay running alongside may have stored its intent first: answer with
@@ -170,14 +173,17 @@ func (s *Service) start(o pendingOrder, p payment) PaymentStart {
 		Account: p.Account, AmountCents: o.TotalCents}
 }
 
-// paymentsReady returns the organizer's Stripe account if it can take cards.
+// paymentsReady returns the organizer's Stripe account if it can take cards:
+// connected, not disconnected, and Stripe has charges on.
 func (s *Service) paymentsReady(ctx context.Context, tx pgx.Tx, org uuid.UUID) (string, error) {
 	if s.Payments == nil {
 		return "", ErrPaymentsNotConfigured
 	}
 	var account *string
 	var enabled bool
-	if err := tx.QueryRow(ctx, `select stripe_account_id, stripe_charges_enabled from organizers where id = $1`, org).Scan(&account, &enabled); err != nil {
+	// A disconnected organizer keeps the old id for its past payments.
+	if err := tx.QueryRow(ctx, `select stripe_account_id, stripe_charges_enabled and stripe_disconnected_at is null
+		from organizers where id = $1`, org).Scan(&account, &enabled); err != nil {
 		return "", err
 	}
 	if account == nil || !enabled {

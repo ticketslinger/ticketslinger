@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stripe/stripe-go/v87"
 
+	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/system"
 )
 
@@ -37,6 +38,8 @@ func (s *Service) HandleStripeEvent(ctx context.Context, ev stripe.Event) error 
 			return s.paymentSucceeded(ctx, tx, *org, ev)
 		case stripe.EventTypeAccountUpdated:
 			return accountUpdated(ctx, tx, *org, ev)
+		case stripe.EventTypeAccountApplicationDeauthorized:
+			return deauthorized(ctx, tx, *org, ev)
 		}
 		return nil // recorded, and nothing else to do
 	})
@@ -108,7 +111,26 @@ func accountUpdated(ctx context.Context, tx pgx.Tx, org uuid.UUID, ev stripe.Eve
 		slog.WarnContext(ctx, "account.updated about another account; ignoring", "event", ev.ID, "account", ev.Account, "object", a.ID)
 		return nil
 	}
-	_, err := tx.Exec(ctx, `update organizers set stripe_charges_enabled = $2, stripe_details_submitted = $3 where id = $1`,
-		org, a.ChargesEnabled, a.DetailsSubmitted)
+	// A disconnected account stays off until the organizer connects again.
+	_, err := tx.Exec(ctx, `update organizers set stripe_charges_enabled = $2 and stripe_disconnected_at is null,
+		stripe_details_submitted = $3 where id = $1`, org, a.ChargesEnabled, a.DetailsSubmitted)
 	return err
+}
+
+// deauthorized: the account (or we, from the dashboard) took our platform
+// off it. The organizer is disconnected as if they'd done it here; the id
+// stays so payments already made still find their orders. Only the event's
+// account is read: these events may come in an older API version.
+func deauthorized(ctx context.Context, tx pgx.Tx, org uuid.UUID, ev stripe.Event) error {
+	var account string
+	err := tx.QueryRow(ctx, `update organizers set stripe_disconnected_at = statement_timestamp(), stripe_charges_enabled = false
+		where id = $1 and stripe_account_id = $2 and stripe_disconnected_at is null returning stripe_account_id`, org, ev.Account).Scan(&account)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil // disconnected already
+	}
+	if err != nil {
+		return err
+	}
+	return audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: audit.Actor{System: true}, Action: "organizer.stripe_disconnected",
+		EntityType: "organizer", EntityID: org, After: map[string]string{"stripe_account_id": account, "via": "stripe"}})
 }

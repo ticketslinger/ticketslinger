@@ -17,9 +17,9 @@ test("an organizer connects Stripe, a buyer pays on a phone, and the order shows
   const slug = `olive-live-${stamp}`;
   await expect(page.getByText(`Olive Live ${stamp}`)).toBeVisible();
 
-  // Connect Stripe: the test-mode provider sends us straight back.
+  // Create a Stripe account: the test-mode provider sends us straight back.
   await page.goto(`/o/${slug}/payments`);
-  await page.getByRole("button", { name: "Connect Stripe" }).click();
+  await page.getByRole("button", { name: "Create a Stripe account" }).click();
   await expect(page.getByText("You're ready to take payments.")).toBeVisible();
 
   // A sellable event: General $25 (capacity 50), Volunteer free, code FRIENDS 10%, a required question.
