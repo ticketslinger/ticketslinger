@@ -31,13 +31,23 @@ var (
 type ProviderError struct {
 	Op        string // "create account", "payment intent", ...
 	Refused   bool
-	Status    int // the provider's HTTP status, 0 when there was no answer
+	NoAccess  bool   // refused because our platform can't reach the account at all
+	Status    int    // the provider's HTTP status, 0 when there was no answer
+	Cause     string // with no answer: "timeout", "network" or "other"
 	Type      string
 	Code      string
 	RequestID string
 }
 
+// ErrNoAccess: the provider refused because our platform has no access to
+// the account (it was unlinked, or never ours). errors.Is also matches
+// ErrRefused for these.
+var ErrNoAccess = errors.New("payments: no access to the account")
+
 func (e *ProviderError) Error() string {
+	if e.Status == 0 && e.Cause != "" {
+		return fmt.Sprintf("%s: unavailable (no answer: %s)", e.Op, e.Cause)
+	}
 	kind := "unavailable"
 	if e.Refused {
 		kind = "refused"
@@ -46,7 +56,7 @@ func (e *ProviderError) Error() string {
 }
 
 func (e *ProviderError) Is(target error) bool {
-	return target == ErrRefused && e.Refused || target == ErrUnavailable && !e.Refused
+	return target == ErrRefused && e.Refused || target == ErrUnavailable && !e.Refused || target == ErrNoAccess && e.NoAccess
 }
 
 type AccountStatus struct{ ChargesEnabled, DetailsSubmitted bool }

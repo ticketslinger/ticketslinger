@@ -29,6 +29,7 @@ type Fake struct {
 	links     int    // link URLs handed out
 	linkAs    string // LinkReturns
 	unlinked  []string
+	failOn    map[string]error // FailCall
 }
 
 var _ plugin.PaymentProvider = (*Fake)(nil)
@@ -57,11 +58,32 @@ func (f *Fake) FailNext(err error) {
 	f.fail = err
 }
 
+// FailCall makes the next call of one method ("Unlink", "Account") return
+// err, leaving other calls alone.
+func (f *Fake) FailCall(method string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failOn == nil {
+		f.failOn = map[string]error{}
+	}
+	f.failOn[method] = err
+}
+
 // failed returns and clears the error set by FailNext. Hold f.mu.
 func (f *Fake) failed() error {
 	err := f.fail
 	f.fail = nil
 	return err
+}
+
+// failedFor returns and clears the error FailCall set for method, else
+// failed's. Hold f.mu.
+func (f *Fake) failedFor(method string) error {
+	if err := f.failOn[method]; err != nil {
+		delete(f.failOn, method)
+		return err
+	}
+	return f.failed()
 }
 
 func (f *Fake) CreateAccount(_ context.Context, key string) (string, error) {
@@ -103,7 +125,7 @@ func (f *Fake) OnboardingLink(_ context.Context, account, _, returnURL string) (
 func (f *Fake) Account(_ context.Context, account string) (plugin.AccountStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.failed(); err != nil {
+	if err := f.failedFor("Account"); err != nil {
 		return plugin.AccountStatus{}, err
 	}
 	if !strings.HasPrefix(account, "acct_fake") {
@@ -201,7 +223,7 @@ func (f *Fake) CompleteLink(_ context.Context, code string) (string, error) {
 func (f *Fake) Unlink(_ context.Context, account string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.failed(); err != nil {
+	if err := f.failedFor("Unlink"); err != nil {
 		return err
 	}
 	f.unlinked = append(f.unlinked, account)

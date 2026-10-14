@@ -21,6 +21,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/httpapi"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/payments"
+	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
 )
 
@@ -482,5 +483,99 @@ func TestRefusedCreateMovesTheKeyOn(t *testing.T) {
 	}
 	if n := h.count(`select count(*) from organizers where slug = 'acme' and stripe_account_id = 'acct_test1' and stripe_link_method = 'created'`); n != 1 {
 		t.Fatal("acme isn't connected to the account")
+	}
+}
+
+// linkedShop is acme with acct_fakelink1 linked and nothing else going on.
+func linkedShop(t *testing.T) (shop, *payments.Fake) {
+	t.Helper()
+	fake := payments.NewFake()
+	s := newShopWith(t, nil, fake)
+	if _, err := testdb.Owner(t, s.pool).Exec(context.Background(), `update organizers set stripe_account_id = null, stripe_link_method = null where slug = 'acme'`); err != nil {
+		t.Fatal(err)
+	}
+	state, code := s.startLink(s.owner, "acme")
+	s.must(s.completeLink(s.owner, state, code), 200)
+	return s, fake
+}
+
+var invalidClient = &plugin.ProviderError{Op: "stripe: deauthorize", Refused: true, Status: 400, Code: "invalid_client"}
+
+// Stripe answers invalid_client to a deauthorize both when the account is
+// already unlinked and when our client id is wrong, so a read of the account
+// decides.
+func TestDisconnectWhenStripeSaysInvalidClient(t *testing.T) {
+	t.Run("no access: already unlinked", func(t *testing.T) {
+		s, fake := linkedShop(t)
+		fake.FailCall("Unlink", invalidClient)
+		fake.FailCall("Account", &plugin.ProviderError{Op: "stripe: account", Refused: true, NoAccess: true, Status: 403, Code: "account_invalid"})
+		if st := s.must(s.do(s.owner, "POST", paymentsURL+"/disconnect", ""), 200); st["disconnected"] != true {
+			t.Fatalf("disconnect: %v", st)
+		}
+		if n := s.count(`select count(*) from audit_log where action = 'organizer.stripe_disconnected' and after->>'via' = 'dashboard'
+			and after->>'note' = 'Stripe had already unlinked it'`); n != 1 {
+			t.Fatalf("audit rows %d", n)
+		}
+	})
+	t.Run("still has access", func(t *testing.T) {
+		s, fake := linkedShop(t)
+		fake.FailCall("Unlink", invalidClient)
+		if res := s.do(s.owner, "POST", paymentsURL+"/disconnect", ""); res.StatusCode != 503 || s.errorCode(res) != "payments_refused" {
+			t.Fatalf("probe works: %d %q", res.StatusCode, s.errorCode(res))
+		}
+		if st := s.must(s.do(s.owner, "GET", paymentsURL, ""), 200); st["connected"] != true {
+			t.Fatalf("changed: %v", st)
+		}
+	})
+	t.Run("probe unavailable", func(t *testing.T) {
+		s, fake := linkedShop(t)
+		fake.FailCall("Unlink", invalidClient)
+		fake.FailCall("Account", &plugin.ProviderError{Op: "stripe: account", Cause: "timeout"})
+		if res := s.do(s.owner, "POST", paymentsURL+"/disconnect", ""); res.StatusCode != 503 || s.errorCode(res) != "payments_unavailable" {
+			t.Fatalf("probe down: %d %q", res.StatusCode, s.errorCode(res))
+		}
+		if st := s.must(s.do(s.owner, "GET", paymentsURL, ""), 200); st["connected"] != true {
+			t.Fatalf("changed: %v", st)
+		}
+	})
+	t.Run("another refusal is not probed", func(t *testing.T) {
+		s, fake := linkedShop(t)
+		fake.FailCall("Unlink", &plugin.ProviderError{Op: "stripe: deauthorize", Refused: true, Status: 400, Code: "invalid_request"})
+		fake.FailCall("Account", &plugin.ProviderError{Op: "stripe: account", Refused: true, NoAccess: true, Status: 403})
+		if res := s.do(s.owner, "POST", paymentsURL+"/disconnect", ""); res.StatusCode != 503 || s.errorCode(res) != "payments_refused" {
+			t.Fatalf("invalid_request: %d %q", res.StatusCode, s.errorCode(res))
+		}
+	})
+}
+
+// A failed code exchange still uses the state up: start again.
+func TestFailedExchangeBurnsTheState(t *testing.T) {
+	fake := payments.NewFake()
+	h := newPaymentsHarness(t, fake)
+	owner := h.signupWithMFA("owner@example.com")
+	h.createOrganizer(owner, "acme")
+	state, code := h.startLink(owner, "acme")
+	fake.FailNext(errors.New("stripe: oauth token: connection reset"))
+	if res := h.completeLink(owner, state, code); res.StatusCode != 503 || h.errorCode(res) != "payments_unavailable" {
+		t.Fatalf("exchange down: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	if res := h.completeLink(owner, state, code); res.StatusCode != 400 || h.errorCode(res) != "invalid_state" {
+		t.Fatalf("retry: %d %q", res.StatusCode, h.errorCode(res))
+	}
+}
+
+// After a linked account is disconnected, "Create a Stripe account" makes a
+// new one, and the organizer is on a created account from then on.
+func TestCreateAfterDisconnectingALinkedAccount(t *testing.T) {
+	s, fake := linkedShop(t)
+	s.must(s.do(s.owner, "POST", paymentsURL+"/disconnect", ""), 200)
+	before := fake.Accounts()
+	s.must(s.do(s.owner, "POST", paymentsURL+"/connect", ""), 200)
+	if fake.Accounts() != before+1 {
+		t.Fatalf("accounts %d, was %d: want a new one", fake.Accounts(), before)
+	}
+	if n := s.count(`select count(*) from organizers where slug = 'acme' and stripe_link_method = 'created' and starts_with(stripe_account_id, 'acct_fake')
+		and stripe_account_id <> 'acct_fakelink1' and stripe_disconnected_at is null and stripe_connected_at is not null`); n != 1 {
+		t.Fatal("acme isn't on a new created account")
 	}
 }

@@ -1,5 +1,8 @@
 -- +goose Up
 ALTER TABLE organizers ADD COLUMN stripe_disconnected_at timestamptz,
+  -- When the current account went live here (created, linked or switched
+  -- back on). A deauthorize Stripe made before then is about an older link.
+  ADD COLUMN stripe_connected_at timestamptz,
   -- How the account arrived: created through Account Links or linked through
   -- OAuth. Only linked accounts are deauthorized on disconnect.
   ADD COLUMN stripe_link_method text CHECK (stripe_link_method IN ('created', 'linked')),
@@ -69,4 +72,4 @@ REVOKE UPDATE (stripe_disconnected_at) ON organizers FROM ts_system;
 DROP INDEX organizers_stripe_account_live;
 ALTER TABLE organizers ADD CONSTRAINT organizers_stripe_account_id_key UNIQUE (stripe_account_id);
 ALTER TABLE organizers DROP CONSTRAINT organizers_link_method_with_account;
-ALTER TABLE organizers DROP COLUMN stripe_create_attempt, DROP COLUMN stripe_link_method, DROP COLUMN stripe_disconnected_at;
+ALTER TABLE organizers DROP COLUMN stripe_create_attempt, DROP COLUMN stripe_link_method, DROP COLUMN stripe_connected_at, DROP COLUMN stripe_disconnected_at;

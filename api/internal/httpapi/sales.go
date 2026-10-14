@@ -128,7 +128,7 @@ func (s *server) ConnectPayments(ctx context.Context, req ConnectPaymentsRequest
 			return nil
 		}
 		_, err := tx.Exec(ctx, `update organizers set stripe_account_id = $2, stripe_link_method = 'created', stripe_disconnected_at = null,
-			stripe_charges_enabled = stripe_charges_enabled and $3, stripe_details_submitted = stripe_details_submitted and $3 where id = $1`,
+			stripe_connected_at = statement_timestamp(), stripe_charges_enabled = stripe_charges_enabled and $3, stripe_details_submitted = stripe_details_submitted and $3 where id = $1`,
 			org.ID, *account, !created)
 		if accountInUse(err) {
 			return errAccountInUse
@@ -301,7 +301,7 @@ func (s *server) CompleteStripeLink(ctx context.Context, req CompleteStripeLinkR
 			return err
 		}
 		_, err = sp.Exec(ctx, `update organizers set stripe_account_id = $2, stripe_link_method = 'linked', stripe_disconnected_at = null,
-			stripe_charges_enabled = false, stripe_details_submitted = false where id = $1`, org.ID, account)
+			stripe_connected_at = statement_timestamp(), stripe_charges_enabled = false, stripe_details_submitted = false where id = $1`, org.ID, account)
 		if accountInUse(err) {
 			// Not deauthorized: the token exchange hands back the same platform
 			// link the other organizer sells through.
@@ -341,6 +341,36 @@ func (s *server) CompleteStripeLink(ctx context.Context, req CompleteStripeLinkR
 	return CompleteStripeLink200JSONResponse(out), nil
 }
 
+// unlink deauthorizes a linked account. Stripe answers invalid_client both
+// when the account is no longer connected to us and when our client id or
+// key mode is wrong, so that answer alone proves nothing: a read of the
+// account settles it. No access means Stripe already unlinked it (gone);
+// a read that works means we still have access, and the refusal stands.
+func (s *server) unlink(ctx context.Context, account string) (gone bool, err error) {
+	if s.Payments == nil {
+		return false, errPaymentsNotConfigured
+	}
+	err = s.Payments.Unlink(ctx, account)
+	var pe *plugin.ProviderError
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, plugin.ErrLinkUnavailable):
+		return false, errOAuthNotConfigured
+	case !errors.As(err, &pe) || !pe.Refused || pe.Code != "invalid_client":
+		return false, providerError(ctx, "deauthorize", err)
+	}
+	_, probe := s.Payments.Account(ctx, account)
+	switch {
+	case errors.Is(probe, plugin.ErrNoAccess):
+		slog.InfoContext(ctx, "deauthorize: Stripe had already unlinked the account", "account", account, "probe", probe)
+		return true, nil
+	case probe == nil || errors.Is(probe, plugin.ErrRefused):
+		return false, providerError(ctx, "deauthorize", err) // we still have access: the refusal stands
+	}
+	return false, providerError(ctx, "account", probe)
+}
+
 // DisconnectPayments stops selling through the organizer's Stripe account.
 // A linked account has our access removed at Stripe first, and a failure
 // there changes nothing; an account created here is only marked, since it
@@ -365,23 +395,21 @@ func (s *server) DisconnectPayments(ctx context.Context, req DisconnectPaymentsR
 		if paying {
 			return errPaymentsInProgress
 		}
+		after := map[string]string{"stripe_account_id": *account, "via": "dashboard"}
 		if *method == "linked" {
-			if s.Payments == nil {
-				return errPaymentsNotConfigured
-			}
-			err := s.Payments.Unlink(ctx, *account)
-			if errors.Is(err, plugin.ErrLinkUnavailable) {
-				return errOAuthNotConfigured
-			}
+			gone, err := s.unlink(ctx, *account)
 			if err != nil {
-				return providerError(ctx, "deauthorize", err)
+				return err
+			}
+			if gone {
+				after["note"] = "Stripe had already unlinked it"
 			}
 		}
 		if _, err := tx.Exec(ctx, `update organizers set stripe_disconnected_at = statement_timestamp(), stripe_charges_enabled = false where id = $1`, org.ID); err != nil {
 			return err
 		}
 		if err := audit.Write(ctx, tx, audit.Entry{Organizer: org.ID, Actor: actorFrom(ctx), Action: "organizer.stripe_disconnected",
-			EntityType: "organizer", EntityID: org.ID, After: map[string]string{"stripe_account_id": *account, "via": "dashboard"}}); err != nil {
+			EntityType: "organizer", EntityID: org.ID, After: after}); err != nil {
 			return err
 		}
 		var err error

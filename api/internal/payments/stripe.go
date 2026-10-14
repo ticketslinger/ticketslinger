@@ -5,6 +5,7 @@ package payments
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"time"
 
@@ -51,6 +52,20 @@ func fail(op string, err error) error {
 		}
 		st := se.HTTPStatusCode
 		pe.Refused = st >= 400 && st < 500 && st != http.StatusConflict && st != http.StatusTooManyRequests
+		// A platform reading an account it isn't connected to gets 403, or
+		// account_invalid; never matched on Stripe's message text.
+		pe.NoAccess = pe.Refused && (st == http.StatusForbidden || se.Code == stripe.ErrorCodeAccountInvalid)
+		return pe
+	}
+	// No answer: say roughly why, and nothing else (a URL can carry ids).
+	var ne net.Error
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) || errors.As(err, &ne) && ne.Timeout():
+		pe.Cause = "timeout"
+	case errors.As(err, &ne):
+		pe.Cause = "network"
+	default:
+		pe.Cause = "other"
 	}
 	return pe
 }

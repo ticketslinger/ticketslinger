@@ -657,3 +657,38 @@ func TestDeauthorizedWebhookDisconnects(t *testing.T) {
 		t.Fatalf("payment from before the disconnect: order %s, want paid", status)
 	}
 }
+
+// A deauthorize made before the account last went live is about an older
+// link: after disconnect and re-link, it leaves the account live. One made
+// after (the same second counts) still disconnects.
+func TestStaleDeauthorizeLeavesANewerLinkLive(t *testing.T) {
+	s, _ := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	f.exec(t, `update organizers set stripe_disconnected_at = now() - interval '1 hour', stripe_charges_enabled = false where id = $1`, f.org)
+	f.exec(t, `update organizers set stripe_disconnected_at = null, stripe_charges_enabled = true, stripe_link_method = 'linked',
+		stripe_connected_at = now() where id = $1`, f.org) // re-linked
+	var since int64
+	f.must(t, f.owner.QueryRow(ctx, `select floor(extract(epoch from stripe_connected_at))::bigint from organizers where id = $1`, f.org).Scan(&since))
+	deauth := func(id string, created int64) stripe.Event {
+		return stripe.Event{ID: id, Type: stripe.EventTypeAccountApplicationDeauthorized, Account: "acct_fake1", Created: created,
+			Data: &stripe.EventData{Raw: json.RawMessage(`{"id":"ca_test","object":"application"}`)}}
+	}
+	live := func() bool {
+		t.Helper()
+		var on bool
+		f.must(t, f.owner.QueryRow(ctx, `select stripe_disconnected_at is null and stripe_charges_enabled from organizers where id = $1`, f.org).Scan(&on))
+		return on
+	}
+	f.must(t, s.HandleStripeEvent(ctx, deauth("evt_old", since-1)))
+	if !live() {
+		t.Fatal("a deauthorize from before the re-link disconnected the new link")
+	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'organizer.stripe_disconnected'`); n != 0 {
+		t.Fatalf("%d audit rows for an ignored event", n)
+	}
+	f.must(t, s.HandleStripeEvent(ctx, deauth("evt_new", since)))
+	if live() {
+		t.Fatal("a deauthorize from after the re-link didn't disconnect")
+	}
+}

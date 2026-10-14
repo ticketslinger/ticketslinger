@@ -120,17 +120,29 @@ func accountUpdated(ctx context.Context, tx pgx.Tx, org uuid.UUID, ev stripe.Eve
 // deauthorized: the account (or we, from the dashboard) took our platform
 // off it. The organizer is disconnected as if they'd done it here; the id
 // stays so payments already made still find their orders. Only the event's
-// account is read: these events may come in an older API version.
+// account and time are read: these events may come in an older API version.
+// A deauthorize made before the account last went live here is about an
+// older link and is ignored; that grants nothing, since Stripe itself checks
+// our access on every call.
 func deauthorized(ctx context.Context, tx pgx.Tx, org uuid.UUID, ev stripe.Event) error {
-	var account string
-	err := tx.QueryRow(ctx, `update organizers set stripe_disconnected_at = statement_timestamp(), stripe_charges_enabled = false
-		where id = $1 and stripe_account_id = $2 and stripe_disconnected_at is null returning stripe_account_id`, org, ev.Account).Scan(&account)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil // disconnected already
+	var since *int64
+	var disconnected bool
+	err := tx.QueryRow(ctx, `select floor(extract(epoch from stripe_connected_at))::bigint, stripe_disconnected_at is not null
+		from organizers where id = $1 and stripe_account_id = $2 for no key update`, org, ev.Account).Scan(&since, &disconnected)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && disconnected {
+		return nil // not this organizer's account any more, or disconnected already
 	}
 	if err != nil {
 		return err
 	}
+	if since != nil && ev.Created < *since {
+		slog.WarnContext(ctx, "account.application.deauthorized from before the account was last connected; ignoring",
+			"event", ev.ID, "account", ev.Account, "created", ev.Created, "connected", *since)
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `update organizers set stripe_disconnected_at = statement_timestamp(), stripe_charges_enabled = false where id = $1`, org); err != nil {
+		return err
+	}
 	return audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: audit.Actor{System: true}, Action: "organizer.stripe_disconnected",
-		EntityType: "organizer", EntityID: org, After: map[string]string{"stripe_account_id": account, "via": "stripe"}})
+		EntityType: "organizer", EntityID: org, After: map[string]string{"stripe_account_id": ev.Account, "via": "stripe"}})
 }

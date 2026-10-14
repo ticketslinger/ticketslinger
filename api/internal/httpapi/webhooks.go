@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -41,8 +42,12 @@ func (s *server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		Type string `json:"type"`
 	}
 	_ = json.Unmarshal(payload, &peek)
+	lenient := peek.Type == string(stripe.EventTypeAccountApplicationDeauthorized)
 	ev, err := webhook.ConstructEventWithOptions(payload, sig, s.Config.StripeWebhookSecret, webhook.ConstructEventOptions{
-		Tolerance: webhookTolerance, IgnoreAPIVersionMismatch: peek.Type == string(stripe.EventTypeAccountApplicationDeauthorized)})
+		Tolerance: webhookTolerance, IgnoreAPIVersionMismatch: lenient})
+	if err == nil && lenient && ev.Type != stripe.EventTypeAccountApplicationDeauthorized {
+		err = errors.New("event type changed between the peek and the parse") // a leniently parsed event must be the one type allowed
+	}
 	if err != nil {
 		slog.WarnContext(r.Context(), "stripe webhook refused", "err", err)
 		writeError(w, &apiError{400, "bad_signature", "Signature check failed."})

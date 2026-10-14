@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stripe/stripe-go/v87"
 
@@ -257,8 +258,43 @@ func TestNoAnswerIsUnavailable(t *testing.T) {
 		LeveledLogger: &stripe.LeveledLogger{Level: stripe.LevelNull}})
 	s := payments.NewStripe(secretKey, "pk_test_x", "ca_test", b)
 	_, err := s.CreateAccount(context.Background(), "acct-1-0")
-	if !errors.Is(err, plugin.ErrUnavailable) || errors.Is(err, plugin.ErrRefused) {
+	var pe *plugin.ProviderError
+	if !errors.Is(err, plugin.ErrUnavailable) || errors.Is(err, plugin.ErrRefused) || !errors.As(err, &pe) || pe.Cause != "network" {
 		t.Fatalf("connection refused: %v", err)
+	}
+	if strings.Contains(err.Error(), "127.0.0.1") {
+		t.Fatalf("the cause carries the address: %v", err)
+	}
+	slow := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { time.Sleep(300 * time.Millisecond) }))
+	t.Cleanup(slow.Close)
+	b = stripe.NewBackendsWithConfig(&stripe.BackendConfig{URL: stripe.String(slow.URL), MaxNetworkRetries: stripe.Int64(0),
+		HTTPClient: &http.Client{Timeout: 50 * time.Millisecond}, LeveledLogger: &stripe.LeveledLogger{Level: stripe.LevelNull}})
+	_, err = payments.NewStripe(secretKey, "pk_test_x", "ca_test", b).CreateAccount(context.Background(), "acct-1-0")
+	if !errors.As(err, &pe) || pe.Cause != "timeout" || errors.Is(err, plugin.ErrRefused) {
+		t.Fatalf("timeout: %v", err)
+	}
+}
+
+// A platform reading an account it's no longer connected to is refused with
+// 403, or account_invalid: that's "no access", told apart by status and
+// code only.
+func TestNoAccessIsItsOwnRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		status   int
+		body     string
+		noAccess bool
+	}{
+		{403, `{"error":{"type":"invalid_request_error","message":"no access"}}`, true},
+		{400, `{"error":{"type":"invalid_request_error","code":"account_invalid","message":"x"}}`, true},
+		{404, `{"error":{"type":"invalid_request_error","code":"resource_missing","message":"does not have access to account"}}`, false},
+		{500, `{"error":{"type":"api_error","code":"account_invalid","message":"x"}}`, false},
+	} {
+		s, rec := newStripe(t)
+		rec.status, rec.fail = tc.status, tc.body
+		_, err := s.Account(context.Background(), "acct_test1")
+		if errors.Is(err, plugin.ErrNoAccess) != tc.noAccess {
+			t.Errorf("%d %s: no access %v, want %v", tc.status, tc.body, errors.Is(err, plugin.ErrNoAccess), tc.noAccess)
+		}
 	}
 }
 
