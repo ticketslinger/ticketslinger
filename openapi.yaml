@@ -558,6 +558,8 @@ components:
         entity_id: { type: string, format: uuid }
         actor_user_id: { type: string, format: uuid }
         actor_api_key_id: { type: string, format: uuid, description: Set instead of actor_user_id when an API key did it. }
+        actor_name: { type: [string, "null"], description: "The person's name if they are still a member of this organizer, or the API key's name. Null for former members." }
+        actor_email: { type: [string, "null"], description: "The person's email if they are still a member of this organizer. Null for API keys and former members." }
         at: { type: string, format: date-time }
     CreateApiKey:
       type: object

@@ -597,17 +597,25 @@ func (s *server) GetOrganizer(ctx context.Context, req GetOrganizerRequestObject
 func (s *server) ListAudit(ctx context.Context, req ListAuditRequestObject) (ListAuditResponseObject, error) {
 	out := ListAudit200JSONResponse{}
 	err := s.inOrganizer(ctx, req.Organizer, Access{Roles: ownerAdmin, SessionOnly: true}, func(_ organizers.Organizer, tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `select id, action, entity_type, entity_id, actor_user_id, actor_api_key_id, at
-			from audit_log order by at desc, id desc limit 100`)
+		// Names come from the member directory (current members only) and
+		// api_keys (revoked keys included); a former member's name is null.
+		rows, err := tx.Query(ctx, `select a.id, a.action, a.entity_type, a.entity_id, a.actor_user_id, a.actor_api_key_id, a.at,
+				coalesce(d.name, k.name), d.email
+			from audit_log a
+			left join app_member_directory() d on d.user_id = a.actor_user_id
+			left join api_keys k on k.id = a.actor_api_key_id
+			order by a.at desc, a.id desc limit 100`)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var e AuditEntry
-			if err := rows.Scan(&e.Id, &e.Action, &e.EntityType, &e.EntityId, &e.ActorUserId, &e.ActorApiKeyId, &e.At); err != nil {
+			var name, email *string
+			if err := rows.Scan(&e.Id, &e.Action, &e.EntityType, &e.EntityId, &e.ActorUserId, &e.ActorApiKeyId, &e.At, &name, &email); err != nil {
 				return err
 			}
+			e.ActorName, e.ActorEmail = nullOf(name), nullOf(email)
 			out = append(out, e)
 		}
 		return rows.Err()

@@ -476,3 +476,53 @@ func TestKeyScopeCannotManageKeys(t *testing.T) {
 		t.Fatalf("user managing keys: %v", err)
 	}
 }
+
+// The member directory shows an organizer's members to its own members and to
+// nobody else: not a forged scope, not a missing user, not an API key alone.
+func TestMemberDirectoryIsTenantScoped(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	ua, oa := seedOrg(t, pool, "a@example.com", "org-a")
+	ub, ob := seedOrg(t, pool, "b@example.com", "org-b")
+	var keyID uuid.UUID
+	if err := testdb.Owner(t, pool).QueryRow(ctx,
+		`insert into api_keys(organizer_id, name, key_hash, prefix, scope) values ($1, 'K', '\x01', 'abcdefgh', 'read') returning id`, oa).Scan(&keyID); err != nil {
+		t.Fatal(err)
+	}
+	count := func(user, key, org uuid.UUID) (n int) {
+		t.Helper()
+		err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `select set_config('app.user_id', $1, true), set_config('app.api_key_id', $2, true), set_config('app.organizer_id', $3, true)`,
+				nilEmpty(user), nilEmpty(key), nilEmpty(org)); err != nil {
+				return err
+			}
+			return tx.QueryRow(ctx, `select count(*) from app_member_directory()`).Scan(&n)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := count(ua, uuid.Nil, oa); n != 1 {
+		t.Errorf("member of A sees %d rows of A, want 1", n)
+	}
+	if n := count(ub, uuid.Nil, ob); n != 1 {
+		t.Errorf("member of B sees %d rows of B, want 1", n)
+	}
+	if n := count(ub, uuid.Nil, oa); n != 0 {
+		t.Errorf("user of B forging scope on A sees %d rows, want 0", n)
+	}
+	if n := count(uuid.Nil, uuid.Nil, oa); n != 0 {
+		t.Errorf("no user sees %d rows, want 0", n)
+	}
+	if n := count(uuid.Nil, keyID, oa); n != 0 {
+		t.Errorf("API key alone sees %d rows, want 0", n)
+	}
+}
+
+func nilEmpty(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
+}

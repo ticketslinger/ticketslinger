@@ -1,3 +1,4 @@
+import type { components } from "@ticketslinger/api-client";
 import { api, must } from "../api";
 import { ErrorText, type Me, useLoad } from "../ui";
 import type { Org } from "./Organizer";
@@ -29,23 +30,23 @@ const when = (iso: string) =>
     new Date(iso),
   );
 
+type Actor = Pick<
+  components["schemas"]["AuditEntry"],
+  "actor_user_id" | "actor_api_key_id" | "actor_name" | "actor_email"
+>;
+
+/** The Who cell: a key by name, you as "You", a member by name with their email beneath. */
+export function who(e: Actor, meId: string) {
+  if (e.actor_api_key_id) return e.actor_name ? `API key: ${e.actor_name}` : "An API key";
+  if (e.actor_user_id === meId) return "You";
+  return e.actor_name ?? "Someone on your team";
+}
+
 export function Audit({ org, me }: { org: Org; me: Me }) {
   const path = { organizer: org.slug };
-  const { data, error } = useLoad(async () => {
-    const [log, keys] = await Promise.all([
-      api.GET("/organizers/{organizer}/audit", { params: { path } }),
-      api.GET("/organizers/{organizer}/api-keys", { params: { path } }),
-    ]);
-    return { log: must(log), keys: new Map(must(keys).map((k) => [k.id, k.name])) };
-  });
-
-  const who = (e: { actor_user_id?: string; actor_api_key_id?: string }) => {
-    if (e.actor_api_key_id) {
-      const name = data?.keys.get(e.actor_api_key_id);
-      return name ? `API key “${name}”` : "An API key";
-    }
-    return e.actor_user_id === me.id ? "You" : "Someone on your team";
-  };
+  const { data, error } = useLoad(async () =>
+    must(await api.GET("/organizers/{organizer}/audit", { params: { path } })),
+  );
 
   return (
     <>
@@ -53,8 +54,8 @@ export function Audit({ org, me }: { org: Org; me: Me }) {
       <p className="lede">The latest changes to {org.name}, newest first. We show up to 100.</p>
       <ErrorText>{error?.message}</ErrorText>
       {!data && !error && <p className="muted">Loading…</p>}
-      {data?.log.length === 0 && <p>Nothing has changed yet.</p>}
-      {data && data.log.length > 0 && (
+      {data?.length === 0 && <p>Nothing has changed yet.</p>}
+      {data && data.length > 0 && (
         <div className="table-wrap">
           <table>
             <thead>
@@ -65,11 +66,19 @@ export function Audit({ org, me }: { org: Org; me: Me }) {
               </tr>
             </thead>
             <tbody>
-              {data.log.map((e) => (
+              {data.map((e) => (
                 <tr key={e.id}>
                   <td>{when(e.at)}</td>
                   <td>{describeAction(e.action)}</td>
-                  <td>{who(e)}</td>
+                  <td>
+                    {who(e, me.id)}
+                    {e.actor_email && (
+                      <>
+                        <br />
+                        <span className="muted">{e.actor_email}</span>
+                      </>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
