@@ -1,16 +1,37 @@
-import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
+import {
+  Fragment,
+  type ReactNode,
+  StrictMode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { createRoot } from "react-dom/client";
 import { api } from "./api";
+import { ApiKeys } from "./routes/ApiKeys";
+import { Audit } from "./routes/Audit";
+import { EventPage, Events, NewEvent } from "./routes/Events";
 import { Home } from "./routes/Home";
 import { NewOrganizer } from "./routes/NewOrganizer";
+import { type Org, Organizer, type Section } from "./routes/Organizer";
 import { Security } from "./routes/Security";
 import { SignIn } from "./routes/SignIn";
 import { SignUp } from "./routes/SignUp";
 import { VerifyEmail } from "./routes/VerifyEmail";
-import { type Me, navigate, safeNext, usePath } from "./ui";
+import { type Me, match, NotFound, navigate, safeNext, usePath } from "./ui";
 import "./styles.css";
 
 const PUBLIC = new Set(["/signin", "/signup"]);
+
+// Pages inside an organizer, first match wins.
+const ORGANIZER: [string, Section, (org: Org, me: Me, p: Record<string, string>) => ReactNode][] = [
+  ["/o/:slug", "events", (org) => <Events org={org} />],
+  ["/o/:slug/events/new", "events", (org) => <NewEvent org={org} />],
+  ["/o/:slug/events/:id", "events", (org, _, p) => <EventPage org={org} id={p.id ?? ""} />],
+  ["/o/:slug/api-keys", "api-keys", (org) => <ApiKeys org={org} />],
+  ["/o/:slug/audit", "audit", (org, me) => <Audit org={org} me={me} />],
+];
 
 function App() {
   const path = usePath();
@@ -86,16 +107,19 @@ function App() {
       return <NewOrganizer me={me} />;
     case "/":
       return <Home me={me} onSignedOut={signedOut} />;
-    default:
-      return (
-        <main>
-          <h1 tabIndex={-1}>There's nothing here</h1>
-          <p>
-            <a href="/">Go to your dashboard</a>
-          </p>
-        </main>
-      );
   }
+  for (const [pattern, section, page] of ORGANIZER) {
+    const p = match(pattern, path);
+    if (!p?.slug) continue;
+    return (
+      // Keyed by organizer so the frame keeps its data while you move around inside it.
+      <Organizer key={p.slug} slug={p.slug} section={section} me={me} onSignedOut={signedOut}>
+        {/* Keyed by path: each page loads its own data fresh. */}
+        {(org) => <Fragment key={path}>{page(org, me, p)}</Fragment>}
+      </Organizer>
+    );
+  }
+  return <NotFound />;
 }
 
 const root = document.getElementById("root");

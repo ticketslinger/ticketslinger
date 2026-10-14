@@ -1,15 +1,45 @@
 import type { components } from "@ticketslinger/api-client";
-import { type AnchorHTMLAttributes, type ReactNode, useState, useSyncExternalStore } from "react";
+import {
+  type AnchorHTMLAttributes,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { ApiFailure } from "./api";
 
 export type Me = components["schemas"]["Me"];
 
-// Routing: the paths are fixed, so pathname + history is all we need.
+// Routing: pathname + history and a tiny matcher is all we need.
 const subscribe = (cb: () => void) => {
   addEventListener("popstate", cb);
   return () => removeEventListener("popstate", cb);
 };
 export const usePath = () => useSyncExternalStore(subscribe, () => location.pathname);
+
+/** Matches a path like /o/:slug against a pattern; returns the named segments, or null. */
+export function match(pattern: string, path: string): Record<string, string> | null {
+  const want = pattern.split("/");
+  const got = path.split("/");
+  if (want.length !== got.length) return null;
+  const params: Record<string, string> = {};
+  for (const [i, w] of want.entries()) {
+    const g = got[i] ?? "";
+    if (!w.startsWith(":")) {
+      if (w !== g) return null;
+      continue;
+    }
+    if (!g) return null;
+    try {
+      params[w.slice(1)] = decodeURIComponent(g);
+    } catch {
+      return null;
+    }
+  }
+  return params;
+}
 
 /** Where to go after sign-in: a same-site path or "/". Never an off-site URL. */
 export function safeNext(raw: string | null): string {
@@ -40,6 +70,33 @@ export function Link({
   );
 }
 
+const OFFLINE = "We couldn't reach TicketSlinger. Check your connection and try again.";
+const asFailure = (e: unknown) =>
+  e instanceof ApiFailure ? e : new ApiFailure("offline", OFFLINE, 0);
+
+/** Loads data once on mount; reload() fetches it again. */
+export function useLoad<T>(load: () => Promise<T>) {
+  const [data, setData] = useState<T>();
+  const [error, setError] = useState<ApiFailure>();
+  const latest = useRef(load);
+  latest.current = load;
+  const reload = useCallback(
+    () =>
+      latest.current().then(
+        (d) => {
+          setData(d);
+          setError(undefined);
+        },
+        (e) => setError(asFailure(e)),
+      ),
+    [],
+  );
+  useEffect(() => {
+    reload();
+  }, [reload]);
+  return { data, setData, error, reload };
+}
+
 /** Runs a form action, tracking busy state and a human-readable error. */
 export function useAction() {
   const [busy, setBusy] = useState(false);
@@ -50,11 +107,7 @@ export function useAction() {
     try {
       await fn();
     } catch (e) {
-      setError(
-        e instanceof ApiFailure
-          ? e.message
-          : "We couldn't reach TicketSlinger. Check your connection and try again.",
-      );
+      setError(asFailure(e).message);
     } finally {
       setBusy(false);
     }
@@ -87,5 +140,16 @@ export function Field({
         </p>
       )}
     </div>
+  );
+}
+
+export function NotFound() {
+  return (
+    <main>
+      <h1 tabIndex={-1}>There's nothing here</h1>
+      <p>
+        <Link href="/">Go to your dashboard</Link>
+      </p>
+    </main>
   );
 }

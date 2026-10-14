@@ -5,7 +5,7 @@ import { ErrorText, Link, type Me, useAction } from "../ui";
 
 type Organizer = components["schemas"]["Organizer"];
 
-const ROLE = {
+export const ROLE = {
   owner: "Owner",
   admin: "Admin",
   checkin: "Check-in",
@@ -53,21 +53,9 @@ export function Home({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
       )}
 
       <h2>Your organizers</h2>
-      {!me.mfa &&
-        orgs?.some((o) => o.role === "owner" || o.role === "admin") &&
-        (me.has_second_factor ? (
-          <div className="notice">
-            <p>You've set up a second step. Sign in again with it to manage this organizer.</p>
-            <button type="button" disabled={signOut.busy} onClick={signOutNow}>
-              Sign in again
-            </button>
-          </div>
-        ) : (
-          <p className="notice">
-            Add a passkey or an authenticator app to manage this organizer.{" "}
-            <Link href="/security">Set one up</Link>
-          </p>
-        ))}
+      {!me.mfa && orgs?.some((o) => o.role === "owner" || o.role === "admin") && (
+        <SecondStepNotice me={me} onSignedOut={onSignedOut} />
+      )}
       <ErrorText>{loadError}</ErrorText>
       {orgs === null && !loadError && <p className="muted">Loading…</p>}
       {orgs?.length === 0 && <p>You're not part of an organizer yet. Create one to get going.</p>}
@@ -75,7 +63,10 @@ export function Home({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
         <ul className="orgs">
           {orgs.map((o) => (
             <li key={o.id}>
-              <strong>{o.name}</strong> <span className="muted">· {ROLE[o.role]}</span>
+              <Link href={`/o/${o.slug}`}>
+                <strong>{o.name}</strong>
+              </Link>{" "}
+              <span className="muted">· {ROLE[o.role]}</span>
             </li>
           ))}
         </ul>
@@ -90,5 +81,36 @@ export function Home({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
         </Link>
       </p>
     </main>
+  );
+}
+
+/** Owners and admins need a second step this session before they can manage an organizer. */
+export function SecondStepNotice({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
+  const signOut = useAction();
+  if (!me.has_second_factor) {
+    return (
+      <p className="notice">
+        Add a passkey or an authenticator app to manage this organizer.{" "}
+        <Link href="/security">Set one up</Link>
+      </p>
+    );
+  }
+  return (
+    <div className="notice">
+      <p>You've set up a second step. Sign in again with it to manage this organizer.</p>
+      <button
+        type="button"
+        disabled={signOut.busy}
+        onClick={() =>
+          signOut.run(async () => {
+            await session.logout();
+            onSignedOut();
+          })
+        }
+      >
+        Sign in again
+      </button>
+      <ErrorText>{signOut.error}</ErrorText>
+    </div>
   );
 }

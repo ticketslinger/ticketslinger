@@ -8,4 +8,5 @@ test("slugify turns a name into a valid slug", () => {
   const long = slugify(`${"x".repeat(39)} yz`);
   expect(long.length).toBeLessThanOrEqual(40);
   expect(long).toMatch(/^[a-z0-9](-?[a-z0-9])*$/);
+  expect(slugify("x".repeat(70), 60)).toBe("x".repeat(60));
 });
