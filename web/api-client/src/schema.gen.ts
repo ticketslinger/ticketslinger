@@ -29,6 +29,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["signup"];
         delete?: never;
         options?: never;
@@ -45,7 +46,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description 401 totp_required means the account has an authenticator app; send totp_code, or a recovery_code instead. A valid recovery code is accepted for any account with a second factor and gives a session that passed it. */
+        /** @description 401 totp_required means the account has an authenticator app; send totp_code, or a recovery_code instead. A valid recovery code is accepted for any account with a second factor and gives a session that passed it. Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["login"];
         delete?: never;
         options?: never;
@@ -94,7 +95,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts setting up an authenticator app. Unless this session passed a second factor, send the current password. Once the account has a passkey or an authenticator app, only a session that passed one may start (403 mfa_required). The setup expires if not confirmed within 10 minutes. */
+        /** @description Starts setting up an authenticator app. Unless this session passed a second factor, send the current password. Once the account has a passkey or an authenticator app, only a session that passed one may start (403 mfa_required). The setup expires if not confirmed within 10 minutes. Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["startTotp"];
         delete?: never;
         options?: never;
@@ -128,7 +129,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Replaces the account's recovery codes with ten new single-use ones and returns them. They are shown this once. Needs a session that passed a second factor (403 mfa_required) and an account that has one (409 no_second_factor). */
+        /** @description Replaces the account's recovery codes with ten new single-use ones and returns them. They are shown this once. Needs a session that passed a second factor (403 mfa_required) and an account that has one (409 no_second_factor). Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["createRecoveryCodes"];
         delete?: never;
         options?: never;
@@ -194,6 +195,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["finishPasskeyLogin"];
         delete?: never;
         options?: never;
@@ -275,7 +277,7 @@ export interface paths {
         /** @description Owners and admins only, from a signed-in session. An API key gets 403 session_required. */
         get: operations["listApiKeys"];
         put?: never;
-        /** @description Owners and admins only, from a signed-in session. The token is in this response and nowhere else, ever. */
+        /** @description Owners and admins only, from a signed-in session. The token is in this response and nowhere else, ever. Its response carries credentials, so it is never kept for replay, so a retry with the same Idempotency-Key runs again, and a duplicate sent while the first is running is 409 idempotency_in_progress. */
         post: operations["createApiKey"];
         delete?: never;
         options?: never;
@@ -910,7 +912,7 @@ export interface components {
         };
     };
     parameters: {
-        /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+        /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
         IdempotencyKey: string;
         OrganizerPath: string;
         QuotaPath: string;
@@ -949,7 +951,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -980,7 +982,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -1013,7 +1015,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -1039,7 +1041,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -1069,7 +1071,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -1103,7 +1105,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -1135,7 +1137,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -1166,7 +1168,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -1204,7 +1206,7 @@ export interface operations {
                 name?: string;
             };
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -1240,7 +1242,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -1267,7 +1269,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -1347,7 +1349,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -1454,7 +1456,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -1489,7 +1491,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -1543,7 +1545,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -1603,7 +1605,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -1633,7 +1635,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -1694,7 +1696,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -1730,7 +1732,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -1792,7 +1794,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -1823,7 +1825,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -1885,7 +1887,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -1947,7 +1949,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -1978,7 +1980,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -2040,7 +2042,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -2102,7 +2104,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -2133,7 +2135,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -2195,7 +2197,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -2231,7 +2233,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -2293,7 +2295,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -2324,7 +2326,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. */
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {

@@ -27,6 +27,11 @@ type rig struct {
 // request number n (1-based). The scope is the X-Caller header.
 func newRig(t *testing.T, delay time.Duration, status func(n int) int) *rig {
 	t.Helper()
+	return newRigWith(t, delay, status, nil)
+}
+
+func newRigWith(t *testing.T, delay time.Duration, status func(n int) int, noStore func(*http.Request) bool) *rig {
+	t.Helper()
 	r := &rig{pool: testdb.New(t)}
 	h := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		n := int(r.calls.Add(1))
@@ -38,7 +43,7 @@ func newRig(t *testing.T, delay time.Duration, status func(n int) int) *rig {
 		_, _ = w.Write([]byte(`{"run":` + string(rune('0'+n%10)) + `,"echo":"` + string(b) + `"}`))
 	})
 	scope := func(req *http.Request) string { return req.Header.Get("X-Caller") }
-	r.srv = httptest.NewServer(idempotency.Middleware(r.pool, scope)(h))
+	r.srv = httptest.NewServer(idempotency.Middleware(r.pool, scope, noStore)(h))
 	t.Cleanup(r.srv.Close)
 	return r
 }
@@ -85,6 +90,9 @@ func TestReplaySameKeyReturnsSameResponse(t *testing.T) {
 	if b.Header.Get("Content-Type") != "application/json" {
 		t.Errorf("replayed Content-Type %q", b.Header.Get("Content-Type"))
 	}
+	if a.Header.Get("X-Secret") == "" || b.Header.Get("X-Secret") != "" {
+		t.Errorf("X-Secret: first %q, replay %q; only the first response carries it", a.Header.Get("X-Secret"), b.Header.Get("X-Secret"))
+	}
 }
 
 func TestDifferentBodySameKeyIs422(t *testing.T) {
@@ -110,6 +118,9 @@ func TestConcurrentSameKeyRunsOnce(t *testing.T) {
 			res, body := r.send(t, "POST", "k1", "user:1", `{"a":1}`)
 			switch {
 			case res.StatusCode == 409 && strings.Contains(body, `"idempotency_in_progress"`):
+				if res.Header.Get("Retry-After") != "1" {
+					t.Errorf("409 Retry-After = %q, want 1", res.Header.Get("Retry-After"))
+				}
 				busy.Add(1)
 			case res.StatusCode == 201 && res.Header.Get("Idempotent-Replayed") == "true":
 				replayed.Add(1)
@@ -247,11 +258,11 @@ func TestPanicReleasesTheKey(t *testing.T) {
 		}
 		w.WriteHeader(201)
 	})
-	srv := httptest.NewServer(idempotency.Middleware(pool, func(*http.Request) string { return "anon" })(h))
+	srv := httptest.NewServer(idempotency.Middleware(pool, func(*http.Request) string { return "anon" }, nil)(h))
 	defer srv.Close()
 	for i, want := range []bool{false, true} {
 		req, _ := http.NewRequest("POST", srv.URL+"/x", strings.NewReader(`{}`))
-		req.Header.Set("Idempotency-Key", "k")
+		req.Header.Set("Idempotency-Key", strings.Repeat("k", 22))
 		res, err := http.DefaultClient.Do(req)
 		if (err == nil && res.StatusCode == 201) != want {
 			t.Fatalf("call %d: %v %v", i, res, err)
@@ -259,5 +270,123 @@ func TestPanicReleasesTheKey(t *testing.T) {
 		if res != nil {
 			_ = res.Body.Close()
 		}
+	}
+}
+
+func TestQueryIsPartOfTheFingerprint(t *testing.T) {
+	r := newRig(t, 0, always(201))
+	post := func(q string) int {
+		req, _ := http.NewRequest("POST", r.srv.URL+"/v1/things"+q, strings.NewReader(`{}`))
+		req.Header.Set("Idempotency-Key", "k1")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = res.Body.Close()
+		return res.StatusCode
+	}
+	if a, b := post("?name=a"), post("?name=b"); a != 201 || b != 422 {
+		t.Fatalf("got %d then %d, want 201 then 422", a, b)
+	}
+}
+
+func TestAnonymousKeysNeedEntropy(t *testing.T) {
+	r := newRig(t, 0, always(201))
+	for _, k := range []string{"k1", "123456", strings.Repeat("a", 21), strings.Repeat("a", 21) + "!"} {
+		res, body := r.send(t, "POST", k, "anon", `{}`)
+		if res.StatusCode != 400 || !strings.Contains(body, `"bad_idempotency_key"`) {
+			t.Errorf("anon key %q: got %d %s", k, res.StatusCode, body)
+		}
+	}
+	for _, k := range []string{strings.Repeat("a", 22), "0f8fad5b-d9cb-469f-a165-70867728950e"} {
+		if res, body := r.send(t, "POST", k, "anon", `{}`); res.StatusCode != 201 {
+			t.Errorf("anon key %q: got %d %s", k, res.StatusCode, body)
+		}
+	}
+	if res, _ := r.send(t, "POST", "k1", "user:1", `{}`); res.StatusCode != 201 {
+		t.Errorf("short key for a signed-in caller: %d", res.StatusCode)
+	}
+}
+
+func TestNoStoreReservesButNeverKeeps(t *testing.T) {
+	r := newRigWith(t, 0, always(200), func(*http.Request) bool { return true })
+	a, _ := r.send(t, "POST", "k1", "user:1", `{}`)
+	b, _ := r.send(t, "POST", "k1", "user:1", `{}`)
+	if r.calls.Load() != 2 || a.StatusCode != 200 || b.StatusCode != 200 || b.Header.Get("Idempotent-Replayed") != "" || r.rows(t) != 0 {
+		t.Fatalf("runs %d, rows %d, replayed %q", r.calls.Load(), r.rows(t), b.Header.Get("Idempotent-Replayed"))
+	}
+	slow := newRigWith(t, 150*time.Millisecond, always(200), func(*http.Request) bool { return true })
+	done := make(chan struct{})
+	go func() { slow.send(t, "POST", "k1", "user:1", `{}`); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	if res, body := slow.send(t, "POST", "k1", "user:1", `{}`); res.StatusCode != 409 || !strings.Contains(body, "idempotency_in_progress") {
+		t.Errorf("duplicate while running: %d %s", res.StatusCode, body)
+	}
+	<-done
+}
+
+func TestBodilessReplayHasNoContentType(t *testing.T) {
+	pool := testdb.New(t)
+	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
+	srv := httptest.NewServer(idempotency.Middleware(pool, func(*http.Request) string { return "user:1" }, nil)(h))
+	defer srv.Close()
+	for i := range 2 {
+		req, _ := http.NewRequest("DELETE", srv.URL+"/x", nil)
+		req.Header.Set("Idempotency-Key", "k1")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = res.Body.Close()
+		if res.StatusCode != 204 || res.Header.Get("Content-Type") != "" {
+			t.Errorf("call %d: %d content-type %q", i, res.StatusCode, res.Header.Get("Content-Type"))
+		}
+	}
+}
+
+// A request that outlives its two-minute reservation must not overwrite the
+// row of the run that took over.
+func TestStaleRunCannotClobberANewerRow(t *testing.T) {
+	pool := testdb.New(t)
+	var n atomic.Int32
+	release := make(chan struct{})
+	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		run := n.Add(1)
+		if run == 1 {
+			<-release
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte("run" + string(rune('0'+run))))
+	})
+	srv := httptest.NewServer(idempotency.Middleware(pool, func(*http.Request) string { return "user:1" }, nil)(h))
+	defer srv.Close()
+	send := func() string {
+		req, _ := http.NewRequest("POST", srv.URL+"/x", strings.NewReader(`{}`))
+		req.Header.Set("Idempotency-Key", "k1")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Error(err)
+			return ""
+		}
+		defer func() { _ = res.Body.Close() }()
+		b, _ := io.ReadAll(res.Body)
+		return string(b)
+	}
+	first := make(chan string)
+	go func() { first <- send() }()
+	time.Sleep(100 * time.Millisecond)
+	if _, err := testdb.Owner(t, pool).Exec(context.Background(), `update idempotency_keys set expires_at = now() - interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := send(); got != "run2" {
+		t.Fatalf("takeover run = %q", got)
+	}
+	close(release)
+	if got := <-first; got != "run1" {
+		t.Fatalf("stale run = %q", got)
+	}
+	if got := send(); got != "run2" || n.Load() != 2 {
+		t.Fatalf("replay = %q after %d runs; the stale run clobbered the newer row", got, n.Load())
 	}
 }

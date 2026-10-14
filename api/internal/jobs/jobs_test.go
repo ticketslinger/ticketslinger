@@ -211,7 +211,7 @@ func TestSweepRemovesOnlyExpired(t *testing.T) {
 	exec(`insert into email_tokens(token_hash, user_id, purpose, expires_at) values ('\x01', $1, 'verify', now() - interval '1 minute'), ('\x02', $1, 'verify', now() + interval '1 hour')`, user)
 	exec(`insert into webauthn_challenges(user_id, kind, data, expires_at) values ($1, 'login', '{}', now() - interval '1 minute'), ($1, 'login', '{}', now() + interval '1 minute')`, user)
 
-	idem := `insert into idempotency_keys(scope, key, request_hash, expires_at) values ('anon POST /x', $1, '\x00', now() + $2::interval)`
+	idem := `insert into idempotency_keys(scope, key, request_hash, owner, expires_at) values ('anon POST /x', $1, '\x00', uuidv7(), now() + $2::interval)`
 	exec(idem, "old", "-1 minute")
 	exec(idem, "fresh", "1 hour")
 

@@ -3,6 +3,7 @@ CREATE TABLE idempotency_keys (
   scope        text NOT NULL,
   key          text NOT NULL CHECK (length(key) BETWEEN 1 AND 255),
   request_hash bytea NOT NULL,
+  owner        uuid NOT NULL,    -- the run that reserved the key; only it may store or release
   status       int,              -- NULL while the first request is running
   content_type text,
   body         bytea,

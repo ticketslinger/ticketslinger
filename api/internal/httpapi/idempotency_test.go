@@ -76,3 +76,28 @@ func TestBadKeyOverHTTP(t *testing.T) {
 		t.Fatalf("got %d %s", res.StatusCode, body)
 	}
 }
+
+func TestCredentialResponsesAreNotKept(t *testing.T) {
+	h := newHarness(t)
+	h.signupVerified("owner@example.com")
+	body := `{"email":"owner@example.com","password":"` + testPassword + `"}`
+	key := "0f8fad5b-d9cb-469f-a165-70867728950e"
+	a, abody := h.doKeyed("", "POST", "/v1/auth/login", key, body)
+	b, bbody := h.doKeyed("", "POST", "/v1/auth/login", key, body)
+	if a.StatusCode != 200 || b.StatusCode != 200 || abody == bbody || b.Header.Get("Idempotent-Replayed") != "" {
+		t.Fatalf("two logins with one key should be two sessions: %d %d same=%v", a.StatusCode, b.StatusCode, abody == bbody)
+	}
+	var rows int
+	_ = h.pool.QueryRow(context.Background(), `select count(*) from idempotency_keys`).Scan(&rows)
+	if rows != 0 {
+		t.Errorf("idempotency rows = %d, want 0", rows)
+	}
+}
+
+func TestAnonymousShortKeyOverHTTP(t *testing.T) {
+	h := newHarness(t)
+	res, body := h.doKeyed("", "POST", "/v1/auth/login", "short", `{"email":"a@example.com","password":"`+testPassword+`"}`)
+	if res.StatusCode != 400 || !strings.Contains(body, "bad_idempotency_key") {
+		t.Fatalf("got %d %s", res.StatusCode, body)
+	}
+}
