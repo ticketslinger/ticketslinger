@@ -1,7 +1,7 @@
 import type { components } from "@ticketslinger/api-client";
 import { useState } from "react";
 import { api, must } from "../api";
-import { ErrorText, Field, useAction, useLoad } from "../ui";
+import { ErrorText, Field, focusOnMount, useAction, useLoad } from "../ui";
 import type { Org } from "./Organizer";
 
 type Key = components["schemas"]["ApiKey"];
@@ -37,7 +37,8 @@ export function ApiKeys({ org }: { org: Org }) {
       </p>
 
       {token && (
-        <div className="notice">
+        // Focus moves here so the one-time key isn't missed; keyed so a second key does it again.
+        <div className="notice" key={token} tabIndex={-1} ref={focusOnMount}>
           <p>
             <strong>Here's your new key.</strong> Copy it now: we only keep a scrambled version, so
             we can't show it to you again.
@@ -55,7 +56,7 @@ export function ApiKeys({ org }: { org: Org }) {
               type="button"
               className="inline"
               onClick={() =>
-                navigator.clipboard.writeText(token).then(
+                (navigator.clipboard?.writeText(token) ?? Promise.reject()).then(
                   () => setCopied("Copied."),
                   () => setCopied("Copying didn't work here. Select the key and copy it yourself."),
                 )
@@ -168,7 +169,8 @@ export function ApiKeys({ org }: { org: Org }) {
 }
 
 function KeyRow({ k, org, onRevoked }: { k: Key; org: Org; onRevoked: () => void }) {
-  const [confirming, setConfirming] = useState(false);
+  // null until asked; false after "Keep it", so focus can go back to the first button.
+  const [confirming, setConfirming] = useState<boolean | null>(null);
   const revoke = useAction();
   return (
     <tr>
@@ -186,6 +188,7 @@ function KeyRow({ k, org, onRevoked }: { k: Key; org: Org; onRevoked: () => void
               <button
                 type="button"
                 className="inline"
+                ref={focusOnMount}
                 disabled={revoke.busy}
                 onClick={() =>
                   revoke.run(async () => {
@@ -214,6 +217,7 @@ function KeyRow({ k, org, onRevoked }: { k: Key; org: Org; onRevoked: () => void
             type="button"
             className="inline secondary"
             aria-label={`Revoke ${k.name}`}
+            ref={confirming === false ? focusOnMount : undefined}
             onClick={() => setConfirming(true)}
           >
             Revoke

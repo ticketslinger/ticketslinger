@@ -26,7 +26,6 @@ function wallAt(ms: number, tz: string): number {
   return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
 }
 
-const MINUTE = 60_000;
 const DAY = 86_400_000;
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -38,8 +37,8 @@ export function toLocalInput(iso: string, tz: string): string {
 
 /**
  * A datetime-local value read in tz, as an ISO UTC instant. A time the clocks
- * repeat means its first occurrence; a time they skip means the moment they
- * land on afterwards.
+ * repeat means its first occurrence; a time they skip moves forward by the
+ * length of the gap.
  */
 export function fromLocalInput(local: string, tz: string): string {
   const [y, mo, d, h, mi] = local.split(/[-T:]/).map(Number);
@@ -49,15 +48,9 @@ export function fromLocalInput(local: string, tz: string): string {
   const early = wall - (wallAt(wall - DAY, tz) - (wall - DAY));
   const late = wall - (wallAt(wall + DAY, tz) - (wall + DAY));
   const fits = [early, late].filter((t) => wallAt(t, tz) === wall);
-  if (fits.length) return new Date(Math.min(...fits)).toISOString();
-  // In a gap: find the first minute past it by bisection.
-  let [lo, hi] = early < late ? [early, late] : [late, early];
-  while (hi - lo > MINUTE) {
-    const mid = lo + Math.floor((hi - lo) / 2 / MINUTE) * MINUTE;
-    if (wallAt(mid, tz) - mid === wallAt(hi, tz) - hi) hi = mid;
-    else lo = mid;
-  }
-  return new Date(hi).toISOString();
+  // In a gap, read the time with the offset from before it: the clock moves
+  // forward by the gap's length, as calendars do (02:30 becomes 03:30).
+  return new Date(fits.length ? Math.min(...fits) : Math.max(early, late)).toISOString();
 }
 
 /** A friendly date and time in tz, for lists and headings. */

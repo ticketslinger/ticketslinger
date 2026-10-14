@@ -2,7 +2,7 @@ import type { components } from "@ticketslinger/api-client";
 import { useState } from "react";
 import { api, must } from "../api";
 import { browserZone, fromLocalInput, timeZones, toLocalInput } from "../time";
-import { ErrorText, Field, navigate, useAction } from "../ui";
+import { ErrorText, Field, navigate, useAction, useUnsavedChanges } from "../ui";
 import { slugify } from "./NewOrganizer";
 import { canEdit, type Org } from "./Organizer";
 
@@ -26,6 +26,9 @@ export function percentToBp(s: string): number | null {
 
 let zones: string[] | undefined;
 
+// What <input type="datetime-local"> gives back, with or without seconds.
+const LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
+
 type Draft = {
   name: string;
   slug: string;
@@ -43,7 +46,14 @@ type Draft = {
 const draftOf = (e?: Event): Draft =>
   e
     ? {
-        ...e,
+        name: e.name,
+        slug: e.slug,
+        description: e.description,
+        venue_name: e.venue_name,
+        venue_address: e.venue_address,
+        timezone: e.timezone,
+        fee_mode: e.fee_mode,
+        prices_include_tax: e.prices_include_tax,
         starts: toLocalInput(e.starts_at, e.timezone),
         ends: toLocalInput(e.ends_at, e.timezone),
         tax: bpToPercent(e.tax_rate_bp),
@@ -73,11 +83,16 @@ export function EventForm({
   onSaved?: (e: Event) => void;
 }) {
   const [d, setD] = useState(() => draftOf(event));
+  // The last state the server confirmed, so we know when there's something unsaved.
+  const [base, setBase] = useState(d);
+  const [bad, setBad] = useState<"starts" | "ends" | "tax" | null>(null);
+  const leaveDialog = useUnsavedChanges(canEdit(org) && JSON.stringify(d) !== JSON.stringify(base));
   const [slugEdited, setSlugEdited] = useState(Boolean(event));
   const [saved, setSaved] = useState(false);
   const { busy, error, setError, run } = useAction();
   const set = (patch: Partial<Draft>) => {
     setSaved(false);
+    setBad(null);
     setD((old) => ({ ...old, ...patch }));
   };
   zones ??= timeZones();
@@ -86,23 +101,31 @@ export function EventForm({
 
   function save() {
     const tax_rate_bp = percentToBp(d.tax);
-    if (tax_rate_bp === null) {
-      setError("Use a tax rate from 0 to 100, with up to two decimals, like 8.25.");
+    const problem: [typeof bad, string] | null = !LOCAL.test(d.starts)
+      ? ["starts", "Enter when the event starts, as a date and a time."]
+      : !LOCAL.test(d.ends)
+        ? ["ends", "Enter when the event ends, as a date and a time."]
+        : tax_rate_bp === null
+          ? ["tax", "Use a tax rate from 0 to 100, with up to two decimals, like 8.25."]
+          : null;
+    if (problem || tax_rate_bp === null) {
+      setBad(problem?.[0] ?? "tax");
+      setError(problem?.[1] ?? "");
       return;
     }
-    const body = {
-      name: d.name,
-      description: d.description,
-      venue_name: d.venue_name,
-      venue_address: d.venue_address,
-      timezone: d.timezone,
-      starts_at: fromLocalInput(d.starts, d.timezone),
-      ends_at: fromLocalInput(d.ends, d.timezone),
-      fee_mode: d.fee_mode,
-      tax_rate_bp,
-      prices_include_tax: d.prices_include_tax,
-    };
     run(async () => {
+      const body = {
+        name: d.name,
+        description: d.description,
+        venue_name: d.venue_name,
+        venue_address: d.venue_address,
+        timezone: d.timezone,
+        starts_at: fromLocalInput(d.starts, d.timezone),
+        ends_at: fromLocalInput(d.ends, d.timezone),
+        fee_mode: d.fee_mode,
+        tax_rate_bp,
+        prices_include_tax: d.prices_include_tax,
+      };
       const path = { organizer: org.slug };
       if (!event) {
         const e = must(
@@ -111,7 +134,7 @@ export function EventForm({
             body: { ...body, slug: d.slug },
           }),
         );
-        navigate(`/o/${org.slug}/events/${e.id}`);
+        navigate(`/o/${org.slug}/events/${e.id}`, false, true);
         return;
       }
       const e = must(
@@ -120,6 +143,10 @@ export function EventForm({
           body: slugLocked ? body : { ...body, slug: d.slug },
         }),
       );
+      // Show what was stored, e.g. a time that fell in a clock change.
+      const fresh = draftOf(e);
+      setD(fresh);
+      setBase(fresh);
       setSaved(true);
       onSaved?.(e);
     });
@@ -191,6 +218,7 @@ export function EventForm({
         <div className="pair">
           <Field
             id="event-starts"
+            aria-invalid={bad === "starts" || undefined}
             label="Starts"
             type="datetime-local"
             required
@@ -199,6 +227,7 @@ export function EventForm({
           />
           <Field
             id="event-ends"
+            aria-invalid={bad === "ends" || undefined}
             label="Ends"
             type="datetime-local"
             required
@@ -266,6 +295,7 @@ export function EventForm({
         <div className="pair">
           <Field
             id="event-tax"
+            aria-invalid={bad === "tax" || undefined}
             label="Default tax rate (%)"
             hint="Used for every ticket type that doesn't set its own. Leave it at 0 if you don't charge tax."
             inputMode="decimal"
@@ -293,6 +323,7 @@ export function EventForm({
           </button>
         )}
       </fieldset>
+      {leaveDialog}
     </form>
   );
 }

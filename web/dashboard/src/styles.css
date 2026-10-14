@@ -449,3 +449,20 @@ label.check .hint {
     gap: 0 1rem;
   }
 }
+
+dialog.confirm {
+  max-width: min(28rem, calc(100% - 2rem));
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  padding: 1rem 1.25rem;
+}
+
+dialog.confirm::backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+
+dialog.confirm p {
+  margin: 0 0 1rem;
+}

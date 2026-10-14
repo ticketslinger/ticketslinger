@@ -8,6 +8,11 @@ test("matches fixed segments and captures named ones", () => {
   expect(match("/security", "/security")).toEqual({});
 });
 
+test("ignores one trailing slash", () => {
+  expect(match("/o/:slug", "/o/a/")).toEqual({ slug: "a" });
+  expect(match("/o/:slug/audit", "/o/a/audit/")).toEqual({ slug: "a" });
+});
+
 test("decodes captured segments", () => {
   expect(match("/o/:slug", "/o/caf%C3%A9")).toEqual({ slug: "café" });
 });
@@ -15,6 +20,7 @@ test("decodes captured segments", () => {
 test("rejects anything that doesn't line up", () => {
   expect(match("/o/:slug", "/o")).toBeNull();
   expect(match("/o/:slug", "/o/")).toBeNull();
+  expect(match("/o/:slug", "/o/a//")).toBeNull();
   expect(match("/o/:slug", "/o/a/events")).toBeNull();
   expect(match("/o/:slug/audit", "/o/a/api-keys")).toBeNull();
   expect(match("/o/:slug", "/x/a")).toBeNull();

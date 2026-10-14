@@ -28,10 +28,17 @@ test("round trips on either side of both 2026 New York changes", () => {
   }
 });
 
-test("a time skipped by the spring change moves to the next valid instant", () => {
-  // Clocks jump from 02:00 EST to 03:00 EDT, so 02:30 never happens.
-  expect(fromLocalInput("2026-03-08T02:30", NY)).toBe("2026-03-08T07:00:00.000Z");
-  expect(toLocalInput(fromLocalInput("2026-03-08T02:30", NY), NY)).toBe("2026-03-08T03:00");
+test("a time skipped by the spring change moves forward by the gap", () => {
+  // Clocks jump from 02:00 EST to 03:00 EDT, so 02:30 never happens; it becomes 03:30.
+  expect(fromLocalInput("2026-03-08T02:30", NY)).toBe("2026-03-08T07:30:00.000Z");
+  expect(toLocalInput(fromLocalInput("2026-03-08T02:30", NY), NY)).toBe("2026-03-08T03:30");
+});
+
+test("a half-hour gap moves forward by half an hour", () => {
+  // Lord Howe Island goes from +10:30 to +11 at 02:00 on 4 October 2026.
+  const LH = "Australia/Lord_Howe";
+  expect(fromLocalInput("2026-10-04T02:15", LH)).toBe("2026-10-03T15:45:00.000Z");
+  expect(toLocalInput("2026-10-03T15:45:00.000Z", LH)).toBe("2026-10-04T02:45");
 });
 
 test("a time repeated by the autumn change means its first occurrence", () => {

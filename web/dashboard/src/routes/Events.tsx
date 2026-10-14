@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, must } from "../api";
 import { formatWhen } from "../time";
-import { ErrorText, Link, navigate, useAction, useLoad } from "../ui";
+import { ErrorText, focusOnMount, Link, navigate, useAction, useLoad } from "../ui";
 import { type Event, EventForm } from "./EventForm";
 import { canEdit, type Org } from "./Organizer";
 
@@ -103,7 +103,8 @@ export function EventPage({ org, id }: { org: Org; id: string }) {
   );
   const status = useAction();
   const remove = useAction();
-  const [confirming, setConfirming] = useState(false);
+  // null until asked; false after "Keep it", so focus can go back to the first button.
+  const [confirming, setConfirming] = useState<boolean | null>(null);
 
   const setStatus = (to: "draft" | "live") =>
     status.run(async () => {
@@ -194,6 +195,7 @@ export function EventPage({ org, id }: { org: Org; id: string }) {
                     <button
                       type="button"
                       className="inline"
+                      ref={focusOnMount}
                       disabled={remove.busy}
                       onClick={() =>
                         remove.run(async () => {
@@ -202,7 +204,7 @@ export function EventPage({ org, id }: { org: Org; id: string }) {
                               params: { path },
                             }),
                           );
-                          navigate(`/o/${org.slug}`);
+                          navigate(`/o/${org.slug}`, false, true);
                         })
                       }
                     >
@@ -221,6 +223,7 @@ export function EventPage({ org, id }: { org: Org; id: string }) {
                 <button
                   type="button"
                   className="inline secondary"
+                  ref={confirming === false ? focusOnMount : undefined}
                   onClick={() => setConfirming(true)}
                 >
                   Delete this draft
