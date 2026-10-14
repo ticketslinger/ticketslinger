@@ -171,7 +171,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func me(u auth.User, sess auth.Session) Me {
-	return Me{Id: u.ID, Email: u.Email, Name: u.Name, EmailVerified: u.EmailVerified, TotpEnabled: u.TOTPEnabled, Mfa: sess.MFA}
+	return Me{Id: u.ID, Email: u.Email, Name: u.Name, EmailVerified: u.EmailVerified, TotpEnabled: u.TOTPEnabled, HasPasskey: u.HasPasskey, HasSecondFactor: u.HasPasskey || u.TOTPEnabled, Mfa: sess.MFA}
 }
 
 func (s *server) Signup(ctx context.Context, req SignupRequestObject) (SignupResponseObject, error) {

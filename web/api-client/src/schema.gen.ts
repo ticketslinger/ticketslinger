@@ -283,6 +283,9 @@ export interface components {
             name: string;
             email_verified: boolean;
             totp_enabled: boolean;
+            has_passkey: boolean;
+            /** @description Whether the account has a passkey or an authenticator app. */
+            has_second_factor: boolean;
             /** @description Whether this session passed a second factor or a passkey. */
             mfa: boolean;
         };

@@ -42,7 +42,8 @@ export function Security({
   const signInAgain = useAction();
   // A session that already passed a second factor needs no password. Once the
   // account has one, a password session is refused and the API says why.
-  const needPassword = !me.mfa;
+  const needPassword = !me.mfa && !me.has_second_factor;
+  const needSecondStep = !me.mfa && me.has_second_factor;
 
   const startTotp = () =>
     totpAction.run(async () => {
@@ -106,6 +107,11 @@ export function Security({
         account.
       </p>
 
+      {needSecondStep && (
+        <p className="notice">
+          Sign in with your passkey or authenticator code first, then you can add another.
+        </p>
+      )}
       {needPassword && (
         <Field
           id="password"
@@ -146,7 +152,7 @@ export function Security({
           type="button"
           className={passkeyAdded && !me.mfa ? "secondary" : undefined}
           onClick={addPasskey}
-          disabled={passkeyAction.busy}
+          disabled={passkeyAction.busy || needSecondStep}
         >
           Add a passkey
         </button>
@@ -181,7 +187,7 @@ export function Security({
           <>
             <p>Use an app like 1Password, Google Authenticator or Authy for a 6-digit code.</p>
             <ErrorText>{totpAction.error}</ErrorText>
-            <button type="button" onClick={startTotp} disabled={totpAction.busy}>
+            <button type="button" onClick={startTotp} disabled={totpAction.busy || needSecondStep}>
               Set up an authenticator app
             </button>
           </>

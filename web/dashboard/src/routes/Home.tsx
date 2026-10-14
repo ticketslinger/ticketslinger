@@ -49,7 +49,7 @@ export function Home({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
       <h2>Your organizers</h2>
       {!me.mfa &&
         orgs?.some((o) => o.role !== "checkin") &&
-        (me.totp_enabled ? (
+        (me.has_second_factor ? (
           <div className="notice">
             <p>You've set up a second step. Sign in again with it to manage this organizer.</p>
             <button type="button" disabled={signOut.busy} onClick={signOutNow}>

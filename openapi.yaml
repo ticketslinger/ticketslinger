@@ -178,13 +178,15 @@ components:
       properties: { session_token: { type: string }, user: { $ref: "#/components/schemas/Me" } }
     Me:
       type: object
-      required: [id, email, name, email_verified, totp_enabled, mfa]
+      required: [id, email, name, email_verified, totp_enabled, has_passkey, has_second_factor, mfa]
       properties:
         id: { type: string, format: uuid }
         email: { type: string }
         name: { type: string }
         email_verified: { type: boolean }
         totp_enabled: { type: boolean }
+        has_passkey: { type: boolean }
+        has_second_factor: { type: boolean, description: Whether the account has a passkey or an authenticator app. }
         mfa: { type: boolean, description: Whether this session passed a second factor or a passkey. }
     TotpSetup:
       type: object
