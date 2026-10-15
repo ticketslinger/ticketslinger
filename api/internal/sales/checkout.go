@@ -483,9 +483,11 @@ func (s *Service) checkoutOrg(ctx context.Context, token string) (uuid.UUID, err
 	return *org, nil
 }
 
-// GetCheckout finds a checkout by its token. Unknown tokens are ErrNotFound.
-// A hold that ran out reads as expired, unless the order already has a
-// payment: then the card may be charged, and it stays paying.
+// GetCheckout finds a checkout by its token. Unknown tokens are ErrNotFound,
+// and a cancelled event's are errEventCancelled. A hold that ran out reads as
+// expired, unless the order already has a payment: then the card may be
+// charged, and it stays paying until the payment is settled. One stopped
+// unpaid (SettleOrder) reads as cancelled.
 // A completed one carries its order's code and link: the token proves it's
 // the buyer asking.
 func (s *Service) GetCheckout(ctx context.Context, token string) (Checkout, error) {
@@ -497,21 +499,26 @@ func (s *Service) GetCheckout(ctx context.Context, token string) (Checkout, erro
 	err = system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error {
 		var p promo
 		var promoID, orderID *uuid.UUID
-		var feeMode string
+		var feeMode, event string
 		if err := tx.QueryRow(ctx, `select c.id, c.organizer_id, c.event_id,
-				case when c.status = 'completed' or c.expires_at > statement_timestamp() then c.status
+				-- The hold is over and the payment was stopped: nothing was charged.
+				case when exists (select 1 from payments y where y.order_id = o.id and y.status = 'cancelled') then 'cancelled'
+					when c.status = 'completed' or c.expires_at > statement_timestamp() then c.status
 					-- A payment exists, so a card may already be charged: it stays paying until the webhook settles it.
 					when c.status = 'paying' and exists (select 1 from payments y where y.order_id = o.id) then 'paying'
 					else 'expired' end,
 				c.expires_at, c.promo_code_id, coalesce(p.code, ''), coalesce(p.kind, ''), coalesce(p.value, 0), e.fee_mode,
-				o.id, coalesce(o.code, '')
+				o.id, coalesce(o.code, ''), e.status
 			from checkouts c join events e on e.id = c.event_id left join promo_codes p on p.id = c.promo_code_id
 			left join orders o on o.checkout_id = c.id
 			where c.token_hash = $1`, HashToken(token)).Scan(&out.ID, &out.OrganizerID, &out.EventID, &out.Status, &out.ExpiresAt,
-			&promoID, &p.code, &p.kind, &p.value, &feeMode, &orderID, &out.OrderCode); errors.Is(err, pgx.ErrNoRows) {
+			&promoID, &p.code, &p.kind, &p.value, &feeMode, &orderID, &out.OrderCode, &event); errors.Is(err, pgx.ErrNoRows) {
 			return catalogue.ErrNotFound // purged since checkout_scope looked
 		} else if err != nil {
 			return err
+		}
+		if event == "cancelled" {
+			return errEventCancelled
 		}
 		if out.Status != "completed" {
 			out.OrderCode = "" // pending: not the buyer's yet

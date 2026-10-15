@@ -1,6 +1,6 @@
 /** @jsxImportSource preact */
 import type { components } from "@ticketslinger/api-client";
-import type { CheckoutData } from "../../islands/checkout";
+import { CANCELLED, type CheckoutData } from "../../islands/checkout";
 import { eventPath } from "../../islands/links";
 import { formatCents } from "../money";
 import { Layout } from "./Layout";
@@ -14,6 +14,7 @@ export const EXPIRED =
 /** The island's data, with < escaped so nothing in it can end the script block. */
 export function checkoutData(token: string, c: Checkout, e: CheckoutEvent): string {
   const data: CheckoutData = {
+    id: c.id,
     token,
     status: c.status,
     expires_at: c.expires_at,
@@ -77,7 +78,8 @@ export function CheckoutPage({
   checkout: Checkout;
   event: CheckoutEvent;
 }) {
-  const over = checkout.status === "expired";
+  const over =
+    checkout.status === "expired" ? EXPIRED : checkout.status === "cancelled" ? CANCELLED : "";
   return (
     <Layout title={`Checkout · ${event.name}`}>
       <p class="organizer">Checkout</p>
@@ -86,7 +88,7 @@ export function CheckoutPage({
       {over ? (
         <div class="pay">
           <p class="notice" role="alert">
-            {EXPIRED}
+            {over}
           </p>
           {eventUrl(event) && (
             <a class="button" href={eventUrl(event)}>

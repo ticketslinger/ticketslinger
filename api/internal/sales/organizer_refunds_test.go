@@ -726,9 +726,13 @@ func TestCancelEventStopsPaymentsInFlight(t *testing.T) {
 	if _, _, st := f.orderOf(t, c.ID); st != "cancelled" {
 		t.Fatalf("pending order %s, want cancelled", st)
 	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'order.cancelled' and actor_system`); n != 1 {
+		t.Fatalf("%d order.cancelled rows, want the system's one", n)
+	}
 	for _, token := range []string{open.Token, c.Token} {
-		if _, err := s.Pay(ctx, token, sales.Details{Email: "late@example.com"}); !errors.Is(err, catalogue.ErrNotFound) {
-			t.Fatalf("paying on a cancelled event: %v, want not found", err)
+		var conflict catalogue.ErrConflict
+		if _, err := s.Pay(ctx, token, sales.Details{Email: "late@example.com"}); !errors.As(err, &conflict) || conflict.Code != "event_cancelled" {
+			t.Fatalf("paying on a cancelled event: %v, want event_cancelled", err)
 		}
 	}
 	if n := f.count(t, `select count(*) from jobs`); n != 0 {

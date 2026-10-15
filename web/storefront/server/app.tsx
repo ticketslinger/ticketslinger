@@ -7,6 +7,7 @@ import { bodyLimit } from "hono/body-limit";
 import { serveStatic } from "hono/bun";
 import type { VNode } from "preact";
 import { render } from "preact-render-to-string";
+import { EVENT_CANCELLED } from "../islands/checkout";
 import { ORDER, orderPath, TOKEN } from "../islands/links";
 import { csp } from "./csp";
 import { CheckoutPage } from "./pages/CheckoutPage";
@@ -303,6 +304,9 @@ export function createApp(opts: StorefrontOptions): Hono {
     const r = await getCheckout(c, token);
     if (r.status === 404) return notFound(c, "checkout");
     if (r.status === 429) return trouble(c, 429, SLOW_DOWN);
+    if (r.status === 409 && r.error?.error.code === "event_cancelled") {
+      return trouble(c, 409, EVENT_CANCELLED);
+    }
     const checkout = r.data;
     if (!checkout?.event) return trouble(c);
     if (checkout.status === "completed") {
@@ -313,7 +317,10 @@ export function createApp(opts: StorefrontOptions): Hono {
       return c.redirect(to, 303);
     }
     const node = <CheckoutPage token={token} checkout={checkout} event={checkout.event} />;
-    return checkout.status === "expired" ? page(c, 410, node) : page(c, 200, node, "stripe");
+    // Over: the hold ran out, or its payment was stopped. Nothing left to pay here.
+    return checkout.status === "expired" || checkout.status === "cancelled"
+      ? page(c, 410, node)
+      : page(c, 200, node, "stripe");
   });
 
   // The island's two calls, same-origin, passed through with the buyer's address.

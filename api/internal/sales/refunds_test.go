@@ -52,8 +52,8 @@ func (f fixture) paidOrder(t *testing.T, s *sales.Service, fake *payments.Fake, 
 func refundWorker(s *sales.Service, m *mailer.Memory) *jobs.Worker {
 	return &jobs.Worker{Pool: s.Pool,
 		Handlers: map[string]jobs.Handler{sales.RefundJob: sales.Refund(s), sales.OrderConfirmationJob: s.OrderConfirmation(m),
-			sales.CancelPaymentJob: sales.CancelPayment(s),
-			"send_email":           jobs.SendEmail(m)},
+			sales.CancelPaymentJob: sales.CancelPayment(s), sales.SettleOrderJob: sales.SettleOrder(s),
+			"send_email": jobs.SendEmail(m)},
 		Parked: map[string]func(context.Context, []byte, string){sales.RefundJob: sales.RefundParked(s)}}
 }
 
