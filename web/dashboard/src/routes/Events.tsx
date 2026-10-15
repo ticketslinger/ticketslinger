@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, must } from "../api";
 import { formatWhen } from "../time";
 import { ErrorText, focusOnMount, Link, navigate, useAction, useLoad } from "../ui";
+import { CancelEvent } from "./CancelEvent";
 import { type Event, EventForm } from "./EventForm";
 import { Orders } from "./Orders";
 import { canEdit, type Org } from "./Organizer";
@@ -195,6 +196,10 @@ export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: s
           {tab === "/promo-codes" && <Promos org={org} event={event} />}
           {tab === "/questions" && <Questions org={org} event={event} />}
           {tab === "/orders" && <Orders org={org} event={event} />}
+
+          {tab === "" && canEdit(org) && (
+            <CancelEvent org={org} event={event} onCancelled={setEvent} />
+          )}
 
           {tab === "" && canEdit(org) && event.status === "draft" && (
             <section className="danger">

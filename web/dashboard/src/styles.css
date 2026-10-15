@@ -499,3 +499,28 @@ dialog.form::backdrop {
   width: auto;
   min-width: 0;
 }
+
+ul.plain {
+  list-style: none;
+  padding: 0;
+}
+
+ul.plain li {
+  margin: 0.5rem 0;
+}
+
+.pill.succeeded,
+.pill.refunded {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.pill.failed {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+button.danger-button {
+  background: var(--error);
+  color: var(--accent-text);
+}

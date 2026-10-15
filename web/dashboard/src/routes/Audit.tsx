@@ -12,6 +12,7 @@ const THING: Record<string, string> = {
   question: "Question",
   api_key: "API key",
   order: "Order",
+  refund: "Refund",
 };
 const DONE: Record<string, string> = {
   created: "created",
@@ -19,6 +20,12 @@ const DONE: Record<string, string> = {
   deleted: "deleted",
   revoked: "revoked",
   reordered: "reordered",
+  refunded: "refunded",
+  retried: "sent again",
+  failed: "failed",
+  cancelled: "cancelled",
+  succeeded_late: "went through after all",
+  fee_stuck: "stuck on our fee",
   cancelled_late: "cancelled (refund queued)",
   stripe_connected: "connected to Stripe",
   stripe_linked: "linked a Stripe account",

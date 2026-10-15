@@ -54,13 +54,17 @@ func (m *Memory) LastToken() string {
 	return u.Query().Get("token")
 }
 
-// LastLink returns the first link in the newest message sent to to, or "".
+// LastLink returns the first link in the newest message sent to to that has
+// one, or "". Messages without a link (a refund notice) are skipped.
 func (m *Memory) LastLink(to string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := len(m.Sent) - 1; i >= 0; i-- {
-		if m.Sent[i].To == to {
-			return linkRe.FindString(m.Sent[i].Text)
+		if m.Sent[i].To != to {
+			continue
+		}
+		if l := linkRe.FindString(m.Sent[i].Text); l != "" {
+			return l
 		}
 	}
 	return ""

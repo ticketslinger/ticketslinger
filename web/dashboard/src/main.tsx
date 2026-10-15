@@ -14,6 +14,7 @@ import { Audit } from "./routes/Audit";
 import { EventPage, Events, NewEvent } from "./routes/Events";
 import { Home } from "./routes/Home";
 import { NewOrganizer } from "./routes/NewOrganizer";
+import { OrderDetail } from "./routes/OrderDetail";
 import { type Org, Organizer, type Section } from "./routes/Organizer";
 import { Payments } from "./routes/Payments";
 import { Security } from "./routes/Security";
@@ -50,6 +51,11 @@ const ORGANIZER: [string, Section, (org: Org, me: Me, p: Record<string, string>)
     "/o/:slug/events/:id/orders",
     "events",
     (org, _, p) => <EventPage org={org} id={p.id ?? ""} tab="/orders" />,
+  ],
+  [
+    "/o/:slug/events/:id/orders/:order",
+    "events",
+    (org, _, p) => <OrderDetail org={org} eventId={p.id ?? ""} orderId={p.order ?? ""} />,
   ],
   ["/o/:slug/payments", "payments", (org) => <Payments org={org} />],
   ["/o/:slug/api-keys", "api-keys", (org) => <ApiKeys org={org} />],
