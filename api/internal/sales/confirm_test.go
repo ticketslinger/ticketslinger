@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -422,8 +423,8 @@ func TestRefundJobRefundsLatePayment(t *testing.T) {
 	refund := sales.RefundPayment(s)
 	f.must(t, refund(ctx, payload))
 	f.must(t, refund(ctx, payload))
-	want := plugin.RefundInput{Account: "acct_fake1", PaymentIntentID: pi.ID, RefundApplicationFee: true, IdempotencyKey: "refund-" + order.String() + "-0"}
-	if calls := rec.calls(); len(calls) != 1 || calls[0] != want {
+	want := plugin.RefundInput{Account: "acct_fake1", PaymentIntentID: pi.ID, AmountCents: c.Quote.TotalCents, IdempotencyKey: "refund-" + order.String() + "-0"}
+	if calls := rec.calls(); len(calls) != 1 || !reflect.DeepEqual(calls[0], want) {
 		t.Fatalf("refunds asked for %+v, want once %+v", calls, want)
 	}
 	var amount int64
@@ -461,7 +462,7 @@ type refundRecorder struct {
 	inputs []plugin.RefundInput
 }
 
-func (r *refundRecorder) Refund(ctx context.Context, in plugin.RefundInput) (string, error) {
+func (r *refundRecorder) Refund(ctx context.Context, in plugin.RefundInput) (plugin.Refund, error) {
 	r.mu.Lock()
 	r.inputs = append(r.inputs, in)
 	r.mu.Unlock()
@@ -637,9 +638,9 @@ type cancelling struct {
 	cancel context.CancelFunc
 }
 
-func (c *cancelling) Refund(ctx context.Context, _ plugin.RefundInput) (string, error) {
+func (c *cancelling) Refund(ctx context.Context, _ plugin.RefundInput) (plugin.Refund, error) {
 	c.cancel()
-	return "", ctx.Err()
+	return plugin.Refund{}, ctx.Err()
 }
 
 // A shutdown during the last try isn't a stuck refund: the job goes back to

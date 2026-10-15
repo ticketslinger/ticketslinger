@@ -14,6 +14,13 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 )
 
+type fakeIntent struct {
+	intent                plugin.PaymentIntent
+	fee                   int64
+	status                string
+	refunded, feeRefunded int64
+}
+
 // Fake is the provider for tests and test mode: no network, and ids derived
 // from the idempotency key, so the same key returns the same object, as
 // Stripe does. An account can charge once its onboarding link was handed out.
@@ -23,8 +30,12 @@ type Fake struct {
 	onboarded map[string]bool
 	intents   map[string]plugin.PaymentIntent // by idempotency key
 	latest    *plugin.PaymentIntent
-	refunds   map[string]bool // ids made
+	byID      map[string]*fakeIntent
+	refunds   map[string]plugin.Refund // by idempotency key
 	refundLog []plugin.RefundInput
+	feeKeys   map[string]string // fee refund ids by idempotency key
+	feeLog    []plugin.FeeRefundInput
+	pending   bool
 	fail      error
 	links     int    // link URLs handed out
 	linkAs    string // LinkReturns
@@ -35,7 +46,7 @@ type Fake struct {
 var _ plugin.PaymentProvider = (*Fake)(nil)
 
 func NewFake() *Fake {
-	return &Fake{accounts: map[string]bool{}, onboarded: map[string]bool{}, intents: map[string]plugin.PaymentIntent{}, refunds: map[string]bool{}}
+	return &Fake{accounts: map[string]bool{}, onboarded: map[string]bool{}, intents: map[string]plugin.PaymentIntent{}, byID: map[string]*fakeIntent{}, refunds: map[string]plugin.Refund{}, feeKeys: map[string]string{}}
 }
 
 func (f *Fake) Name() string           { return "test" }
@@ -146,6 +157,7 @@ func (f *Fake) CreatePaymentIntent(_ context.Context, in plugin.PaymentIntentInp
 		id := fakeID("pi_fake", in.IdempotencyKey)
 		pi = plugin.PaymentIntent{ID: id, ClientSecret: id + "_secret_" + rand.Text(), Account: in.Account, AmountCents: in.AmountCents}
 		f.intents[in.IdempotencyKey] = pi
+		f.byID[id] = &fakeIntent{intent: pi, fee: in.ApplicationFeeCents, status: "requires_payment_method"}
 	}
 	f.latest = &pi
 	return pi, nil
@@ -161,18 +173,128 @@ func (f *Fake) Latest() (plugin.PaymentIntent, bool) {
 	return *f.latest, true
 }
 
-func (f *Fake) Refund(_ context.Context, in plugin.RefundInput) (string, error) {
+func tooMuch(op string) error {
+	return &plugin.ProviderError{Op: "fake: " + op, Refused: true, Status: 400, Code: "amount_too_large"}
+}
+
+func (f *Fake) Refund(_ context.Context, in plugin.RefundInput) (plugin.Refund, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.failed(); err != nil {
+	if err := f.failedFor("Refund"); err != nil {
+		return plugin.Refund{}, err
+	}
+	if r, ok := f.refunds[in.IdempotencyKey]; ok && in.IdempotencyKey != "" {
+		return r, nil
+	}
+	pi := f.byID[in.PaymentIntentID]
+	if pi == nil || in.AmountCents <= 0 || pi.refunded+in.AmountCents > pi.intent.AmountCents {
+		return plugin.Refund{}, tooMuch("refund")
+	}
+	pi.refunded += in.AmountCents
+	r := plugin.Refund{ID: fakeID("re_fake", in.IdempotencyKey), Status: "succeeded"}
+	if f.pending {
+		r.Status = "pending"
+	}
+	f.refunds[in.IdempotencyKey] = r
+	f.refundLog = append(f.refundLog, in)
+	return r, nil
+}
+
+func (f *Fake) RefundApplicationFee(_ context.Context, in plugin.FeeRefundInput) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.failedFor("RefundApplicationFee"); err != nil {
 		return "", err
 	}
-	id := fakeID("re_fake", in.IdempotencyKey)
-	if !f.refunds[id] {
-		f.refunds[id] = true
-		f.refundLog = append(f.refundLog, in)
+	if id, ok := f.feeKeys[in.IdempotencyKey]; ok && in.IdempotencyKey != "" {
+		return id, nil
 	}
+	pi := f.byID[in.PaymentIntentID]
+	if pi == nil || in.AmountCents <= 0 || pi.feeRefunded+in.AmountCents > pi.fee {
+		return "", tooMuch("fee refund")
+	}
+	pi.feeRefunded += in.AmountCents
+	id := fakeID("fr_fake", in.IdempotencyKey)
+	f.feeKeys[in.IdempotencyKey] = id
+	f.feeLog = append(f.feeLog, in)
 	return id, nil
+}
+
+func (f *Fake) PaymentIntentStatus(_ context.Context, _, intentID string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.failedFor("PaymentIntentStatus"); err != nil {
+		return "", err
+	}
+	pi := f.byID[intentID]
+	if pi == nil {
+		return "", &plugin.ProviderError{Op: "fake: payment intent status", Refused: true, Status: 404, Code: "resource_missing"}
+	}
+	return pi.status, nil
+}
+
+// CancelPaymentIntent refuses an intent that moved on, as Stripe does;
+// cancelling a cancelled one again answers nil, like an idempotent replay.
+func (f *Fake) CancelPaymentIntent(_ context.Context, _, intentID, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.failedFor("CancelPaymentIntent"); err != nil {
+		return err
+	}
+	pi := f.byID[intentID]
+	if pi == nil {
+		return &plugin.ProviderError{Op: "fake: cancel payment intent", Refused: true, Status: 404, Code: "resource_missing"}
+	}
+	switch pi.status {
+	case "canceled":
+		return nil
+	case "succeeded", "processing":
+		return &plugin.ProviderError{Op: "fake: cancel payment intent", Refused: true, Status: 400, Code: "payment_intent_unexpected_state"}
+	}
+	pi.status = "canceled"
+	return nil
+}
+
+// RefundsPending makes later refunds answer pending instead of succeeded.
+func (f *Fake) RefundsPending(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pending = on
+}
+
+// Refunded is what the intent has had refunded so far, and how much of that
+// is our fee.
+func (f *Fake) Refunded(intentID string) (amountCents, feeCents int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if pi := f.byID[intentID]; pi != nil {
+		return pi.refunded, pi.feeRefunded
+	}
+	return 0, 0
+}
+
+// SetIntentStatus sets the status PaymentIntentStatus reports.
+func (f *Fake) SetIntentStatus(intentID, status string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if pi := f.byID[intentID]; pi != nil {
+		pi.status = status
+	}
+}
+
+// Cancelled reports whether the intent was cancelled.
+func (f *Fake) Cancelled(intentID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	pi := f.byID[intentID]
+	return pi != nil && pi.status == "canceled"
+}
+
+// FeeRefunds lists every distinct fee refund asked for, oldest first.
+func (f *Fake) FeeRefunds() []plugin.FeeRefundInput {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]plugin.FeeRefundInput(nil), f.feeLog...)
 }
 
 // Refunds lists every distinct refund asked for, oldest first.

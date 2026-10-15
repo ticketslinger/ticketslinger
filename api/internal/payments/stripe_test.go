@@ -46,13 +46,17 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	file := map[string]string{
-		"/v1/accounts":            "account.json",
-		"/v1/accounts/acct_test1": "account.json",
-		"/v1/account_links":       "account_link.json",
-		"/v1/payment_intents":     "payment_intent.json",
-		"/v1/refunds":             "refund.json",
-		"/oauth/token":            "oauth_token.json",
-		"/oauth/deauthorize":      "deauthorize.json",
+		"/v1/accounts":                           "account.json",
+		"/v1/accounts/acct_test1":                "account.json",
+		"/v1/account_links":                      "account_link.json",
+		"/v1/payment_intents":                    "payment_intent.json",
+		"/v1/refunds":                            "refund.json",
+		"/v1/payment_intents/pi_nofee":           "payment_intent.json",
+		"/v1/payment_intents/pi_test1":           "payment_intent_with_charge.json",
+		"/v1/payment_intents/pi_test1/cancel":    "payment_intent_canceled.json",
+		"/v1/application_fees/fee_test1/refunds": "fee_refund.json",
+		"/oauth/token":                           "oauth_token.json",
+		"/oauth/deauthorize":                     "deauthorize.json",
 	}[r.URL.Path]
 	b, err := os.ReadFile("testdata/" + file)
 	if file == "" || err != nil {
@@ -174,24 +178,70 @@ func TestAccountStatus(t *testing.T) {
 	}
 }
 
-func TestRefundReturnsTheFee(t *testing.T) {
+func TestRefundIsExactAndLeavesTheFeeAlone(t *testing.T) {
 	s, rec := newStripe(t)
-	id, err := s.Refund(context.Background(), plugin.RefundInput{Account: "acct_test1", PaymentIntentID: "pi_test1", RefundApplicationFee: true, IdempotencyKey: "refund-0190"})
-	if err != nil || id != "re_test1" {
-		t.Fatalf("id %q err %v", id, err)
+	r, err := s.Refund(context.Background(), plugin.RefundInput{Account: "acct_test1", PaymentIntentID: "pi_test1", AmountCents: 2600,
+		IdempotencyKey: "refund-r1-0", Metadata: map[string]string{"refund_id": "r1"}})
+	if err != nil || r.ID != "re_test1" || r.Status != "succeeded" {
+		t.Fatalf("%+v %v", r, err)
 	}
-	r := rec.last()
-	if r.form.Get("refund_application_fee") != "true" || r.form.Get("payment_intent") != "pi_test1" || r.account != "acct_test1" || r.idem != "refund-0190" {
-		t.Fatalf("form %v account %q idempotency %q", r.form, r.account, r.idem)
+	got := rec.last()
+	if got.account != "acct_test1" || got.idem != "refund-r1-0" || got.form.Get("amount") != "2600" || got.form.Get("payment_intent") != "pi_test1" ||
+		got.form.Has("refund_application_fee") || got.form.Get("metadata[refund_id]") != "r1" {
+		t.Fatalf("request %+v", got)
 	}
-	if _, ok := r.form["amount"]; ok {
-		t.Fatal("amount 0 must refund the rest, not send amount")
+}
+
+func TestFeeRefundGoesToTheChargesApplicationFee(t *testing.T) {
+	s, rec := newStripe(t)
+	id, err := s.RefundApplicationFee(context.Background(), plugin.FeeRefundInput{Account: "acct_test1", PaymentIntentID: "pi_test1", AmountCents: 100, IdempotencyKey: "appfee-r1-0"})
+	if err != nil || id != "fr_test1" {
+		t.Fatalf("%s %v", id, err)
 	}
-	if _, err := s.Refund(context.Background(), plugin.RefundInput{Account: "acct_test1", PaymentIntentID: "pi_test1", AmountCents: 1000, IdempotencyKey: "refund-2"}); err != nil {
+	read, refund := rec.reqs[0], rec.last()
+	if read.path != "/v1/payment_intents/pi_test1" || read.account != "acct_test1" || read.form.Get("expand[0]") != "latest_charge" {
+		t.Fatalf("read %+v", read)
+	}
+	// The fee lives on our platform account: no Stripe-Account header.
+	if refund.path != "/v1/application_fees/fee_test1/refunds" || refund.account != "" || refund.idem != "appfee-r1-0" || refund.form.Get("amount") != "100" {
+		t.Fatalf("refund %+v", refund)
+	}
+}
+
+func TestFeeRefundWithNoFeeIsRefused(t *testing.T) {
+	s, _ := newStripe(t)
+	// pi_nofee is served with no latest_charge.
+	_, err := s.RefundApplicationFee(context.Background(), plugin.FeeRefundInput{Account: "acct_test1", PaymentIntentID: "pi_nofee", AmountCents: 100, IdempotencyKey: "appfee-r2-0"})
+	if !errors.Is(err, plugin.ErrRefused) {
+		t.Fatalf("%v, want refused", err)
+	}
+	var pe *plugin.ProviderError
+	if !errors.As(err, &pe) || pe.Code != "no_application_fee" {
+		t.Fatalf("%+v", err)
+	}
+}
+
+func TestIntentStatusAndCancel(t *testing.T) {
+	s, rec := newStripe(t)
+	if st, err := s.PaymentIntentStatus(context.Background(), "acct_test1", "pi_test1"); err != nil || st != "succeeded" {
+		t.Fatalf("%s %v", st, err)
+	}
+	if err := s.CancelPaymentIntent(context.Background(), "acct_test1", "pi_test1", "cancel-o1"); err != nil {
 		t.Fatal(err)
 	}
-	if got := rec.last().form.Get("amount"); got != "1000" {
-		t.Fatalf("partial amount %q", got)
+	if got := rec.last(); got.path != "/v1/payment_intents/pi_test1/cancel" || got.account != "acct_test1" || got.idem != "cancel-o1" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// Direct mode has no connected account: no Stripe-Account header at all.
+func TestNoAccountMeansNoHeader(t *testing.T) {
+	s, rec := newStripe(t)
+	if _, err := s.Refund(context.Background(), plugin.RefundInput{PaymentIntentID: "pi_test1", AmountCents: 100, IdempotencyKey: "refund-d-0"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec.last().account != "" {
+		t.Fatalf("account %q", rec.last().account)
 	}
 }
 
@@ -200,11 +250,11 @@ func TestRefundReturnsTheFee(t *testing.T) {
 func TestAlreadyRefundedIsItsOwnError(t *testing.T) {
 	s, rec := newStripe(t)
 	rec.status, rec.fail = 400, `{"error":{"type":"invalid_request_error","code":"charge_already_refunded","message":"Charge ch_1 has already been refunded."}}`
-	if _, err := s.Refund(context.Background(), plugin.RefundInput{Account: "acct_test1", PaymentIntentID: "pi_test1", IdempotencyKey: "refund-1"}); !errors.Is(err, plugin.ErrAlreadyRefunded) {
+	if _, err := s.Refund(context.Background(), plugin.RefundInput{Account: "acct_test1", PaymentIntentID: "pi_test1", AmountCents: 100, IdempotencyKey: "refund-1"}); !errors.Is(err, plugin.ErrAlreadyRefunded) {
 		t.Fatalf("got %v, want ErrAlreadyRefunded", err)
 	}
 	rec.fail = `{"error":{"type":"invalid_request_error","code":"resource_missing","message":"No such payment_intent"}}`
-	if _, err := s.Refund(context.Background(), plugin.RefundInput{Account: "acct_test1", PaymentIntentID: "pi_test1", IdempotencyKey: "refund-1"}); err == nil || errors.Is(err, plugin.ErrAlreadyRefunded) {
+	if _, err := s.Refund(context.Background(), plugin.RefundInput{Account: "acct_test1", PaymentIntentID: "pi_test1", AmountCents: 100, IdempotencyKey: "refund-1"}); err == nil || errors.Is(err, plugin.ErrAlreadyRefunded) {
 		t.Fatalf("another error: %v", err)
 	}
 }

@@ -74,9 +74,19 @@ type PaymentIntent struct {
 }
 
 type RefundInput struct {
+	Account, PaymentIntentID string // Account "" means no Stripe-Account header (direct mode)
+	AmountCents              int64  // exact, > 0
+	IdempotencyKey           string
+	Metadata                 map[string]string // refund_id: our refunds.id, so its webhooks find the row
+}
+
+// Refund is the provider's answer: Status is its word for it (pending,
+// requires_action, succeeded, failed, canceled).
+type Refund struct{ ID, Status string }
+
+type FeeRefundInput struct {
 	Account, PaymentIntentID string
-	AmountCents              int64 // 0 refunds whatever is left
-	RefundApplicationFee     bool
+	AmountCents              int64 // exact, > 0
 	IdempotencyKey           string
 }
 
@@ -88,7 +98,14 @@ type PaymentProvider interface {
 	OnboardingLink(ctx context.Context, accountID, refreshURL, returnURL string) (url string, err error)
 	Account(ctx context.Context, accountID string) (AccountStatus, error)
 	CreatePaymentIntent(ctx context.Context, in PaymentIntentInput) (PaymentIntent, error)
-	Refund(ctx context.Context, in RefundInput) (refundID string, err error)
+	Refund(ctx context.Context, in RefundInput) (Refund, error)
+	// RefundApplicationFee gives back part or all of our fee on the intent's charge.
+	RefundApplicationFee(ctx context.Context, in FeeRefundInput) (feeRefundID string, err error)
+	// PaymentIntentStatus is the intent's status as the provider has it now.
+	PaymentIntentStatus(ctx context.Context, account, intentID string) (string, error)
+	// CancelPaymentIntent stops an intent nobody will pay. A refusal with code
+	// payment_intent_unexpected_state means it moved on (it may have succeeded).
+	CancelPaymentIntent(ctx context.Context, account, intentID, idempotencyKey string) error
 	// LinkURL is where an organizer goes to link a Stripe account they
 	// already have. "" with ErrLinkUnavailable when the platform has no
 	// OAuth client id.

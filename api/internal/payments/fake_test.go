@@ -3,6 +3,7 @@ package payments_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -64,16 +65,16 @@ func TestFake(t *testing.T) {
 	if _, err := f.Refund(ctx, plugin.RefundInput{Account: acct, PaymentIntentID: pi.ID}); !errors.Is(err, boom) {
 		t.Fatalf("FailNext: %v", err)
 	}
-	rin := plugin.RefundInput{Account: acct, PaymentIntentID: pi.ID, RefundApplicationFee: true, IdempotencyKey: "refund-1"}
-	id, err := f.Refund(ctx, rin)
-	if err != nil || !strings.HasPrefix(id, "re_fake") {
-		t.Fatalf("refund %q %v", id, err)
+	rin := plugin.RefundInput{Account: acct, PaymentIntentID: pi.ID, AmountCents: 100, IdempotencyKey: "refund-1"}
+	r, err := f.Refund(ctx, rin)
+	if err != nil || !strings.HasPrefix(r.ID, "re_fake") {
+		t.Fatalf("refund %+v %v", r, err)
 	}
-	if again, _ := f.Refund(ctx, rin); again != id {
-		t.Fatalf("same refund key: %q, want %q", again, id)
+	if again, _ := f.Refund(ctx, rin); again != r {
+		t.Fatalf("same refund key: %+v, want %+v", again, r)
 	}
-	if r := f.Refunds(); len(r) != 1 || r[0] != rin {
-		t.Fatalf("refunds %+v", r)
+	if got := f.Refunds(); len(got) != 1 || !reflect.DeepEqual(got[0], rin) {
+		t.Fatalf("refunds %+v", got)
 	}
 }
 
@@ -104,5 +105,59 @@ func TestFakeLinks(t *testing.T) {
 	}
 	if err := f.Unlink(ctx, id); err != nil || len(f.Unlinked()) != 1 || f.Unlinked()[0] != "acct_fakelink1" {
 		t.Fatalf("unlink: %v %v", err, f.Unlinked())
+	}
+}
+
+func TestFakeRefundsAreExactAndBounded(t *testing.T) {
+	f := payments.NewFake()
+	ctx := context.Background()
+	pi, _ := f.CreatePaymentIntent(ctx, plugin.PaymentIntentInput{Account: "acct_fake1", AmountCents: 5200, ApplicationFeeCents: 200, IdempotencyKey: "pi-1"})
+	r1, err := f.Refund(ctx, plugin.RefundInput{Account: "acct_fake1", PaymentIntentID: pi.ID, AmountCents: 2600, IdempotencyKey: "refund-a-0"})
+	if err != nil || r1.Status != "succeeded" {
+		t.Fatalf("%+v %v", r1, err)
+	}
+	if again, _ := f.Refund(ctx, plugin.RefundInput{Account: "acct_fake1", PaymentIntentID: pi.ID, AmountCents: 2600, IdempotencyKey: "refund-a-0"}); again.ID != r1.ID {
+		t.Fatal("same key, different refund")
+	}
+	if _, err := f.Refund(ctx, plugin.RefundInput{Account: "acct_fake1", PaymentIntentID: pi.ID, AmountCents: 2601, IdempotencyKey: "refund-b-0"}); !errors.Is(err, plugin.ErrRefused) {
+		t.Fatalf("over-refund: %v, want refused", err)
+	}
+	if _, err := f.RefundApplicationFee(ctx, plugin.FeeRefundInput{Account: "acct_fake1", PaymentIntentID: pi.ID, AmountCents: 201, IdempotencyKey: "appfee-a-0"}); !errors.Is(err, plugin.ErrRefused) {
+		t.Fatalf("over-refunded fee: %v, want refused", err)
+	}
+	if _, err := f.RefundApplicationFee(ctx, plugin.FeeRefundInput{Account: "acct_fake1", PaymentIntentID: pi.ID, AmountCents: 100, IdempotencyKey: "appfee-a-0"}); err != nil {
+		t.Fatal(err)
+	}
+	if amount, fee := f.Refunded(pi.ID); amount != 2600 || fee != 100 {
+		t.Fatalf("refunded %d, fee %d", amount, fee)
+	}
+	f.RefundsPending(true)
+	if r, _ := f.Refund(ctx, plugin.RefundInput{Account: "acct_fake1", PaymentIntentID: pi.ID, AmountCents: 100, IdempotencyKey: "refund-c-0"}); r.Status != "pending" {
+		t.Fatalf("status %s, want pending", r.Status)
+	}
+	if got := f.FeeRefunds(); len(got) != 1 || got[0].AmountCents != 100 {
+		t.Fatalf("fee refunds %+v", got)
+	}
+}
+
+func TestFakeIntentStatusAndCancel(t *testing.T) {
+	f := payments.NewFake()
+	ctx := context.Background()
+	pi, _ := f.CreatePaymentIntent(ctx, plugin.PaymentIntentInput{Account: "acct_fake1", AmountCents: 2600, IdempotencyKey: "pi-2"})
+	if st, _ := f.PaymentIntentStatus(ctx, "acct_fake1", pi.ID); st != "requires_payment_method" {
+		t.Fatalf("status %s", st)
+	}
+	f.SetIntentStatus(pi.ID, "succeeded")
+	err := f.CancelPaymentIntent(ctx, "acct_fake1", pi.ID, "cancel-x")
+	var pe *plugin.ProviderError
+	if !errors.Is(err, plugin.ErrRefused) || !errors.As(err, &pe) || pe.Code != "payment_intent_unexpected_state" {
+		t.Fatalf("cancelling a succeeded intent: %v, want refused", err)
+	}
+	f.SetIntentStatus(pi.ID, "requires_action")
+	if err := f.CancelPaymentIntent(ctx, "acct_fake1", pi.ID, "cancel-x"); err != nil || !f.Cancelled(pi.ID) {
+		t.Fatalf("%v %v", err, f.Cancelled(pi.ID))
+	}
+	if err := f.CancelPaymentIntent(ctx, "acct_fake1", pi.ID, "cancel-x"); err != nil {
+		t.Fatalf("cancelling twice: %v", err)
 	}
 }

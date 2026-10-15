@@ -145,7 +145,7 @@ func (s *Service) refund(ctx context.Context, j refundJob) error {
 	if s.Payments == nil {
 		return errors.New("sales: a refund is due but there's no payment provider")
 	}
-	refund, err := s.Payments.Refund(ctx, plugin.RefundInput{Account: account, PaymentIntentID: intent, RefundApplicationFee: true,
+	refund, err := s.Payments.Refund(ctx, plugin.RefundInput{Account: account, PaymentIntentID: intent, AmountCents: amount,
 		IdempotencyKey: fmt.Sprintf("refund-%s-%d", j.Order, attempt)})
 	var refundID *string // unknown when Stripe says it's already refunded
 	switch {
@@ -162,7 +162,7 @@ func (s *Service) refund(ctx context.Context, j refundJob) error {
 	case err != nil:
 		return err
 	default:
-		refundID = &refund
+		refundID = &refund.ID
 	}
 	return system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) error {
 		var email, event string
