@@ -233,6 +233,71 @@ func TestPayLatestSignsTheNewestIntent(t *testing.T) {
 	}
 }
 
+// refund-latest signs the refund.updated Stripe would send for the fake's
+// newest refund, with our metadata, through the API's own webhook route.
+func TestRefundLatestSignsTheNewestRefund(t *testing.T) {
+	ctx := context.Background()
+	fake := payments.NewFake()
+	pi, err := fake.CreatePaymentIntent(ctx, plugin.PaymentIntentInput{Account: "acct_fake1", AmountCents: 2600, IdempotencyKey: "pi-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got stripe.Event
+	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		ev, err := webhook.ConstructEventWithOptions(body, r.Header.Get("Stripe-Signature"), "whsec_e2e", webhook.ConstructEventOptions{Tolerance: 5 * time.Minute})
+		if err != nil || r.URL.Path != "/v1/webhooks/stripe" {
+			http.Error(w, fmt.Sprint(err), 400)
+			return
+		}
+		got = ev
+	})
+	h := testRoutes(api, &mailer.Memory{}, fake, "whsec_e2e")
+	post := func(query string, header ...string) int {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/__test/stripe/refund-latest"+query, nil)
+		for i := 0; i+1 < len(header); i += 2 {
+			req.Header.Set(header[i], header[i+1])
+		}
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := post(""); code != 404 {
+		t.Fatalf("refund-latest with no refund: %d, want 404", code)
+	}
+	md := map[string]string{"refund_id": "0199e5a0-0000-7000-8000-000000000001", "attempt": "0"}
+	re, err := fake.Refund(ctx, plugin.RefundInput{Account: "acct_fake1", PaymentIntentID: pi.ID, AmountCents: 2600, IdempotencyKey: "refund-x-0", Metadata: md})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := post("", "X-Forwarded-For", "203.0.113.9"); code != 404 {
+		t.Fatalf("through a proxy: %d, want 404", code)
+	}
+	for _, status := range []string{"", "failed"} {
+		if code := post("?status=" + status); code != 200 {
+			t.Fatalf("refund-latest %q: %d, want 200", status, code)
+		}
+		want := status
+		if want == "" {
+			want = "succeeded"
+		}
+		var obj struct {
+			ID, Status    string
+			PaymentIntent string `json:"payment_intent"`
+			Amount        int64
+			Metadata      map[string]string
+		}
+		_ = json.Unmarshal(got.Data.Raw, &obj)
+		if got.Type != "refund.updated" || got.Account != "acct_fake1" || obj.ID != re.ID || obj.PaymentIntent != pi.ID ||
+			obj.Amount != 2600 || obj.Status != want || obj.Metadata["refund_id"] != md["refund_id"] || obj.Metadata["attempt"] != "0" {
+			t.Fatalf("event = %+v %+v", got, obj)
+		}
+	}
+	if code := post("?status=pending"); code != 404 {
+		t.Fatalf("status pending: %d, want 404", code)
+	}
+}
+
 func TestTestModeRefusesLiveStripeKeys(t *testing.T) {
 	for _, c := range []config.Config{
 		{StripeSecretKey: "sk_live_abc", StripePublishableKey: "pk_live_abc", StripeWebhookSecret: "whsec_abc"},

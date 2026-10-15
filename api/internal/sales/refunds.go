@@ -222,7 +222,7 @@ func (s *Service) nextAttempt(ctx context.Context, org uuid.UUID, r refundRow) e
 // (pending, requires_action) waits for the next word. A final row is left
 // alone, so replays change nothing.
 //
-// Stripe's refund webhooks (Task 5) find their row by metadata.refund_id and
+// Stripe's refund webhooks (refundUpdated) find their row by metadata.refund_id and
 // apply only when the event's refund id equals the stored stripe_refund_id,
 // or no id is stored yet and metadata.attempt equals the row's attempt. That
 // keeps a late "failed" for an attempt the row has moved past from failing
