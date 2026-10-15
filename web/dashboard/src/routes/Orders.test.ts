@@ -1,34 +1,39 @@
 import { expect, test } from "bun:test";
+import type { components } from "@ticketslinger/api-client";
 import { summarize } from "./Orders";
 
-const order = (
-  status: "paid" | "cancelled" | "refunded",
-  tickets: number,
-  total: number,
-  fee = 0,
-) => ({
-  id: crypto.randomUUID(),
-  code: "TS-AAAAA",
-  email: "a@example.com",
-  status,
-  ticket_count: tickets,
-  total_cents: total,
-  fee_cents: fee,
-  fee_mode: "pass" as const,
-  created_at: "2026-10-01T10:00:00Z",
-  paid_at: null,
-  refunded_cents: 0,
-  fee_refunded_cents: 0,
-});
+type OrderSummary = components["schemas"]["OrderSummary"];
 
-test("summarize counts only paid orders, in integer cents", () => {
-  expect(
-    summarize([
-      order("paid", 2, 5200, 100),
-      order("paid", 1, 2599, 50),
-      order("cancelled", 4, 9999, 10),
-      order("refunded", 3, 7777, 10),
-    ]),
-  ).toEqual({ orders: 2, tickets: 3, grossCents: 7799, feeCents: 150 });
-  expect(summarize([])).toEqual({ orders: 0, tickets: 0, grossCents: 0, feeCents: 0 });
+test("summary: gross, refunds, our fee and net, in cents", () => {
+  const o = (
+    status: OrderSummary["status"],
+    total: number,
+    fee: number,
+    refunded = 0,
+    feeBack = 0,
+    tickets = 2,
+  ) =>
+    ({
+      status,
+      total_cents: total,
+      fee_cents: fee,
+      refunded_cents: refunded,
+      fee_refunded_cents: feeBack,
+      ticket_count: tickets,
+    }) as OrderSummary;
+  const sum = summarize([
+    o("paid", 5200, 200),
+    o("partially_refunded", 5200, 200, 2600, 100, 1),
+    o("refunded", 5200, 200, 5200, 200, 0),
+    o("cancelled", 2600, 100, 2600, 100, 0),
+  ]);
+  expect(sum).toEqual({
+    orders: 2,
+    tickets: 3,
+    grossCents: 18200,
+    refundedCents: 10400,
+    feeCents: 300,
+    netCents: 7500,
+  });
+  expect(summarize([]).netCents).toBe(0);
 });
