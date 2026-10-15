@@ -55,8 +55,8 @@ export function Orders({ org, event }: { org: Org; event: Event }) {
             {formatCents(sum.grossCents)} in sales
           </p>
           <p>
-            Refunded {formatCents(sum.refundedCents)} · Our fee {formatCents(sum.feeCents)} · Yours{" "}
-            {formatCents(sum.netCents)}
+            Refunded or on its way {formatCents(sum.refundedCents)} · Our fee{" "}
+            {formatCents(sum.feeCents)} · Yours {formatCents(sum.netCents)}
           </p>
           <p className="muted">
             Yours is before Stripe's own processing fee, which Stripe takes in your Stripe account.

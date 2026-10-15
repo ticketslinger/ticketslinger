@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { api, must } from "../api";
 import { FormDialog } from "../forms";
+import { withKey } from "../idempotency";
 import { formatCents } from "../money";
 import { ErrorText, Field, useAction } from "../ui";
 import type { Event } from "./EventForm";
@@ -37,17 +38,17 @@ export function CancelEvent({
 
   const submit = () =>
     action.run(async () => {
-      key.current ??= crypto.randomUUID();
-      const r = must(
-        await api.POST("/organizers/{organizer}/events/{event}/cancel", {
-          params: {
-            path: { organizer: org.slug, event: event.id },
-            header: { "Idempotency-Key": key.current },
-          },
-          body: { confirm_name: typed },
-        }),
+      const r = await withKey(key, async (k) =>
+        must(
+          await api.POST("/organizers/{organizer}/events/{event}/cancel", {
+            params: {
+              path: { organizer: org.slug, event: event.id },
+              header: { "Idempotency-Key": k },
+            },
+            body: { confirm_name: typed },
+          }),
+        ),
       );
-      key.current = null;
       setOpen(false);
       setDone(
         `Cancelled. We're refunding ${r.orders} order${r.orders === 1 ? "" : "s"}, ${formatCents(r.amount_cents)} in all.`,

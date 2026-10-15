@@ -297,7 +297,7 @@ func (s *Service) OrderConfirmation(m mailer.Mailer) jobs.Handler {
 		var starts time.Time
 		err := system.Run(ctx, s.Pool, c.Organizer, func(tx pgx.Tx) error {
 			return tx.QueryRow(ctx, `select o.email, o.code, e.name, e.timezone, e.starts_at
-				from orders o join events e on e.id = o.event_id where o.id = $1 and o.status = 'paid'`, c.Order).
+				from orders o join events e on e.id = o.event_id where o.id = $1 and o.status in ('paid', 'partially_refunded')`, c.Order).
 				Scan(&email, &code, &name, &zone, &starts)
 		})
 		if errors.Is(err, pgx.ErrNoRows) {

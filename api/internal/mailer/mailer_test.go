@@ -22,3 +22,17 @@ func TestLogLeavesLinksOut(t *testing.T) {
 		t.Fatalf("logged %q, want the text without its links", out)
 	}
 }
+
+func TestLastLinkSkipsMessagesWithoutOne(t *testing.T) {
+	m := &Memory{}
+	ctx := context.Background()
+	_ = m.Send(ctx, "a@example.com", "Tickets", "Here: http://localhost:3001/orders/TS-7K2QF?t=abc")
+	_ = m.Send(ctx, "b@example.com", "Other", "Here: http://localhost:3001/orders/TS-AAAAA?t=zzz")
+	_ = m.Send(ctx, "a@example.com", "Refund", "We sent $25.00 back.")
+	if got := m.LastLink("a@example.com"); got != "http://localhost:3001/orders/TS-7K2QF?t=abc" {
+		t.Fatalf("LastLink = %q, want the earlier message's link", got)
+	}
+	if got := m.LastLink("c@example.com"); got != "" {
+		t.Fatalf("LastLink for a stranger = %q", got)
+	}
+}

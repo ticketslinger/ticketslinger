@@ -25,7 +25,7 @@ const DONE: Record<string, string> = {
   failed: "failed",
   cancelled: "cancelled",
   succeeded_late: "went through after all",
-  fee_stuck: "our fee is stuck",
+  fee_stuck: "stuck on our fee",
   cancelled_late: "cancelled (refund queued)",
   stripe_connected: "connected to Stripe",
   stripe_linked: "linked a Stripe account",

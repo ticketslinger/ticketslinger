@@ -11,7 +11,7 @@ test("audit actions read as plain words", () => {
   expect(say("organizer.stripe_linked")).toBe("Organizer linked a Stripe account");
   expect(say("organizer.stripe_disconnected")).toBe("Organizer disconnected from Stripe");
   expect(say("refund.succeeded_late")).toBe("Refund went through after all");
-  expect(say("refund.fee_stuck")).toBe("Refund our fee is stuck");
+  expect(say("refund.fee_stuck")).toBe("Refund stuck on our fee");
   expect(say("refund.retried")).toBe("Refund sent again");
   expect(say("order.refunded")).toBe("Order refunded");
   expect(say("event.cancelled")).toBe("Event cancelled");

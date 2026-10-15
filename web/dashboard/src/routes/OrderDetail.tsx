@@ -2,6 +2,7 @@ import type { components } from "@ticketslinger/api-client";
 import { useRef, useState } from "react";
 import { api, must } from "../api";
 import { toggle } from "../forms";
+import { withKey } from "../idempotency";
 import { formatCents } from "../money";
 import { formatWhen } from "../time";
 import { ErrorText, focusOnMount, Link, useAction, useLoad } from "../ui";
@@ -81,19 +82,19 @@ function RefundRow({
               disabled={action.busy}
               onClick={() =>
                 action.run(async () => {
-                  key.current ??= crypto.randomUUID();
-                  must(
-                    await api.POST(
-                      "/organizers/{organizer}/events/{event}/orders/{order}/refunds/{refund}/retry",
-                      {
-                        params: {
-                          path: { organizer: org, event: ev, order, refund: r.id },
-                          header: { "Idempotency-Key": key.current },
+                  await withKey(key, async (k) =>
+                    must(
+                      await api.POST(
+                        "/organizers/{organizer}/events/{event}/orders/{order}/refunds/{refund}/retry",
+                        {
+                          params: {
+                            path: { organizer: org, event: ev, order, refund: r.id },
+                            header: { "Idempotency-Key": k },
+                          },
                         },
-                      },
+                      ),
                     ),
                   );
-                  key.current = null;
                   onRetried();
                 })
               }
@@ -169,17 +170,17 @@ export function OrderDetail({
   const confirm = () =>
     refund.run(async () => {
       if (!preview) return;
-      key.current ??= crypto.randomUUID();
-      must(
-        await api.POST("/organizers/{organizer}/events/{event}/orders/{order}/refunds", {
-          params: { path, header: { "Idempotency-Key": key.current } },
-          body: {
-            refund_fee: feeBack && preview.feeCents > 0,
-            ...(picked.length > 0 ? { ticket_ids: picked } : {}),
-          },
-        }),
+      await withKey(key, async (k) =>
+        must(
+          await api.POST("/organizers/{organizer}/events/{event}/orders/{order}/refunds", {
+            params: { path, header: { "Idempotency-Key": k } },
+            body: {
+              refund_fee: feeBack && preview.feeCents > 0,
+              ...(picked.length > 0 ? { ticket_ids: picked } : {}),
+            },
+          }),
+        ),
       );
-      key.current = null;
       setPicked([]);
       setAsking(null);
       await reload();
@@ -205,8 +206,9 @@ export function OrderDetail({
             )}
           </p>
           <p>
-            Total {formatCents(order.total_cents)} · Refunded {formatCents(order.refunded_cents)} ·
-            Our fee {formatCents(order.fee_cents - order.fee_refunded_cents)}
+            Total {formatCents(order.total_cents)} · Refunded or on its way{" "}
+            {formatCents(order.refunded_cents)} · Our fee{" "}
+            {formatCents(order.fee_cents - order.fee_refunded_cents)}
           </p>
 
           <h2>Tickets</h2>
@@ -218,6 +220,7 @@ export function OrderDetail({
                     <input
                       type="checkbox"
                       checked={picked.includes(t.id)}
+                      disabled={refund.busy}
                       onChange={() => change(() => setPicked(toggle(picked, t.id)))}
                     />{" "}
                     {t.ticket_type_name}, {t.attendee_name}
@@ -227,7 +230,14 @@ export function OrderDetail({
                     {t.ticket_type_name}, {t.attendee_name}
                   </>
                 )}
-                {t.status === "void" && <span className="pill"> {voidLabel(t.refund_id)}</span>}
+                {t.status === "void" && (
+                  <>
+                    {" "}
+                    <span className={`pill ${refundOf(t.refund_id)?.status ?? ""}`}>
+                      {voidLabel(t.refund_id)}
+                    </span>
+                  </>
+                )}
               </li>
             ))}
           </ul>
@@ -238,6 +248,7 @@ export function OrderDetail({
                 <input
                   type="checkbox"
                   checked={feeBack}
+                  disabled={refund.busy}
                   onChange={(e) => change(() => setFeeBack(e.target.checked))}
                 />{" "}
                 {order.fee_mode === "absorb"
@@ -246,7 +257,7 @@ export function OrderDetail({
               </label>
               {asking ? (
                 <>
-                  <p>
+                  <p id="refund-question">
                     {preview?.amountCents
                       ? `Refund ${money} to the card they paid with? Their tickets stop working straight away. This can't be undone.`
                       : "Cancel these free tickets? They stop working straight away. This can't be undone."}
@@ -256,6 +267,7 @@ export function OrderDetail({
                       type="button"
                       className="inline"
                       ref={focusOnMount}
+                      aria-describedby="refund-question"
                       disabled={refund.busy}
                       onClick={confirm}
                     >

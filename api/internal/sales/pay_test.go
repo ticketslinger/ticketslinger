@@ -260,6 +260,13 @@ func TestFreeOrderEmailsItsLink(t *testing.T) {
 		!strings.HasPrefix(mail.Text, "You're going to Gala on ") || !strings.HasSuffix(mail.Text, ": "+got.OrderURL) {
 		t.Fatalf("email = %+v, want the link %s", mail, got.OrderURL)
 	}
+	// A partly refunded order still sends: its remaining tickets are the buyer's.
+	f.exec(t, `update orders set status = 'partially_refunded'`)
+	f.must(t, s.OrderConfirmation(m)(ctx, payload))
+	if len(m.Sent) != 2 {
+		t.Fatalf("%d emails after a partly refunded order, want 2", len(m.Sent))
+	}
+	m.Sent = m.Sent[:1]
 	// An order that isn't paid sends nothing.
 	f.exec(t, `update orders set status = 'cancelled'`)
 	f.must(t, s.OrderConfirmation(m)(ctx, payload))

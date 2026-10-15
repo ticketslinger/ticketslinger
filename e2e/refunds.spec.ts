@@ -51,8 +51,6 @@ test("an organizer refunds one ticket, then cancels the event", async ({
   expect((await fetch(`${API}/__test/stripe/pay-latest`, { method: "POST" })).status).toBe(200);
   await expect(shop).toHaveURL(/\/orders\/TS-[0-9A-Z]{5}\?t=/, { timeout: 15_000 });
 
-  const orderUrl = shop.url();
-
   // Refund ticket 1. Our fee stays unless the organizer ticks the box.
   await page.goto(`/o/${slug}`);
   await page.getByRole("link", { name: "Spring Social" }).click();
@@ -73,11 +71,18 @@ test("an organizer refunds one ticket, then cancels the event", async ({
   await expect(ada).toContainText("Refunded");
 
   await page.getByRole("link", { name: "Spring Social" }).click();
-  await expect(page.getByText("Refunded $25.00 · Our fee $2.00 · Yours $25.00")).toBeVisible();
+  await expect(
+    page.getByText("Refunded or on its way $25.00 · Our fee $2.00 · Yours $25.00"),
+  ).toBeVisible();
 
-  // The buyer's page agrees.
-  await shop.goto(orderUrl);
-  await expect(shop.getByText(/refunded/i).first()).toBeVisible();
+  // The buyer's page, reached from the email link, agrees: ticket 1 is out, ticket 2 isn't.
+  const mail = `${API}/__test/last-email?to=${encodeURIComponent(email)}`;
+  await expect.poll(async () => (await fetch(mail)).ok, { timeout: 15_000 }).toBe(true);
+  await shop.goto(await (await fetch(mail)).text());
+  await expect(shop.getByText("Part of this order was refunded.")).toBeVisible();
+  const tickets = shop.locator(".order-tickets li");
+  await expect(tickets.filter({ hasText: "Ada" })).toContainText("No longer valid");
+  await expect(tickets.filter({ hasText: "Grace" })).not.toContainText("No longer valid");
   await buyer.close();
 
   // Cancel the event: the name has to match, and the fee goes back too.
