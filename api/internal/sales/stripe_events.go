@@ -215,11 +215,17 @@ func (s *Service) paymentSucceeded(ctx context.Context, tx pgx.Tx, org uuid.UUID
 			"event", ev.ID, "payment_intent", pi.ID, "account", ev.Account, "mismatch", mismatch)
 		return nil
 	}
+	return s.markPaid(ctx, tx, org, order)
+}
+
+// markPaid is Stripe's word that order's payment succeeded: the order is
+// confirmed (or, if it can't be sold any more, cancelled and refunded).
+func (s *Service) markPaid(ctx context.Context, tx pgx.Tx, org, order uuid.UUID) error {
 	if _, err := s.confirmOrder(ctx, tx, org, order); err != nil {
 		return err
 	}
 	// Paid or refunded later, the money moved.
-	_, err = tx.Exec(ctx, `update payments set status = 'succeeded', updated_at = statement_timestamp() where order_id = $1 and status <> 'succeeded'`, order)
+	_, err := tx.Exec(ctx, `update payments set status = 'succeeded', updated_at = statement_timestamp() where order_id = $1 and status <> 'succeeded'`, order)
 	return err
 }
 

@@ -216,19 +216,20 @@ type lockedCheckout struct {
 	feeMode   string
 }
 
-// lockCheckout locks the open checkout with this token hash.
+// lockCheckout locks the open checkout with this token hash, of an event
+// still on sale.
 func lockCheckout(ctx context.Context, tx pgx.Tx, hash []byte) (lockedCheckout, error) {
 	var c lockedCheckout
 	var p promo
 	var promoID *uuid.UUID
 	var status, code string
-	var expired bool
-	err := tx.QueryRow(ctx, `select c.id, c.event_id, c.status, c.expires_at <= statement_timestamp(), c.promo_code_id,
+	var expired, live bool
+	err := tx.QueryRow(ctx, `select c.id, c.event_id, c.status, c.expires_at <= statement_timestamp(), e.status = 'live', c.promo_code_id,
 			coalesce(p.code, ''), coalesce(p.kind, ''), coalesce(p.value, 0), e.fee_mode,
 			coalesce((select o.code from orders o where o.checkout_id = c.id), '')
 		from checkouts c join events e on e.id = c.event_id left join promo_codes p on p.id = c.promo_code_id
 		where c.token_hash = $1 for update of c`, hash).
-		Scan(&c.id, &c.event, &status, &expired, &promoID, &p.code, &p.kind, &p.value, &c.feeMode, &code)
+		Scan(&c.id, &c.event, &status, &expired, &live, &promoID, &p.code, &p.kind, &p.value, &c.feeMode, &code)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return c, catalogue.ErrNotFound // purged since checkout_scope looked
@@ -236,6 +237,8 @@ func lockCheckout(ctx context.Context, tx pgx.Tx, hash []byte) (lockedCheckout, 
 		return c, err
 	case status == "completed":
 		return c, CheckoutCompleted{OrderCode: code}
+	case !live: // taken off sale, or cancelled, since the hold
+		return c, catalogue.ErrNotFound
 	case expired:
 		return c, ErrCheckoutExpired
 	}

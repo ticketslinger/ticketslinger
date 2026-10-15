@@ -17,6 +17,7 @@ import (
 	"github.com/oapi-codegen/nullable"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
+	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
 	"github.com/ticketslinger/ticketslinger/api/internal/db"
 	"github.com/ticketslinger/ticketslinger/api/internal/organizers"
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
@@ -724,6 +725,28 @@ func (s *server) RetryRefund(ctx context.Context, req RetryRefundRequestObject) 
 			return err
 		}
 		out = RetryRefund200JSONResponse(toRefund(r))
+		return nil
+	})
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return out, nil
+}
+
+// CancelEvent takes a live event off sale and refunds every paid order, our
+// fee included. Stripe is asked by the jobs this queues, after it commits.
+func (s *server) CancelEvent(ctx context.Context, req CancelEventRequestObject) (CancelEventResponseObject, error) {
+	var out CancelEvent200JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, refundsWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		res, err := sales.CancelEvent(ctx, tx, org.ID, req.Event, req.Body.ConfirmName, actorFrom(ctx))
+		if err != nil {
+			return err
+		}
+		e, err := catalogue.GetEvent(ctx, tx, req.Event)
+		if err != nil {
+			return err
+		}
+		out = CancelEvent200JSONResponse{Event: toEvent(e), Orders: res.Orders, AmountCents: res.AmountCents, FeeCents: res.FeeCents}
 		return nil
 	})
 	if err != nil {

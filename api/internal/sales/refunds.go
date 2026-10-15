@@ -308,7 +308,8 @@ func (s *Service) finishRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID
 // failRefund marks a refund failed and says so in the organizer's audit
 // log, with what it was before and Stripe's failure_reason when there is
 // one. A failed row changes only to stripe_failed, from gave_up or
-// no_access. The caller holds the order lock or needs none (the row alone).
+// no_access, and a succeeded one only to stripe_failed. The caller holds
+// the order lock or needs none (the row alone).
 func (s *Service) failRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, failure, stripeReason string) error {
 	var status string
 	var was *string
@@ -316,6 +317,11 @@ func (s *Service) failRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, 
 		return err
 	}
 	if status == "failed" && (failure != "stripe_failed" || *was == "stripe_failed") {
+		return nil
+	}
+	// The money went out: only Stripe's own word can say it didn't. A read
+	// made before the row was locked (RefundParked, a lost account) mustn't.
+	if status == "succeeded" && failure != "stripe_failed" {
 		return nil
 	}
 	if _, err := tx.Exec(ctx, `update refunds set status = 'failed', failure = $2, updated_at = statement_timestamp() where id = $1`, id, failure); err != nil {
