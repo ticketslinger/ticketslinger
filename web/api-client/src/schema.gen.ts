@@ -549,6 +549,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/events/{event}/orders/{order}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Any member, or any API key. One order with every ticket it ever had (refunded ones show as void, with the refund that covered them) and its refunds, newest first. email is the buyer's address. */
+        get: operations["getOrderDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/orders/{order}/refunds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Name the tickets in ticket_ids, or leave it out to refund every ticket still valid. The buyer gets back what they paid for those tickets; with refund_fee true our fee on them goes back too, to the buyer when they paid it and to you when you absorbed it. Those tickets stop scanning straight away, and their seats go back on sale once the refund goes through. A ticket that cost nothing is cancelled and its seat freed at once, with no refund (refund is null). 409 not_refundable when nothing is left to refund. 422 bad_tickets (field ticket_ids) when a ticket isn't in this order or is refunded already, or the list is empty or null; 422 too_many over 100 tickets; 422 missing_field without refund_fee; 422 fee_without_refund (field refund_fee) when the tickets cost nothing but refund_fee is true. 404 for an order that isn't this event's. */
+        post: operations["refundOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/orders/{order}/refunds/{refund}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Sends a failed refund again: the same refund, for the same money, back to requested. Before it asks Stripe again, we check whether Stripe made the first one after all; if it did, we use that one instead of sending a second. Its tickets keep their seats until it goes through. 409 not_failed unless the refund failed. 404 for a refund that isn't this order's. */
+        post: operations["retryRefund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/events/{event}/promo-codes": {
         parameters: {
             query?: never;
@@ -1017,6 +1068,7 @@ export interface components {
             email: string;
             /** @enum {string} */
             status: "paid" | "cancelled" | "refunded" | "partially_refunded";
+            /** @description Tickets still valid. */
             ticket_count: number;
             /** Format: int64 */
             total_cents: number;
@@ -1028,6 +1080,84 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             paid_at: string | null;
+            /**
+             * Format: int64
+             * @description Refunded to the buyer so far, counting refunds still on their way and leaving out failed ones.
+             */
+            refunded_cents: number;
+            /**
+             * Format: int64
+             * @description How much of our fee goes back with those refunds.
+             */
+            fee_refunded_cents: number;
+        };
+        OrderDetail: components["schemas"]["OrderSummary"] & {
+            tickets: components["schemas"]["OrderDetailTicket"][];
+            /** @description Newest first. */
+            refunds: components["schemas"]["Refund"][];
+        };
+        OrderDetailTicket: {
+            /** Format: uuid */
+            id: string;
+            ticket_type_name: string;
+            attendee_name: string;
+            /** @enum {string} */
+            status: "valid" | "void";
+            /**
+             * Format: int64
+             * @description What the buyer paid for this ticket, before a passed-on fee.
+             */
+            charge_cents: number;
+            /** Format: int64 */
+            fee_cents: number;
+            /**
+             * Format: uuid
+             * @description The refund that covered this ticket; null when it hasn't been refunded, or cost nothing.
+             */
+            refund_id: string | null;
+        };
+        Refund: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: int64
+             * @description What goes back to the buyer's card.
+             */
+            amount_cents: number;
+            /**
+             * Format: int64
+             * @description Our fee that goes back with it; 0 when it stays with us.
+             */
+            fee_cents: number;
+            fee_back: boolean;
+            /** @enum {string} */
+            status: "requested" | "succeeded" | "failed";
+            /** @enum {string} */
+            reason: "late_payment" | "organizer" | "event_cancelled";
+            /**
+             * @description Why it failed. stripe_failed: Stripe turned it down. no_access: we can't reach your Stripe account any more, so refund from your own Stripe dashboard. gave_up: we couldn't get an answer from Stripe after ten tries.
+             * @enum {string|null}
+             */
+            failure: "stripe_failed" | "no_access" | "gave_up" | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        RefundOrderRequest: {
+            /** @description The tickets to refund, 1 to 100 of them. Leave it out to refund every ticket still valid; an empty list or null is refused (422 bad_tickets), so a slip can't refund the whole order. */
+            ticket_ids?: string[];
+            /** @description true gives our fee on these tickets back as well. */
+            refund_fee: boolean;
+        };
+        RefundResult: {
+            /** @description null when the tickets cost nothing, so there was no money to send back. */
+            refund: components["schemas"]["Refund"] | null;
+            ticket_ids: string[];
+            /** Format: int64 */
+            amount_cents: number;
+            /** Format: int64 */
+            fee_cents: number;
+            /** @enum {string} */
+            order_status: "paid" | "cancelled" | "refunded" | "partially_refunded";
         };
         /** @enum {string} */
         LinkMethod: "created" | "linked";
@@ -1444,6 +1574,8 @@ export interface components {
         QuestionPath: string;
         TicketTypePath: string;
         EventPath: string;
+        OrderPath: string;
+        RefundPath: string;
         /** @description The token createCheckout returned. */
         CheckoutTokenPath: string;
     };
@@ -2750,6 +2882,103 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
+        };
+    };
+    getOrderDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderDetail"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    refundOrder: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefundOrderRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    retryRefund: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+                refund: components["parameters"]["RefundPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Refund"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     listPromoCodes: {

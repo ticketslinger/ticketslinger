@@ -17,6 +17,8 @@ const order = (
   fee_mode: "pass" as const,
   created_at: "2026-10-01T10:00:00Z",
   paid_at: null,
+  refunded_cents: 0,
+  fee_refunded_cents: 0,
 });
 
 test("summarize counts only paid orders, in integer cents", () => {

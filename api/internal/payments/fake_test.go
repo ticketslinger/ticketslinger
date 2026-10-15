@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/payments"
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
@@ -70,11 +71,20 @@ func TestFake(t *testing.T) {
 	if err != nil || !strings.HasPrefix(r.ID, "re_fake") {
 		t.Fatalf("refund %+v %v", r, err)
 	}
-	if again, _ := f.Refund(ctx, rin); again != r {
+	if again, _ := f.Refund(ctx, rin); !reflect.DeepEqual(again, r) {
 		t.Fatalf("same refund key: %+v, want %+v", again, r)
 	}
 	if got := f.Refunds(); len(got) != 1 || !reflect.DeepEqual(got[0], rin) {
 		t.Fatalf("refunds %+v", got)
+	}
+	// Past Stripe's 24 hours the key is forgotten: the same key refunds again.
+	f.Advance(25 * time.Hour)
+	later, err := f.Refund(ctx, rin)
+	if err != nil || later.ID == r.ID || len(f.Refunds()) != 2 {
+		t.Fatalf("after the key window: %+v %v, %d refunds", later, err, len(f.Refunds()))
+	}
+	if list, err := f.ListRefunds(ctx, acct, pi.ID); err != nil || len(list) != 2 || list[0].ID != later.ID || list[1].ID != r.ID {
+		t.Fatalf("listed %+v %v, want both, newest first", list, err)
 	}
 }
 

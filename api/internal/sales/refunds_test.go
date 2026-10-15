@@ -214,12 +214,12 @@ func TestRefundRetriesWithANewKeyOnlyAfterARefusal(t *testing.T) {
 		errors.New("network"),
 	}
 	for _, e := range maybe {
-		rec.FailNext(e)
+		rec.FailCall("Refund", e) // not the look at Stripe's list a re-send starts with
 		if err := run(ctx, payload); err == nil {
 			t.Fatalf("%v: reported success", e)
 		}
 	}
-	rec.FailNext(&plugin.ProviderError{Op: "refund", Refused: true, Status: 400, Code: "balance_insufficient"})
+	rec.FailCall("Refund", &plugin.ProviderError{Op: "refund", Refused: true, Status: 400, Code: "balance_insufficient"})
 	if err := run(ctx, payload); err == nil {
 		t.Fatal("a refused refund reported success")
 	}
@@ -519,6 +519,9 @@ func TestAGaveUpRefundStillFinishesWhenStripeSaysSucceeded(t *testing.T) {
 	}
 	if n := f.count(t, `select count(*) from jobs where kind = 'send_email'`); n != 1 {
 		t.Fatalf("%d emails, want 1", n)
+	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'refund.succeeded_late' and actor_system and entity_id = $1`, refund); n != 1 {
+		t.Fatalf("%d refund.succeeded_late rows, want 1", n)
 	}
 }
 

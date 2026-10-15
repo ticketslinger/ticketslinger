@@ -1,0 +1,235 @@
+package sales
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"slices"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/ticketslinger/ticketslinger/api/internal/audit"
+	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
+	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
+	"github.com/ticketslinger/ticketslinger/api/internal/pricing"
+)
+
+// RefundRequest is an organizer's refund of an order.
+type RefundRequest struct {
+	TicketIDs []uuid.UUID // nil: every ticket still valid; empty but not nil names none (bad_tickets)
+	FeeBack   bool        // our fee on those tickets goes back too
+}
+
+type RefundResult struct {
+	RefundID              *uuid.UUID // nil when those tickets cost nothing
+	TicketIDs             []uuid.UUID
+	AmountCents, FeeCents int64
+	OrderStatus           string
+}
+
+// MaxRefundTickets is how many tickets one refund may name.
+const MaxRefundTickets = 100
+
+var (
+	errNotRefundable = catalogue.ErrConflict{Code: "not_refundable", Message: "This order has nothing left to refund."}
+	errBadTickets    = catalogue.ErrInvalid{Code: "bad_tickets", Field: "ticket_ids",
+		Message: "Some of those tickets aren't in this order, or they're refunded already. Reload the order and pick again."}
+	errTooManyTickets = catalogue.ErrInvalid{Code: "too_many", Field: "ticket_ids",
+		Message: "Pick up to 100 tickets at a time, or leave the list out to refund the whole order."}
+	errNotFailed  = catalogue.ErrConflict{Code: "not_failed", Message: "Only a refund that failed can be sent again."}
+	errFeeNoMoney = catalogue.ErrInvalid{Code: "fee_without_refund", Field: "refund_fee",
+		Message: "Those tickets cost nothing, so there's no payment to send our fee back through. Refund them with refund_fee false."}
+)
+
+// RefundTickets voids tickets of one order of event and asks Stripe for the
+// money back. Runs in the caller's transaction; locks the order, then its
+// tickets. reason: "organizer" or "event_cancelled".
+func RefundTickets(ctx context.Context, tx pgx.Tx, org, event, order uuid.UUID, in RefundRequest, reason string, actor audit.Actor) (RefundResult, error) {
+	switch {
+	case len(in.TicketIDs) > MaxRefundTickets:
+		return RefundResult{}, errTooManyTickets
+	case in.TicketIDs != nil && len(in.TicketIDs) == 0:
+		return RefundResult{}, errBadTickets
+	}
+	var status, feeMode string
+	err := tx.QueryRow(ctx, `select status, fee_mode from orders where id = $1 and event_id = $2 for update`, order, event).Scan(&status, &feeMode)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RefundResult{}, catalogue.ErrNotFound
+	}
+	if err != nil {
+		return RefundResult{}, err
+	}
+	if status != "paid" && status != "partially_refunded" {
+		return RefundResult{}, errNotRefundable
+	}
+	var named []uuid.UUID
+	if len(in.TicketIDs) > 0 {
+		named = slices.Compact(slices.SortedFunc(slices.Values(in.TicketIDs), func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) }))
+	}
+	rows, _ := tx.Query(ctx, `select id, charge_cents, fee_cents from tickets
+		where order_id = $1 and status = 'valid' and ($2::uuid[] is null or id = any($2)) order by id for update`, order, named)
+	res := RefundResult{}
+	var charges, fees int64
+	var id uuid.UUID
+	var charge, fee int64
+	if _, err := pgx.ForEachRow(rows, []any{&id, &charge, &fee}, func() error {
+		res.TicketIDs = append(res.TicketIDs, id)
+		charges, fees = charges+charge, fees+fee
+		return nil
+	}); err != nil {
+		return RefundResult{}, err
+	}
+	switch {
+	case named != nil && len(res.TicketIDs) != len(named):
+		return RefundResult{}, errBadTickets
+	case len(res.TicketIDs) == 0:
+		return RefundResult{}, errNotRefundable
+	}
+	res.AmountCents = charges
+	if in.FeeBack {
+		res.FeeCents = fees
+		if feeMode == pricing.FeePass {
+			res.AmountCents += fees
+		}
+	}
+	if res.AmountCents == 0 && res.FeeCents > 0 {
+		return RefundResult{}, errFeeNoMoney
+	}
+	if res.AmountCents > 0 {
+		var payment uuid.UUID
+		if err := tx.QueryRow(ctx, `select id from payments where order_id = $1 and status = 'succeeded'`, order).Scan(&payment); err != nil {
+			return RefundResult{}, err
+		}
+		var by *uuid.UUID
+		if actor.User != uuid.Nil {
+			by = &actor.User
+		}
+		refund, err := requestRefund(ctx, tx, org, payment, res.AmountCents, res.FeeCents, in.FeeBack, reason, by)
+		if err != nil {
+			return RefundResult{}, err
+		}
+		res.RefundID = &refund
+		if _, err := tx.Exec(ctx, `update tickets set status = 'void', refund_id = $2 where id = any($1)`, res.TicketIDs, refund); err != nil {
+			return RefundResult{}, err
+		}
+	} else if _, err := tx.Exec(ctx, `update tickets set status = 'void', released_at = statement_timestamp() where id = any($1)`, res.TicketIDs); err != nil {
+		return RefundResult{}, err
+	}
+	if err := tx.QueryRow(ctx, `update orders set status = case
+			when exists (select 1 from tickets where order_id = $1 and status = 'valid') then 'partially_refunded'
+			when total_cents > 0 then 'refunded' else 'cancelled' end
+		where id = $1 returning status`, order).Scan(&res.OrderStatus); err != nil {
+		return RefundResult{}, err
+	}
+	return res, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "order.refunded", EntityType: "order", EntityID: order,
+		After: map[string]any{"ticket_ids": res.TicketIDs, "amount_cents": res.AmountCents, "fee_cents": res.FeeCents, "reason": reason, "refund_id": res.RefundID}})
+}
+
+// RetryRefund sends a failed refund again: the same row, back to requested,
+// with a new job. It keeps its key family (refund-<id>-<attempt>), and the
+// job looks at Stripe before sending a row it sent before, so a first try
+// Stripe made after all is taken up, not made twice. Only when Stripe itself
+// failed the refund does the row move to its next key, since the old one
+// would replay that failure. retry_refund (00030) makes the change: members
+// can't write refunds directly. Runs in the caller's transaction; locks the
+// order, then the refund.
+func RetryRefund(ctx context.Context, tx pgx.Tx, org, event, order, refund uuid.UUID, actor audit.Actor) (RefundView, error) {
+	err := tx.QueryRow(ctx, `select 1 from orders where id = $1 and event_id = $2 for update`, order, event).Scan(new(int))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RefundView{}, catalogue.ErrNotFound
+	}
+	if err != nil {
+		return RefundView{}, err
+	}
+	var failure *string
+	err = tx.QueryRow(ctx, `select r.failure from refunds r join payments p on p.id = r.payment_id where r.id = $1 and p.order_id = $2`,
+		refund, order).Scan(&failure)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RefundView{}, catalogue.ErrNotFound
+	}
+	if err != nil {
+		return RefundView{}, err
+	}
+	var retried bool
+	if err := tx.QueryRow(ctx, `select retry_refund($1)`, refund).Scan(&retried); err != nil {
+		return RefundView{}, err
+	}
+	if !retried {
+		return RefundView{}, errNotFailed
+	}
+	if err := jobs.Enqueue(ctx, tx, RefundJob, refundJob{Organizer: org, Refund: refund}); err != nil {
+		return RefundView{}, err
+	}
+	if err := audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "refund.retried", EntityType: "refund", EntityID: refund,
+		Before: map[string]*string{"failure": failure}}); err != nil {
+		return RefundView{}, err
+	}
+	return RefundByID(ctx, tx, refund)
+}
+
+type OrderDetailView struct {
+	OrderSummary
+	Tickets []OrderDetailTicket
+	Refunds []RefundView
+}
+
+type OrderDetailTicket struct {
+	ID                                   uuid.UUID
+	TicketTypeName, AttendeeName, Status string
+	ChargeCents, FeeCents                int64
+	RefundID                             *uuid.UUID
+}
+
+type RefundView struct {
+	ID                    uuid.UUID
+	AmountCents, FeeCents int64
+	FeeBack               bool
+	Status, Reason        string
+	Failure               *string
+	CreatedAt             time.Time
+}
+
+const refundColumns = `r.id, r.amount_cents, r.fee_cents, r.fee_refunded, r.status, r.reason, r.failure, r.created_at`
+
+func scanRefund(r pgx.CollectableRow) (v RefundView, err error) {
+	err = r.Scan(&v.ID, &v.AmountCents, &v.FeeCents, &v.FeeBack, &v.Status, &v.Reason, &v.Failure, &v.CreatedAt)
+	return v, err
+}
+
+// RefundByID is one refund, in the caller's organizer transaction.
+func RefundByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (RefundView, error) {
+	rows, _ := tx.Query(ctx, `select `+refundColumns+` from refunds r where r.id = $1`, id)
+	v, err := pgx.CollectExactlyOneRow(rows, scanRefund)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return v, catalogue.ErrNotFound
+	}
+	return v, err
+}
+
+// OrderDetail is one order of event with its tickets (in id order) and its
+// refunds (newest first), in the caller's organizer transaction.
+func OrderDetail(ctx context.Context, tx pgx.Tx, event, order uuid.UUID) (OrderDetailView, error) {
+	rows, _ := tx.Query(ctx, orderSummarySelect+` and o.id = $2`, event, order)
+	sum, err := pgx.CollectExactlyOneRow(rows, scanOrderSummary)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return OrderDetailView{}, catalogue.ErrNotFound
+	}
+	if err != nil {
+		return OrderDetailView{}, err
+	}
+	out := OrderDetailView{OrderSummary: sum}
+	rows, _ = tx.Query(ctx, `select t.id, tt.name, t.attendee_name, t.status, t.charge_cents, t.fee_cents, t.refund_id
+		from tickets t join ticket_types tt on tt.id = t.ticket_type_id where t.order_id = $1 order by t.id`, order)
+	if out.Tickets, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (t OrderDetailTicket, err error) {
+		err = r.Scan(&t.ID, &t.TicketTypeName, &t.AttendeeName, &t.Status, &t.ChargeCents, &t.FeeCents, &t.RefundID)
+		return t, err
+	}); err != nil {
+		return OrderDetailView{}, err
+	}
+	rows, _ = tx.Query(ctx, `select `+refundColumns+` from refunds r join payments p on p.id = r.payment_id
+		where p.order_id = $1 order by r.created_at desc, r.id desc`, order)
+	out.Refunds, err = pgx.CollectRows(rows, scanRefund)
+	return out, err
+}

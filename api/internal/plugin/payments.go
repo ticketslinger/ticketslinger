@@ -81,8 +81,13 @@ type RefundInput struct {
 }
 
 // Refund is the provider's answer: Status is its word for it (pending,
-// requires_action, succeeded, failed, canceled).
-type Refund struct{ ID, Status string }
+// requires_action, succeeded, failed, canceled). Metadata is what we sent
+// with it, as ListRefunds reads it back.
+type Refund struct {
+	ID, Status  string
+	AmountCents int64
+	Metadata    map[string]string
+}
 
 type FeeRefundInput struct {
 	Account, PaymentIntentID string
@@ -99,6 +104,10 @@ type PaymentProvider interface {
 	Account(ctx context.Context, accountID string) (AccountStatus, error)
 	CreatePaymentIntent(ctx context.Context, in PaymentIntentInput) (PaymentIntent, error)
 	Refund(ctx context.Context, in RefundInput) (Refund, error)
+	// ListRefunds is every refund of the intent, newest first, with its
+	// metadata. A refund whose answer never reached us is found here after
+	// the provider has forgotten its idempotency key (24 hours at Stripe).
+	ListRefunds(ctx context.Context, account, intentID string) ([]Refund, error)
 	// RefundApplicationFee gives back part or all of our fee on the intent's charge.
 	RefundApplicationFee(ctx context.Context, in FeeRefundInput) (feeRefundID string, err error)
 	// PaymentIntentStatus is the intent's status as the provider has it now.

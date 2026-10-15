@@ -162,7 +162,25 @@ func (s *Stripe) Refund(ctx context.Context, in plugin.RefundInput) (plugin.Refu
 	if err != nil {
 		return plugin.Refund{}, fail("refund", err)
 	}
-	return plugin.Refund{ID: r.ID, Status: string(r.Status)}, nil
+	return plugin.Refund{ID: r.ID, Status: string(r.Status), AmountCents: r.Amount, Metadata: r.Metadata}, nil
+}
+
+// ListRefunds reads GET /v1/refunds?payment_intent= on the connected
+// account, every page.
+func (s *Stripe) ListRefunds(ctx context.Context, account, intentID string) ([]plugin.Refund, error) {
+	p := &stripe.RefundListParams{PaymentIntent: stripe.String(intentID)}
+	p.Limit = stripe.Int64(100)
+	if account != "" {
+		p.SetStripeAccount(account)
+	}
+	var out []plugin.Refund
+	for r, err := range s.c.V1Refunds.List(ctx, p).All(ctx) {
+		if err != nil {
+			return nil, fail("list refunds", err)
+		}
+		out = append(out, plugin.Refund{ID: r.ID, Status: string(r.Status), AmountCents: r.Amount, Metadata: r.Metadata})
+	}
+	return out, nil
 }
 
 // RefundApplicationFee refunds part or all of our fee on the intent's charge.
