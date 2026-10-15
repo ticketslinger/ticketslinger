@@ -179,13 +179,26 @@ func (s *Stripe) RefundApplicationFee(ctx context.Context, in plugin.FeeRefundIn
 	if pi.LatestCharge == nil || pi.LatestCharge.ApplicationFee == nil || pi.LatestCharge.ApplicationFee.ID == "" {
 		return "", &plugin.ProviderError{Op: "stripe: fee refund", Refused: true, Code: "no_application_fee"}
 	}
-	p := &stripe.FeeRefundCreateParams{ID: stripe.String(pi.LatestCharge.ApplicationFee.ID), Amount: stripe.Int64(in.AmountCents)}
+	feeID := pi.LatestCharge.ApplicationFee.ID
+	p := &stripe.FeeRefundCreateParams{ID: stripe.String(feeID), Amount: stripe.Int64(in.AmountCents)}
 	p.SetIdempotencyKey(in.IdempotencyKey)
 	fr, err := s.c.V1FeeRefunds.Create(ctx, p)
-	if err != nil {
-		return "", fail("fee refund", err)
+	if err == nil {
+		return fr.ID, nil
 	}
-	return fr.ID, nil
+	err = fail("fee refund", err)
+	if !errors.Is(err, plugin.ErrRefused) {
+		return "", err
+	}
+	// Stripe has no error code for a fee that's already refunded, so read
+	// the fee (ours: on the platform) rather than guess from the refusal.
+	// Done is all of it back, or enough back for this share with too little
+	// left for it; anything else is the refusal as it came.
+	fee, ferr := s.c.V1ApplicationFees.Retrieve(ctx, feeID, nil)
+	if ferr == nil && (fee.Refunded || fee.AmountRefunded >= in.AmountCents && fee.Amount-fee.AmountRefunded < in.AmountCents) {
+		return "", plugin.ErrAlreadyRefunded
+	}
+	return "", err
 }
 
 func (s *Stripe) PaymentIntentStatus(ctx context.Context, account, intentID string) (string, error) {

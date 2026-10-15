@@ -32,6 +32,8 @@ type recorder struct {
 	reqs   []request
 	status int
 	fail   string
+	only   string            // fail only this path ("" fails every one)
+	bodies map[string]string // answers by path, ahead of the fixtures
 }
 
 func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -40,9 +42,13 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer rec.mu.Unlock()
 	rec.reqs = append(rec.reqs, request{r.Method, r.URL.Path, r.Header.Get("Stripe-Account"), r.Header.Get("Idempotency-Key"), r.Header.Get("Authorization"), r.Form})
 	w.Header().Set("Content-Type", "application/json")
-	if rec.fail != "" {
+	if rec.fail != "" && (rec.only == "" || rec.only == r.URL.Path) {
 		w.WriteHeader(rec.status)
 		_, _ = w.Write([]byte(rec.fail))
+		return
+	}
+	if b, ok := rec.bodies[r.URL.Path]; ok {
+		_, _ = w.Write([]byte(b))
 		return
 	}
 	file := map[string]string{
@@ -218,6 +224,43 @@ func TestFeeRefundWithNoFeeIsRefused(t *testing.T) {
 	var pe *plugin.ProviderError
 	if !errors.As(err, &pe) || pe.Code != "no_application_fee" {
 		t.Fatalf("%+v", err)
+	}
+}
+
+// Stripe has no error code for a fee that's already refunded, so a refused
+// fee refund reads the fee itself, on the platform: refunded already is
+// ErrAlreadyRefunded, anything else stays the refusal it was.
+func TestRefusedFeeRefundReadsTheFee(t *testing.T) {
+	for name, tc := range map[string]struct {
+		fee  string
+		done bool
+	}{
+		"fully refunded":       {`{"id": "fee_test1", "object": "application_fee", "amount": 200, "amount_refunded": 200, "refunded": true}`, true},
+		"this share refunded":  {`{"id": "fee_test1", "object": "application_fee", "amount": 200, "amount_refunded": 150, "refunded": false}`, true},
+		"room left":            {`{"id": "fee_test1", "object": "application_fee", "amount": 200, "amount_refunded": 0, "refunded": false}`, false},
+		"not this one's share": {`{"id": "fee_test1", "object": "application_fee", "amount": 200, "amount_refunded": 50, "refunded": false}`, false},
+		// Another refund's share went back, and this one's still fits: Stripe said no for some other reason.
+		"another share refunded": {`{"id": "fee_test1", "object": "application_fee", "amount": 200, "amount_refunded": 100, "refunded": false}`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, rec := newStripe(t)
+			rec.status, rec.only = 400, "/v1/application_fees/fee_test1/refunds"
+			rec.fail = `{"error":{"type":"invalid_request_error","code":"some_new_code","message":"no"}}`
+			rec.bodies = map[string]string{"/v1/application_fees/fee_test1": tc.fee}
+			_, err := s.RefundApplicationFee(context.Background(), plugin.FeeRefundInput{Account: "acct_test1", PaymentIntentID: "pi_test1",
+				AmountCents: 100, IdempotencyKey: "appfee-r1-0"})
+			if got := errors.Is(err, plugin.ErrAlreadyRefunded); got != tc.done {
+				t.Fatalf("%v: already refunded %v, want %v", err, got, tc.done)
+			}
+			var pe *plugin.ProviderError
+			if !tc.done && (!errors.As(err, &pe) || !pe.Refused || pe.Code != "some_new_code") {
+				t.Fatalf("%v, want the refusal as it was", err)
+			}
+			read := rec.last()
+			if read.method != http.MethodGet || read.path != "/v1/application_fees/fee_test1" || read.account != "" {
+				t.Fatalf("fee read %+v, want a GET on the platform", read)
+			}
+		})
 	}
 }
 

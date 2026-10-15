@@ -86,15 +86,15 @@ func TestOversellProof(t *testing.T) {
 		}
 	}
 	wg.Wait()
-	var valid, live, paid, cancelled, refundJobs int
+	var valid, live, paid, cancelled, refunds int
 	q := testdb.Owner(t, s.Pool)
 	f.must(t, q.QueryRow(ctx, `select count(*) from tickets where status = 'valid'`).Scan(&valid))
 	f.must(t, q.QueryRow(ctx, `select coalesce(sum(h.quantity), 0) from holds h join checkouts c on c.id = h.checkout_id
 		where c.status in ('open', 'paying') and c.expires_at > now()`).Scan(&live))
 	f.must(t, q.QueryRow(ctx, `select count(*) filter (where status = 'paid'), count(*) filter (where status = 'cancelled') from orders`).Scan(&paid, &cancelled))
-	f.must(t, q.QueryRow(ctx, `select count(*) from jobs where kind = 'refund_payment'`).Scan(&refundJobs))
-	if valid+live != 100 || valid != paid || paid+cancelled != 100 || cancelled != refundJobs || int64(cancelled) != newcomers.Load() {
-		t.Fatalf("valid %d + held %d (want 100); paid %d, cancelled %d, refund jobs %d, newcomers %d", valid, live, paid, cancelled, refundJobs, newcomers.Load())
+	f.must(t, q.QueryRow(ctx, `select count(*) from refunds where reason = 'late_payment'`).Scan(&refunds))
+	if valid+live != 100 || valid != paid || paid+cancelled != 100 || cancelled != refunds || int64(cancelled) != newcomers.Load() {
+		t.Fatalf("valid %d + held %d (want 100); paid %d, cancelled %d, late refunds %d, newcomers %d", valid, live, paid, cancelled, refunds, newcomers.Load())
 	}
 	t.Logf("valid %d, held %d, paid %d, cancelled and refunded %d, newcomers %d", valid, live, paid, cancelled, newcomers.Load())
 }
