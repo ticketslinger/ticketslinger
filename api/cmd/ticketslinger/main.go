@@ -78,9 +78,6 @@ func serve() error {
 	if cfg.SecretKey == nil {
 		return errors.New("TS_SECRET_KEY is required (base64 of 32 random bytes, e.g. `openssl rand -base64 32`)")
 	}
-	if cfg.TurnstileSecret == "" {
-		slog.Warn("TS_TURNSTILE_SECRET is unset: sign-up, repeated failed sign-ins and checkouts go without a Turnstile check")
-	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
 	pool, err := db.Open(ctx, cfg.DatabaseURL)
@@ -154,6 +151,15 @@ func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Hand
 			}
 		}
 		mail = mem
+	} else if cfg.TurnstileSecret == "" {
+		// Sign-in's account-wide brake leans on Turnstile; without it, the
+		// account throttle is all that stands between a botnet and a password.
+		if os.Getenv("TS_ALLOW_NO_TURNSTILE") != "1" {
+			return nil, nil, errors.New("TS_TURNSTILE_SECRET is required: it guards sign-up, repeated failed sign-ins and checkouts. " +
+				"Set TS_ALLOW_NO_TURNSTILE=1 to run without it anyway")
+		}
+		slog.Warn("RUNNING WITHOUT TURNSTILE (TS_ALLOW_NO_TURNSTILE=1): sign-up and checkouts go unchecked, " +
+			"and an account under attack is only slowed to one sign-in attempt every 10 seconds")
 	}
 	pay := paymentProvider(cfg, testMode)
 	ts := &turnstile.Verifier{Secret: cfg.TurnstileSecret, URL: cfg.TurnstileVerifyURL, Client: &http.Client{Timeout: 2 * time.Second}}

@@ -102,7 +102,12 @@ func TestPaidOrderOverHTTP(t *testing.T) {
 	pi, _, _ := strings.Cut(pay["client_secret"].(string), "_secret_")
 	s.must(s.webhook(event("evt_paid", "payment_intent.succeeded", map[string]any{"id": pi, "object": "payment_intent",
 		"amount": pay["amount_cents"], "currency": "usd", "status": "succeeded"}), webhookSecret, time.Now()), 200)
-	c := s.must(s.send("", "", "GET", "/v1/checkouts/"+token, ""), 200)
+	cres := s.send("", "", "GET", "/v1/checkouts/"+token, "")
+	// It carries order_url, the key to the tickets: never cached.
+	if cres.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("checkout headers %v, want no-store", cres.Header)
+	}
+	c := s.must(cres, 200)
 	link, err := url.Parse(c["order_url"].(string))
 	if err != nil || c["status"] != "completed" {
 		t.Fatalf("checkout after payment: %v", c)

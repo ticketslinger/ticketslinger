@@ -484,6 +484,8 @@ func (s *Service) checkoutOrg(ctx context.Context, token string) (uuid.UUID, err
 }
 
 // GetCheckout finds a checkout by its token. Unknown tokens are ErrNotFound.
+// A hold that ran out reads as expired, unless the order already has a
+// payment: then the card may be charged, and it stays paying.
 // A completed one carries its order's code and link: the token proves it's
 // the buyer asking.
 func (s *Service) GetCheckout(ctx context.Context, token string) (Checkout, error) {
@@ -497,7 +499,10 @@ func (s *Service) GetCheckout(ctx context.Context, token string) (Checkout, erro
 		var promoID, orderID *uuid.UUID
 		var feeMode string
 		if err := tx.QueryRow(ctx, `select c.id, c.organizer_id, c.event_id,
-				case when c.status <> 'completed' and c.expires_at <= statement_timestamp() then 'expired' else c.status end,
+				case when c.status = 'completed' or c.expires_at > statement_timestamp() then c.status
+					-- A payment exists, so a card may already be charged: it stays paying until the webhook settles it.
+					when c.status = 'paying' and exists (select 1 from payments y where y.order_id = o.id) then 'paying'
+					else 'expired' end,
 				c.expires_at, c.promo_code_id, coalesce(p.code, ''), coalesce(p.kind, ''), coalesce(p.value, 0), e.fee_mode,
 				o.id, coalesce(o.code, '')
 			from checkouts c join events e on e.id = c.event_id left join promo_codes p on p.id = c.promo_code_id

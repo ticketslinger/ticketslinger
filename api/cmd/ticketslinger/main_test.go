@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -44,12 +46,46 @@ func get(t *testing.T, h http.Handler, path string, header ...string) (int, stri
 }
 
 func TestTestMailEndpointIsAbsentWithoutTestMode(t *testing.T) {
-	h, _, err := newHandler(config.Config{HTTPAddr: "127.0.0.1:3000"}, nil, false)
+	h, _, err := newHandler(config.Config{HTTPAddr: "127.0.0.1:3000", TurnstileSecret: "s"}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if code, body := get(t, h, "/__test/last-email?to=a@example.com"); code != 404 || !strings.Contains(body, "not_found") {
 		t.Fatalf("got %d %s, want the API's own 404", code, body)
+	}
+}
+
+// Outside test mode, sign-in leans on Turnstile: no secret, no start,
+// unless the operator says so out loud and the log says so too.
+func TestServeNeedsTurnstileOutsideTestMode(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	bare := config.Config{HTTPAddr: "127.0.0.1:3000"}
+	t.Setenv("TS_ALLOW_NO_TURNSTILE", "")
+	if _, _, err := newHandler(bare, nil, false); err == nil || !strings.Contains(err.Error(), "TS_TURNSTILE_SECRET") {
+		t.Fatalf("no secret: %v, want a refusal naming TS_TURNSTILE_SECRET", err)
+	}
+	for _, v := range []string{"0", "true", "yes"} {
+		t.Setenv("TS_ALLOW_NO_TURNSTILE", v)
+		if _, _, err := newHandler(bare, nil, false); err == nil {
+			t.Fatalf("TS_ALLOW_NO_TURNSTILE=%s started without Turnstile", v)
+		}
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("refusals logged: %s", logs.String())
+	}
+	t.Setenv("TS_ALLOW_NO_TURNSTILE", "1")
+	if _, _, err := newHandler(bare, nil, false); err != nil {
+		t.Fatalf("allowed: %v", err)
+	}
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "TS_ALLOW_NO_TURNSTILE") {
+		t.Fatalf("allowed without a loud warning: %q", logs.String())
+	}
+	t.Setenv("TS_ALLOW_NO_TURNSTILE", "")
+	if _, _, err := newHandler(local("127.0.0.1:3000"), nil, true); err != nil {
+		t.Fatalf("test mode without a secret: %v", err)
 	}
 }
 
@@ -209,6 +245,7 @@ func TestTestModeRefusesLiveStripeKeys(t *testing.T) {
 		} else if strings.Contains(err.Error(), "_abc") {
 			t.Errorf("error %q repeats the key", err)
 		}
+		cfg.TurnstileSecret = "s"
 		if _, _, err := newHandler(cfg, nil, false); err != nil {
 			t.Errorf("%+v outside test mode: %v", c, err)
 		}

@@ -14,8 +14,8 @@ import (
 
 const resetScope = `select set_config('app.user_id', '', true), set_config('app.api_key_id', '', true), set_config('app.organizer_id', $1, true)`
 
-// Public runs fn read-only as ts_public: live events, their visible ticket
-// types and questions, and organizer names. Nothing else.
+// Public runs fn read-only as ts_public: the ids and slugs of live events
+// and of their organizers. Nothing else.
 func Public(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) error {
 	return pgx.BeginTxFunc(ctx, pool, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `set local role ts_public`); err != nil {

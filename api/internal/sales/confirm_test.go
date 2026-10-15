@@ -1,11 +1,14 @@
 package sales_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stripe/stripe-go/v87"
 
+	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/payments"
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
@@ -418,7 +422,7 @@ func TestRefundJobRefundsLatePayment(t *testing.T) {
 	refund := sales.RefundPayment(s)
 	f.must(t, refund(ctx, payload))
 	f.must(t, refund(ctx, payload))
-	want := plugin.RefundInput{Account: "acct_fake1", PaymentIntentID: pi.ID, RefundApplicationFee: true, IdempotencyKey: "refund-" + order.String()}
+	want := plugin.RefundInput{Account: "acct_fake1", PaymentIntentID: pi.ID, RefundApplicationFee: true, IdempotencyKey: "refund-" + order.String() + "-0"}
 	if calls := rec.calls(); len(calls) != 1 || calls[0] != want {
 		t.Fatalf("refunds asked for %+v, want once %+v", calls, want)
 	}
@@ -524,6 +528,149 @@ func TestRefundJobFinishesWhenStripeSaysAlreadyRefunded(t *testing.T) {
 	fake.FailNext(errors.New("stripe: refund: boom"))
 	if err := sales.RefundPayment(s)(ctx, payload); err == nil {
 		t.Fatal("a failed refund reported success")
+	}
+}
+
+// Stripe replays a refusal under one idempotency key for 24 hours, longer
+// than every retry. A definite refusal moves the order to its next key;
+// anything that might have refunded already (no answer, 5xx, 409, 429) keeps it.
+func TestRefundRetriesWithANewKeyOnlyAfterARefusal(t *testing.T) {
+	s, _ := newPaidService(t)
+	rec := &refundRecorder{Fake: payments.NewFake()}
+	s.Payments = rec
+	f := seed(t, s.Pool, seedOpts{quota: 1, price: 2500})
+	ctx := context.Background()
+	c, pi := paying(t, s, f, rec.Fake, sales.Details{Email: "late@example.com"}, sales.Item{TicketTypeID: f.general, Quantity: 1})
+	expire(t, f, c.ID)
+	f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
+	f.must(t, s.HandleStripeEvent(ctx, succeeded(pi.ID, "acct_fake1", c.Quote.TotalCents, 1)))
+	order, _, _ := f.orderOf(t, c.ID)
+	var payload []byte
+	f.must(t, f.owner.QueryRow(ctx, `select payload from jobs where kind = 'refund_payment'`).Scan(&payload))
+	refund := sales.RefundPayment(s)
+
+	maybe := []error{
+		&plugin.ProviderError{Op: "refund", Cause: "timeout"},
+		&plugin.ProviderError{Op: "refund", Status: 500},
+		&plugin.ProviderError{Op: "refund", Status: 409},
+		&plugin.ProviderError{Op: "refund", Status: 429},
+		errors.New("network"),
+	}
+	for _, e := range maybe {
+		rec.FailNext(e)
+		if err := refund(ctx, payload); err == nil {
+			t.Fatalf("%v: reported success", e)
+		}
+	}
+	rec.FailNext(&plugin.ProviderError{Op: "refund", Refused: true, Status: 400, Code: "balance_insufficient"})
+	if err := refund(ctx, payload); err == nil {
+		t.Fatal("a refused refund reported success")
+	}
+	f.must(t, refund(ctx, payload))
+	var keys []string
+	for _, in := range rec.calls() {
+		keys = append(keys, in.IdempotencyKey)
+	}
+	k0, k1 := "refund-"+order.String()+"-0", "refund-"+order.String()+"-1"
+	want := []string{k0, k0, k0, k0, k0, k0, k1}
+	if !slices.Equal(keys, want) {
+		t.Fatalf("keys %v, want %v", keys, want)
+	}
+	if _, _, st := f.orderOf(t, c.ID); st != "refunded" {
+		t.Fatalf("order %s, want refunded", st)
+	}
+}
+
+// A refund that runs out of tries is parked by the queue. It must not stay
+// quiet: an ERROR in the log and a system row in the organizer's audit log.
+func TestAStuckRefundSurfaces(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 1, price: 2500})
+	ctx := context.Background()
+	c, pi := paying(t, s, f, fake, sales.Details{Email: "late@example.com"}, sales.Item{TicketTypeID: f.general, Quantity: 1})
+	expire(t, f, c.ID)
+	f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
+	f.must(t, s.HandleStripeEvent(ctx, succeeded(pi.ID, "acct_fake1", c.Quote.TotalCents, 1)))
+	order, _, _ := f.orderOf(t, c.ID)
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	w := &jobs.Worker{Pool: s.Pool, Handlers: map[string]jobs.Handler{sales.RefundPaymentJob: sales.RefundPayment(s)}}
+	stuck := func() int {
+		return f.count(t, `select count(*) from audit_log where action = 'order.refund_stuck' and actor_system and entity_id = '`+order.String()+`'`)
+	}
+
+	// Ninth try fails: retried later, nothing raised yet.
+	f.exec(t, `update jobs set attempts = 8 where kind = 'refund_payment'`)
+	fake.FailNext(&plugin.ProviderError{Op: "refund", Refused: true, Status: 400})
+	if ran, err := w.RunOnce(ctx); !ran || err != nil {
+		t.Fatalf("ninth try: %v %v", ran, err)
+	}
+	if stuck() != 0 || strings.Contains(logs.String(), "level=ERROR") {
+		t.Fatalf("raised before the last try: %d rows, log %s", stuck(), logs.String())
+	}
+	// The tenth, and last, fails too.
+	f.exec(t, `update jobs set run_at = now() where kind = 'refund_payment'`)
+	fake.FailNext(&plugin.ProviderError{Op: "refund", Refused: true, Status: 400})
+	if ran, err := w.RunOnce(ctx); !ran || err != nil {
+		t.Fatalf("last try: %v %v", ran, err)
+	}
+	if n := f.count(t, `select count(*) from jobs where kind = 'refund_payment' and run_at = 'infinity'`); n != 1 {
+		t.Fatalf("%d parked refund jobs, want 1", n)
+	}
+	if stuck() != 1 {
+		t.Fatalf("%d order.refund_stuck rows, want 1", stuck())
+	}
+	got := logs.String()
+	if !strings.Contains(got, "level=ERROR") || !strings.Contains(got, order.String()) {
+		t.Fatalf("no ERROR naming the order:\n%s", got)
+	}
+	if strings.Contains(got, "late@example.com") || strings.Contains(got, "secret") {
+		t.Fatalf("the log carries the buyer's email or a secret:\n%s", got)
+	}
+}
+
+// cancelling is the fake provider whose refund is cut short by a shutdown.
+type cancelling struct {
+	*payments.Fake
+	cancel context.CancelFunc
+}
+
+func (c *cancelling) Refund(ctx context.Context, _ plugin.RefundInput) (string, error) {
+	c.cancel()
+	return "", ctx.Err()
+}
+
+// A shutdown during the last try isn't a stuck refund: the job goes back to
+// the queue, with no ERROR and no order.refund_stuck row.
+func TestShutdownOnTheLastTryRaisesNothing(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 1, price: 2500})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c, pi := paying(t, s, f, fake, sales.Details{Email: "late@example.com"}, sales.Item{TicketTypeID: f.general, Quantity: 1})
+	expire(t, f, c.ID)
+	f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
+	f.must(t, s.HandleStripeEvent(ctx, succeeded(pi.ID, "acct_fake1", c.Quote.TotalCents, 1)))
+	s.Payments = &cancelling{Fake: fake, cancel: cancel}
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	f.exec(t, `update jobs set attempts = 9 where kind = 'refund_payment'`)
+	w := &jobs.Worker{Pool: s.Pool, Handlers: map[string]jobs.Handler{sales.RefundPaymentJob: sales.RefundPayment(s)}}
+	if ran, err := w.RunOnce(ctx); !ran || err != nil {
+		t.Fatalf("last try: %v %v", ran, err)
+	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'order.refund_stuck'`); n != 0 {
+		t.Fatalf("%d order.refund_stuck rows after a shutdown, want 0", n)
+	}
+	if strings.Contains(logs.String(), "level=ERROR") {
+		t.Fatalf("a shutdown logged an ERROR:\n%s", logs.String())
+	}
+	if n := f.count(t, `select count(*) from jobs where kind = 'refund_payment' and attempts = 9 and run_at <> 'infinity'`); n != 1 {
+		t.Fatalf("job not handed back: %d", n)
 	}
 }
 

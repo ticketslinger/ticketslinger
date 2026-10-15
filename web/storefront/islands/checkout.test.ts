@@ -1,5 +1,17 @@
 import { expect, test } from "bun:test";
-import { answersFor, type CheckoutData, fieldErrors, payload } from "./checkout";
+import { h } from "preact";
+import { render } from "preact-render-to-string";
+import {
+  answersFor,
+  type CheckoutData,
+  DECLINED_LATE,
+  fieldErrors,
+  firstPhase,
+  PENDING,
+  Pending,
+  payload,
+  waitStep,
+} from "./checkout";
 import { eventPath, orderPath } from "./links";
 
 type Question = CheckoutData["questions"][number];
@@ -106,4 +118,65 @@ test("an order link is rebuilt from its code and token, never its path", () => {
   expect(orderPath(`/orders/TS-ILOU0?t=${T}`)).toBeUndefined();
   expect(orderPath(`/orders/TS-7K2QF?t=${T}`, "TS-ABCDE")).toBeUndefined();
   expect(orderPath("not a url at all")).toBeUndefined();
+});
+
+test("while a payment may be going through, a lapsed hold never reads as back on sale", () => {
+  const now = Date.parse("2027-05-02T01:20:00Z");
+  const past = "2027-05-02T01:15:00Z";
+  const ahead = "2027-05-02T01:25:00Z";
+  expect(waitStep({ status: "completed", expires_at: past }, true, now)).toBe("done");
+  expect(waitStep({ status: "paying", expires_at: ahead }, true, now)).toBe("wait");
+  // The hold ran out after the card went in: keep waiting, with the pending words.
+  expect(waitStep({ status: "paying", expires_at: past }, true, now)).toBe("late");
+  expect(waitStep({ status: "paying", expires_at: past }, false, now)).toBe("late");
+  // We started a payment on this page: even "expired" can't mean back on sale.
+  expect(waitStep({ status: "expired", expires_at: past }, true, now)).toBe("late");
+  // Nothing started here, and the API says no payment exists: the hold really is over.
+  expect(waitStep({ status: "expired", expires_at: past }, false, now)).toBe("over");
+  expect(PENDING).toBe(
+    "Your payment may still be going through. We'll email you the moment it does. Check your inbox before you try again.",
+  );
+  expect(PENDING).not.toContain("back on sale");
+});
+
+test("back from the bank with a decline is never the pending page", () => {
+  const now = Date.parse("2027-05-02T01:20:00Z");
+  const lapsed = { status: "paying" as const, expires_at: "2027-05-02T01:15:00Z" };
+  const live = { status: "paying" as const, expires_at: "2027-05-02T01:25:00Z" };
+  const back = (q: string) => new URLSearchParams(q);
+  const failed = back("payment_intent=pi_1&redirect_status=failed");
+  // Hold gone: the decline, with the way back (the over phase carries the event link).
+  expect(firstPhase(failed, lapsed, now)).toEqual({ kind: "over", message: DECLINED_LATE });
+  // Hold still running: the form again, to try another card.
+  expect(firstPhase(failed, live, now)).toEqual({ kind: "details" });
+  expect(DECLINED_LATE).not.toContain("going through");
+  // A pass waits for the webhook; a payment past its hold gets the pending words.
+  const ok = back("payment_intent=pi_1&redirect_status=succeeded");
+  expect(firstPhase(ok, lapsed, now)).toMatchObject({ kind: "waiting", started: true });
+  expect(firstPhase(back(""), lapsed, now)).toMatchObject({ kind: "waiting", late: true });
+  expect(firstPhase(back(""), { status: "open", expires_at: lapsed.expires_at }, now)).toEqual({
+    kind: "details",
+  });
+});
+
+test("the pending page still has a way back to the event", () => {
+  const data = {
+    token: "t",
+    status: "paying",
+    expires_at: "2027-05-02T01:15:00Z",
+    quote: {} as CheckoutData["quote"],
+    items,
+    ticket_names: {},
+    questions: [],
+    event_name: "Spring Gala",
+    timezone: "UTC",
+    organizer: "acme",
+    event_slug: "gala",
+  } satisfies CheckoutData;
+  const html = render(h(Pending, { data }));
+  expect(html).toContain(PENDING);
+  expect(html).toContain('href="/acme/gala"');
+  expect(html).toContain("Back to Spring Gala");
+  // No slugs, no link: never a made-up address.
+  expect(render(h(Pending, { data: { ...data, organizer: "" } }))).not.toContain("href");
 });

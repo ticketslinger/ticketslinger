@@ -18,6 +18,8 @@ export type PayRequest = Schemas["PayCheckout"];
 /** What the server puts in #checkout-data. */
 export type CheckoutData = {
   token: string;
+  /** The checkout's status when the page was drawn. */
+  status: Schemas["Checkout"]["status"];
   expires_at: string;
   quote: Schemas["Quote"];
   items: Item[];
@@ -106,8 +108,75 @@ const MESSAGES: Record<string, string> = {
   payments_unavailable: BUSY,
   idempotency_in_progress: BUSY,
 };
+/** Once a card may have been charged. Never "back on sale", never "start again". */
+export const PENDING =
+  "Your payment may still be going through. We'll email you the moment it does. Check your inbox before you try again.";
 // Answers that end this checkout: the buyer has to start again from the event.
-const OVER: Record<string, string> = { checkout_expired: EXPIRED, price_changed: PRICE_CHANGED };
+// checkout_expired isn't one: a payment may already exist, so we ask the checkout first.
+const OVER: Record<string, string> = { price_changed: PRICE_CHANGED };
+
+/**
+ * What one read of the checkout means while we wait on a payment. started: this page
+ * handed a card to Stripe (or came back from the bank), so a charge may exist.
+ * The API keeps a checkout with a payment "paying" past its hold; "expired" means none.
+ */
+export function waitStep(
+  c: { status: string; expires_at: string },
+  started: boolean,
+  now = Date.now(),
+): "done" | "over" | "late" | "wait" {
+  if (c.status === "completed") return "done";
+  if (c.status === "expired") return started ? "late" : "over";
+  if (c.status === "paying" && Date.parse(c.expires_at) <= now) return "late";
+  return "wait";
+}
+
+const DECLINED = "Your bank didn't approve that payment. Try again, or use another card.";
+/** A decline after the hold ran out: nothing was charged, and there's nothing left to pay for here. */
+export const DECLINED_LATE =
+  "Your bank didn't approve that payment, so you haven't been charged. Your hold ran out in the meantime, so head back to the event to try again.";
+
+/**
+ * Where the page starts. Back from the bank: a decline is a decline (never PENDING), and a
+ * pass waits for the webhook. A payment out there past its hold waits, with the pending words.
+ */
+export function firstPhase(
+  back: URLSearchParams,
+  data: Pick<CheckoutData, "status" | "expires_at">,
+  now = Date.now(),
+): Phase {
+  const lapsed = Date.parse(data.expires_at) <= now;
+  if (back.get("redirect_status") === "failed") {
+    return lapsed ? { kind: "over", message: DECLINED_LATE } : { kind: "details" };
+  }
+  if (back.has("payment_intent")) return { kind: "waiting", test: false, started: true };
+  if (data.status === "paying" && lapsed) {
+    return { kind: "waiting", test: false, started: true, late: true };
+  }
+  return { kind: "details" };
+}
+
+/** The way back to the event, when both slugs check out. */
+function BackLink({ data }: { data: CheckoutData }) {
+  const to = eventPath(data);
+  return to ? (
+    <a class="button" href={to}>
+      Back to {data.event_name}
+    </a>
+  ) : null;
+}
+
+/** A card may have been charged: say so, and still leave a way out. */
+export function Pending({ data }: { data: CheckoutData }) {
+  return (
+    <div class="pay">
+      <p class="status-line" role="status">
+        {PENDING}
+      </p>
+      <BackLink data={data} />
+    </div>
+  );
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -150,11 +219,11 @@ async function pay(token: string, body: PayRequest, key: string): Promise<Answer
   }
 }
 
-type Phase =
+export type Phase =
   | { kind: "details" }
   | { kind: "card"; amount: number }
-  | { kind: "waiting"; test: boolean }
-  | { kind: "slow" }
+  // late: the hold ran out, or two minutes passed, while a card may be charged.
+  | { kind: "waiting"; test: boolean; started: boolean; late?: boolean }
   | { kind: "over"; message: string };
 
 // In the event's own time zone, named, so "7:42 PM MDT" means one moment wherever the buyer is.
@@ -181,13 +250,11 @@ function Checkout({ data }: { data: CheckoutData }) {
     return q;
   });
   const failed = back.get("redirect_status") === "failed";
-  const [phase, setPhase] = useState<Phase>(
-    back.has("payment_intent") && !failed ? { kind: "waiting", test: false } : { kind: "details" },
-  );
+  const [phase, setPhase] = useState<Phase>(() => firstPhase(back, data));
+  // The last word on this page's payment was a decline: nothing was charged.
+  const declined = useRef(failed);
   const [sending, setSending] = useState(false);
-  const [message, setMessage] = useState<string | undefined>(
-    failed ? "Your bank didn't approve that payment. Try again, or use another card." : undefined,
-  );
+  const [message, setMessage] = useState<string | undefined>(failed ? DECLINED : undefined);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [cardError, setCardError] = useState<string>();
   const [now, setNow] = useState(Date.now());
@@ -201,10 +268,18 @@ function Checkout({ data }: { data: CheckoutData }) {
     return () => clearInterval(t);
   }, []);
   // Only before paying: paying extends the hold, and from then on the API says when it's over.
+  // Even here we ask first: another tab may have started a payment on this checkout.
   useEffect(() => {
-    if (phase.kind === "details" && now >= expires) setPhase({ kind: "over", message: EXPIRED });
+    if (phase.kind === "details" && now >= expires) {
+      setPhase(
+        declined.current
+          ? { kind: "over", message: DECLINED_LATE }
+          : { kind: "waiting", test: false, started: false },
+      );
+    }
   }, [now, phase.kind, expires]);
 
+  const started = phase.kind === "waiting" && phase.started;
   useEffect(() => {
     if (phase.kind !== "waiting") return;
     let live = true;
@@ -218,21 +293,24 @@ function Checkout({ data }: { data: CheckoutData }) {
           });
           if (r.ok) {
             const c = await r.json();
-            if (c.status === "completed") {
-              if (!go(c.order_url, c.order_code)) setPhase({ kind: "over", message: GENERIC });
+            const step = waitStep(c, started);
+            if (step === "done") {
+              if (!go(c.order_url, c.order_code)) setPhase({ kind: "over", message: PENDING });
               return;
             }
-            if (c.status === "expired") return setPhase({ kind: "over", message: EXPIRED });
+            if (step === "over") return setPhase({ kind: "over", message: EXPIRED });
+            // Keep polling: the webhook may still confirm it.
+            if (step === "late") setPhase((p) => (p.kind === "waiting" ? { ...p, late: true } : p));
           }
         } catch {}
         await sleep(1500);
       }
-      if (live) setPhase({ kind: "slow" });
+      if (live) setPhase((p) => (p.kind === "waiting" ? { ...p, late: true } : p));
     })();
     return () => {
       live = false;
     };
-  }, [phase.kind, data.token]);
+  }, [phase.kind, started, data.token]);
 
   useEffect(() => {
     const s = start.current;
@@ -269,11 +347,17 @@ function Checkout({ data }: { data: CheckoutData }) {
       return setPhase(
         res.kind === "stripe"
           ? { kind: "card", amount: res.amount_cents }
-          : { kind: "waiting", test: true },
+          : { kind: "waiting", test: true, started: true },
       );
     }
     // Already paid: the checkout knows its order.
-    if (err.code === "checkout_completed") return setPhase({ kind: "waiting", test: false });
+    if (err.code === "checkout_completed") {
+      return setPhase({ kind: "waiting", test: false, started: true });
+    }
+    // The checkout says whether a payment is still out there.
+    if (err.code === "checkout_expired") {
+      return setPhase({ kind: "waiting", test: false, started: false });
+    }
     const over = OVER[err.code ?? ""];
     if (over) return setPhase({ kind: "over", message: over });
     const byField = fieldErrors(err);
@@ -300,8 +384,12 @@ function Checkout({ data }: { data: CheckoutData }) {
     });
     setSending(false);
     // Stripe's own words for the card: they say what the bank said.
-    if (r.error) return setCardError(r.error.message ?? GENERIC);
-    setPhase({ kind: "waiting", test: false });
+    if (r.error) {
+      declined.current = true;
+      return setCardError(r.error.message ?? GENERIC);
+    }
+    declined.current = false;
+    setPhase({ kind: "waiting", test: false, started: true });
   }
 
   if (phase.kind === "over") {
@@ -310,22 +398,17 @@ function Checkout({ data }: { data: CheckoutData }) {
         <p class="notice" role="alert">
           {phase.message}
         </p>
-        {eventPath(data) && (
-          <a class="button" href={eventPath(data)}>
-            Back to {data.event_name}
-          </a>
-        )}
+        <BackLink data={data} />
       </div>
     );
   }
-  if (phase.kind === "waiting" || phase.kind === "slow") {
+  if (phase.kind === "waiting" && phase.late) return <Pending data={data} />;
+  if (phase.kind === "waiting") {
     return (
       <p class="status-line" role="status">
-        {phase.kind === "slow"
-          ? "This is taking longer than it should. If your payment went through, your tickets will arrive by email."
-          : phase.test
-            ? "Test mode: no card needed. Waiting for the payment to go through…"
-            : "Waiting for the payment to go through…"}
+        {phase.test
+          ? "Test mode: no card needed. Waiting for the payment to go through…"
+          : "Waiting for the payment to go through…"}
       </p>
     );
   }

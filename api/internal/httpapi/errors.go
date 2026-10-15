@@ -35,6 +35,14 @@ type detailError struct {
 
 func (e detailError) Unwrap() error { return e.apiError }
 
+// retryError is an apiError that says when to come back (Retry-After, in seconds).
+type retryError struct {
+	*apiError
+	after string
+}
+
+func (e retryError) Unwrap() error { return e.apiError }
+
 // invalidField is a 422 about the request property field.
 func invalidField(code, field, msg string) error {
 	return fieldError{&apiError{422, code, msg}, field}
@@ -74,10 +82,20 @@ func notFound() error {
 	return &apiError{404, "not_found", "That doesn't exist, or you don't have access to it."}
 }
 
+// route names r's endpoint for a log line by its mux pattern
+// ("POST /v1/checkouts/{token}/pay"), never its path: a path can carry a
+// bearer token (a checkout's), and logs are read far more widely.
+func route(r *http.Request) string {
+	if r.Pattern == "" {
+		return "unmatched"
+	}
+	return r.Pattern
+}
+
 // writeBadRequest answers a request that couldn't be decoded. The decoder's
 // detail goes to the log, not the caller.
 func writeBadRequest(w http.ResponseWriter, r *http.Request, err error) {
-	slog.InfoContext(r.Context(), "bad request", "path", r.URL.Path, "err", err)
+	slog.InfoContext(r.Context(), "bad request", "route", route(r), "err", err)
 	writeError(w, &apiError{400, "bad_request", "That request couldn't be read."})
 }
 
@@ -91,6 +109,10 @@ func writeError(w http.ResponseWriter, err error) {
 	if !errors.As(err, &ae) {
 		slog.Error("unhandled error", "err", err)
 		ae = &apiError{500, "internal", "Something went wrong on our side. Please try again."}
+	}
+	var re retryError
+	if errors.As(err, &re) {
+		w.Header().Set("Retry-After", re.after)
 	}
 	body := map[string]any{"code": ae.Code, "message": ae.Message}
 	var fe fieldError
@@ -110,7 +132,8 @@ func recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if v := recover(); v != nil {
-				slog.Error("panic", "value", v, "path", r.URL.Path)
+				// The mux set r.Pattern on this same request before the handler ran.
+				slog.Error("panic", "value", v, "route", route(r))
 				writeError(w, errors.New("panic"))
 			}
 		}()

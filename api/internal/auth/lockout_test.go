@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
@@ -128,13 +129,103 @@ func TestAccountWideBrake(t *testing.T) {
 	}
 }
 
-func TestAccountWideBrakeIsOffWithoutTurnstile(t *testing.T) {
+// Without Turnstile, ten failures across addresses slow the whole account
+// to one attempt every 10 seconds, from anywhere. It never locks: the owner
+// still gets in, and a refused attempt isn't counted against anyone.
+func TestAccountWideBrakeThrottlesWithoutTurnstile(t *testing.T) {
+	pool := testdb.New(t)
+	s := auth.NewService(pool, &mailer.Memory{}, auth.Options{Origin: "http://localhost:5173", SecretKey: testKey})
+	if _, _, err := s.Signup(context.Background(), "a@example.com", pw, "A", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now()
+	auth.SetClock(s, func() time.Time { return clock })
+	for i := 0; i < 10; i++ {
+		if err := login(s, "wrong", "", "203.0.113."+strconv.Itoa(1+i/2)); !errors.Is(err, auth.ErrBadCredentials) {
+			t.Fatalf("failure %d: %v", i, err)
+		}
+	}
+	failures := func() (n int) {
+		if err := pool.QueryRow(context.Background(), `SELECT coalesce(sum(failures), 0) FROM login_failures`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if err := login(s, "wrong", "", "198.51.100.1"); !errors.Is(err, auth.ErrBadCredentials) {
+		t.Fatalf("first attempt past the brake: %v, want it checked", err)
+	}
+	before := failures()
+	for _, ip := range []string{"198.51.100.2", "198.51.100.3", "192.0.2.1"} {
+		if err := login(s, pw, "", ip); !errors.Is(err, auth.ErrThrottled) {
+			t.Fatalf("second attempt within 10 s from %s: %v, want ErrThrottled", ip, err)
+		}
+	}
+	if after := failures(); after != before {
+		t.Fatalf("throttled attempts counted: %d failures, want %d", after, before)
+	}
+	clock = clock.Add(auth.ThrottleEvery)
+	if err := login(s, pw, "", "192.0.2.1"); err != nil {
+		t.Fatalf("owner 10 s later: %v, want signed in", err)
+	}
+}
+
+// A locked address never takes the account's slot: firing from it every 10
+// seconds can't keep the owner out from another address.
+func TestLockedAddressCantHogTheThrottle(t *testing.T) {
 	s := newGuardedSvc(t, nil)
+	clock := time.Now()
+	auth.SetClock(s, func() time.Time { return clock })
+	for i := 0; i < 5; i++ { // locks 203.0.113.1
+		_ = login(s, "wrong", "", "203.0.113.1")
+	}
+	for i := 0; i < 5; i++ { // the brake, without locking anyone else
+		_ = login(s, "wrong", "", "198.51.100."+strconv.Itoa(1+i/2))
+	}
+	for round := 0; round < 3; round++ {
+		if err := login(s, "wrong", "", "203.0.113.1"); !errors.Is(err, auth.ErrLocked) {
+			t.Fatalf("round %d, locked address: %v, want ErrLocked", round, err)
+		}
+		if round == 2 {
+			if err := login(s, pw, "", "192.0.2.1"); err != nil {
+				t.Fatalf("owner in the window after the locked address fired: %v, want signed in", err)
+			}
+		}
+		clock = clock.Add(auth.ThrottleEvery)
+	}
+}
+
+// With Turnstile on, the brake asks for a token and the throttle stays out of it.
+func TestThrottleIsOnlyForNoTurnstile(t *testing.T) {
+	s := newGuardedSvc(t, fakeTurnstile(t))
 	for i := 0; i < 10; i++ {
 		_ = login(s, "wrong", "", "203.0.113."+strconv.Itoa(1+i/2))
 	}
-	if err := login(s, pw, "", "198.51.100.7"); err != nil {
-		t.Fatalf("got %v, want signed in", err)
+	for i := 0; i < 2; i++ {
+		if err := login(s, "wrong", "ok", "198.51.100."+strconv.Itoa(1+i)); !errors.Is(err, auth.ErrBadCredentials) {
+			t.Fatalf("attempt %d with a token: %v, want checked", i, err)
+		}
+	}
+}
+
+// The unknown email meets the same throttle at the same step.
+func TestUnknownEmailMeetsTheSameThrottle(t *testing.T) {
+	s := newGuardedSvc(t, nil)
+	run := func(email string) []error {
+		var got []error
+		for i := 0; i < 12; i++ {
+			got = append(got, loginAs(s, email, "wrong", "", "203.0.113."+strconv.Itoa(1+i/2)))
+		}
+		return got
+	}
+	real, ghost := run("a@example.com"), run("nobody@example.com")
+	for i := range real {
+		want := auth.ErrBadCredentials
+		if i == 11 {
+			want = auth.ErrThrottled
+		}
+		if !errors.Is(real[i], want) || !errors.Is(ghost[i], want) {
+			t.Errorf("step %d: real %v, unknown %v, want %v", i, real[i], ghost[i], want)
+		}
 	}
 }
 

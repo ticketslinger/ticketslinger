@@ -80,6 +80,34 @@ func TestLoginLockoutIsPerAddressOverHTTP(t *testing.T) {
 	}
 }
 
+// Without Turnstile, a braked account answers 429 with Retry-After, for a
+// real email and an unknown one alike.
+func TestBrakedLoginWithoutTurnstileIs429(t *testing.T) {
+	srv := guardedServer(t, nil)
+	do(t, "POST", srv.URL+"/v1/auth/signup", "", `{"email":"a@example.com","password":"a long passphrase","name":"A"}`)
+	for _, email := range []string{"a@example.com", "nobody@example.com"} {
+		wrong := `{"email":"` + email + `","password":"wrong password"}`
+		for i := 0; i < 11; i++ {
+			if code, b := doFrom(t, "203.0.113."+strconv.Itoa(1+i/2), "POST", srv.URL+"/v1/auth/login", "", wrong); code != 401 {
+				t.Fatalf("%s failure %d: %d %v", email, i, code, b)
+			}
+		}
+		req, _ := http.NewRequest("POST", srv.URL+"/v1/auth/login", strings.NewReader(wrong))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Real-IP", "198.51.100.9")
+		res, err := clientFor(t, srv.URL).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&b)
+		_ = res.Body.Close()
+		if res.StatusCode != 429 || errCode(b) != "rate_limited" || res.Header.Get("Retry-After") != "10" {
+			t.Fatalf("%s throttled: %d %v Retry-After %q", email, res.StatusCode, b, res.Header.Get("Retry-After"))
+		}
+	}
+}
+
 func TestLoginAsksForTurnstileAfterThreeFailures(t *testing.T) {
 	srv := guardedServer(t, acceptOK)
 	do(t, "POST", srv.URL+"/v1/auth/signup", "", `{"email":"a@example.com","password":"a long passphrase","name":"A","turnstile_token":"ok"}`)

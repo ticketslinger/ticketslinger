@@ -15,6 +15,7 @@ export const EXPIRED =
 export function checkoutData(token: string, c: Checkout, e: CheckoutEvent): string {
   const data: CheckoutData = {
     token,
+    status: c.status,
     expires_at: c.expires_at,
     quote: c.quote,
     items: c.items,

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createApp } from "./app";
 
 const event = {
@@ -446,11 +446,82 @@ const messages: [number, string, string][] = [
   [503, "try_again", "Busy for a moment. Try again."],
   [503, "turnstile_unavailable", "Busy for a moment. Try again."],
   [429, "rate_limited", "That's a lot of tries. Wait a minute and try again."],
-  [422, "promo_not_applicable", "That code doesn't apply to these tickets."],
   [422, "turnstile_failed", "Finish the quick check above Get tickets, then try again."],
-  [422, "quantity_out_of_range", "Something went wrong on our side. Try again."],
+  [422, "sales_closed", "Sales closed on one of those tickets while you were choosing."],
+  [422, "sales_not_open", "One of those tickets isn't on sale yet."],
+  [422, "unknown_ticket_type", "One of those tickets isn't on sale any more."],
+  [422, "quantity_out_of_range", "The per-order limit on one of those tickets changed."],
+  [422, "too_many_tickets", "One order holds up to 100 tickets."],
   [500, "internal", "Something went wrong on our side. Try again."],
 ];
+
+// The promo refusals sit next to the code box, where the buyer can fix them.
+const codeMessages: [string, string][] = [
+  ["promo_used_up", "Every use of that code has gone."],
+  ["promo_invalid", "That code isn't working for this event."],
+  ["promo_not_applicable", "That code doesn't take anything off these tickets."],
+];
+
+for (const [code, text] of codeMessages) {
+  test(`createCheckout 422 ${code} is shown by the code box`, async () => {
+    const { a } = app(routes(() => apiError(422, code)));
+    const res = await a.request(
+      "/acme/gala/checkout",
+      form({ qty_t1: "2", code: "FRIENDS", idem: KEY }),
+    );
+    expect(res.status).toBe(422);
+    const html = await res.text();
+    const box = html.slice(html.indexOf('<form class="code"'));
+    expect(box).toContain(text);
+    expect(html).not.toContain("API words");
+    expect(html).not.toContain("on our side");
+    expect(html).toContain('<option value="2" selected>2</option>');
+  });
+}
+
+test("an event that ended mid-purchase says so on the ended page", async () => {
+  const ended = structuredClone(event);
+  ended.event.state = "ended";
+  const { a } = app(routes(() => apiError(422, "event_over"), ended));
+  const res = await a.request("/acme/gala/checkout", form({ qty_t1: "2", idem: KEY }));
+  expect(res.status).toBe(422);
+  const html = await res.text();
+  expect(html).toContain("This event finished while you were choosing");
+  expect(html).not.toContain("on our side");
+});
+
+// Every 4xx code createCheckout documents gets our own words, never the 5xx catch-all.
+test("no documented createCheckout refusal reads as our fault", async () => {
+  const codes = [
+    "sold_out",
+    "payments_not_ready",
+    "promo_not_applicable",
+    "promo_used_up",
+    "promo_invalid",
+    "turnstile_failed",
+    "rate_limited",
+    "idempotency_in_progress",
+    "sales_closed",
+    "sales_not_open",
+    "event_over",
+    "unknown_ticket_type",
+    "quantity_out_of_range",
+    "too_many_tickets",
+    "no_items",
+  ];
+  for (const code of codes) {
+    const { a } = app(
+      routes(() => apiError(422, code, code === "sold_out" ? { available: [] } : {})),
+      {
+        siteKey: "",
+      },
+    );
+    const html = await (
+      await a.request("/acme/gala/checkout", form({ qty_t1: "2", code: "X", idem: KEY }))
+    ).text();
+    expect([code, html.includes("on our side")]).toEqual([code, false]);
+  }
+});
 
 for (const [status, code, text] of messages) {
   test(`createCheckout ${status} ${code} is shown on the event page`, async () => {
@@ -607,7 +678,7 @@ test("the checkout page carries its data, the island and Stripe's policy", async
   expect(new URL(calls[0].url).pathname).toBe(`/v1/checkouts/${TOK}`);
   expect(calls[0].headers.get("x-real-ip")).toBe("203.0.113.9");
   expect(res.headers.get("cache-control")).toBe("no-store");
-  expect(res.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+  expect(res.headers.get("referrer-policy")).toBe("no-referrer");
   const policy = res.headers.get("content-security-policy") ?? "";
   expect(policy).toContain("script-src 'self' https://js.stripe.com");
   expect(policy).toContain("https://hooks.stripe.com");
@@ -658,6 +729,20 @@ test("an expired checkout says so and links back, with no script", async () => {
   expect(html).toContain('href="/acme/gala"');
   expect(html).not.toContain("checkout.js");
   expect(res.headers.get("content-security-policy")).not.toContain("stripe");
+});
+
+test("a paying checkout past its hold keeps the island, never the expired page", async () => {
+  // The 3D Secure return_url lands here after the hold ran out, with a card maybe charged.
+  const { a } = app(() =>
+    Response.json(checkout({ status: "paying", expires_at: "2020-01-01T00:00:00Z" })),
+  );
+  const res = await a.request(`/checkout/${TOK}?payment_intent=pi_1&redirect_status=succeeded`);
+  const html = await res.text();
+  expect(res.status).toBe(200);
+  expect(html).not.toContain("back on sale");
+  expect(html).toContain("checkout.js");
+  const block = html.match(/<script type="application\/json" id="checkout-data">(.*?)<\/script>/s);
+  expect(JSON.parse(block?.[1] ?? "").status).toBe("paying");
 });
 
 test("an unknown or malformed checkout token is the 404 page", async () => {
@@ -811,6 +896,33 @@ test("an order link that doesn't work is a 404 that says to check the email", as
   expect(calls).toHaveLength(1);
 });
 
+// A token in the address must not ride out on Referer, even to our own /assets/storefront.css:
+// every answer on a token path, errors and redirects included, ends with no-referrer.
+test("token pages send no Referer, whatever the answer", async () => {
+  const done = checkout({ status: "completed", order_code: "TS-7K2QF", order_url: ORDER_URL });
+  const cases: [Api, string][] = [
+    [() => Response.json(order), `/orders/TS-7K2QF?t=${TOK}`],
+    [() => apiError(404, "not_found"), `/orders/TS-7K2QF?t=${TOK}`],
+    [() => apiError(429, "rate_limited"), `/orders/TS-7K2QF?t=${TOK}`],
+    [() => Response.json(checkout()), `/checkout/${TOK}`],
+    [() => Response.json(checkout({ status: "expired" })), `/checkout/${TOK}`],
+    [() => Response.json(done), `/checkout/${TOK}`],
+    [() => apiError(404, "not_found"), `/checkout/${TOK}`],
+    [() => Response.json(checkout()), `/api/checkouts/${TOK}`],
+  ];
+  for (const [api, path] of cases) {
+    const res = await app(api).a.request(path);
+    expect([path, res.status, res.headers.get("referrer-policy")]).toEqual([
+      path,
+      res.status,
+      "no-referrer",
+    ]);
+  }
+  // Pages without a token keep the site's usual policy.
+  const ev = await app(() => Response.json(event)).a.request("/acme/gala");
+  expect(ev.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+});
+
 test("the health check answers without the API", async () => {
   const { a, calls } = app(() => Response.json({}));
   const res = await a.request("/healthz");
@@ -894,4 +1006,21 @@ test("tax inside the price is noted under the total, and the lines add up", asyn
   expect(html).not.toContain("<span>Tax</span>");
   expect(html).toContain("Includes $1.91 tax");
   expect(sumsUp(html)).toEqual({ sum: 2596, total: 2596 });
+});
+
+// An error can carry the URL we fetched, token and all; the log gets its kind and a redacted message.
+test("a crash logs no token from the error's message", async () => {
+  const bad = structuredClone(event);
+  bad.event.timezone = `http://api/v1/checkouts/${TOK}/pay?t=${TOK}`;
+  const { a } = app(() => Response.json(bad));
+  const spy = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const res = await a.request("/acme/gala");
+    expect(res.status).toBe(500);
+    const logged = spy.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+    expect(logged).toContain("RangeError");
+    expect(logged).not.toContain(TOK);
+  } finally {
+    spy.mockRestore();
+  }
 });

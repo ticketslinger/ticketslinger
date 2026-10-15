@@ -381,6 +381,26 @@ func TestPayAfterExpiryIs410(t *testing.T) {
 	}
 }
 
+// A card may already have been charged once a payment exists: the hold
+// running out mustn't read as "back on sale" while the webhook is on its way.
+func TestPayingCheckoutStaysPayingPastItsHold(t *testing.T) {
+	s, f, _ := payService(t, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	c := f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
+	if _, err := s.Pay(ctx, c.Token, sales.Details{Email: "buyer@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	f.exec(t, `update checkouts set expires_at = now() - interval '1 second' where id = $1`, c.ID)
+	if got, err := s.GetCheckout(ctx, c.Token); err != nil || got.Status != "paying" {
+		t.Fatalf("paid-for checkout past its hold: %q %v, want paying", got.Status, err)
+	}
+	// Paying without a payment (the intent call failed) still runs out.
+	f.exec(t, `delete from payments`)
+	if got, err := s.GetCheckout(ctx, c.Token); err != nil || got.Status != "expired" {
+		t.Fatalf("paying with no payment past its hold: %q %v, want expired", got.Status, err)
+	}
+}
+
 func TestPaymentsNotReady(t *testing.T) {
 	s, f, rec := payService(t, seedOpts{quota: 10, price: 2500})
 	c := f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))

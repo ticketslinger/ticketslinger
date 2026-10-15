@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -20,8 +21,8 @@ import (
 
 // Middleware wraps the writes (POST, PUT, PATCH, DELETE) that carry an
 // Idempotency-Key. scope names the caller ("user:<id>", "key:<id>", "anon");
-// the method and path are added here, so a key never crosses callers or
-// endpoints. The first request runs and its status, Content-Type and body are
+// the route and a hash of the path are added here, so a key never crosses
+// callers or endpoints. The first request runs and its status, Content-Type and body are
 // kept for 24 hours; 5xx and 429 answers are not kept, so a retry runs again.
 // A repeat replays the kept response with Idempotent-Replayed: true, a repeat
 // with another body (or query) is 422, and a repeat while the first still
@@ -63,10 +64,22 @@ func Middleware(pool *pgxpool.Pool, scope func(*http.Request) string, noStore fu
 			sum.Write(body)
 			sum.Write([]byte{0})
 			sum.Write([]byte(r.URL.RawQuery))
-			sc += " " + r.Method + " " + r.URL.Path
+			sc += " " + scopePath(r)
 			run(w, r, next, pool, sc, key, sum.Sum(nil), noStore != nil && noStore(r))
 		})
 	}
+}
+
+// scopePath is the endpoint part of a key's scope: the route pattern and a
+// SHA-256 of the path. Two resources never share a scope, and a path that
+// carries a bearer token (a checkout's) is never written down.
+func scopePath(r *http.Request) string {
+	route := r.Pattern
+	if route == "" {
+		route = r.Method
+	}
+	sum := sha256.Sum256([]byte(r.URL.Path))
+	return route + " " + hex.EncodeToString(sum[:])
 }
 
 func validKey(k string) bool {
