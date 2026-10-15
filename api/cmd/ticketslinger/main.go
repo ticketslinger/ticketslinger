@@ -194,6 +194,10 @@ func paymentProvider(cfg config.Config, testMode bool) plugin.PaymentProvider {
 // POST /__test/stripe/pay-latest is what Stripe would send when the fake's
 // newest payment succeeds, signed with our own webhook secret and served
 // through the real webhook route.
+//
+// POST /__test/stripe/refund-latest?status=succeeded|failed is the
+// refund.updated Stripe would send for the fake's newest refund, served the
+// same way.
 func testRoutes(api http.Handler, m *mailer.Memory, fake *payments.Fake, webhookSecret string) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/", api)
@@ -222,12 +226,40 @@ func testRoutes(api http.Handler, m *mailer.Memory, fake *payments.Fake, webhook
 			"data": map[string]any{"object": map[string]any{"id": pi.ID, "object": "payment_intent", "amount": pi.AmountCents,
 				"currency": "usd", "status": "succeeded"}},
 		})
-		signed := webhook.GenerateTestSignedPayload(&webhook.UnsignedPayload{Payload: body, Secret: webhookSecret})
-		req := httptest.NewRequestWithContext(r.Context(), http.MethodPost, "/v1/webhooks/stripe", bytes.NewReader(signed.Payload))
-		req.Header.Set("Stripe-Signature", signed.Header)
-		api.ServeHTTP(w, req)
+		serveSigned(w, r, api, body, webhookSecret)
+	})
+	mux.HandleFunc("POST /__test/stripe/refund-latest", func(w http.ResponseWriter, r *http.Request) {
+		var in plugin.RefundInput
+		var id string
+		ok := fake != nil
+		if ok {
+			in, id, ok = fake.LatestRefund()
+		}
+		status := r.URL.Query().Get("status")
+		if status == "" {
+			status = "succeeded"
+		}
+		if proxied(r) || !ok || status != "succeeded" && status != "failed" {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := json.Marshal(map[string]any{
+			"id": "evt_test_" + id + "_" + status, "object": "event", "type": "refund.updated", "api_version": stripe.APIVersion,
+			"account": in.Account, "created": time.Now().Unix(),
+			"data": map[string]any{"object": map[string]any{"id": id, "object": "refund", "amount": in.AmountCents,
+				"payment_intent": in.PaymentIntentID, "status": status, "metadata": in.Metadata}},
+		})
+		serveSigned(w, r, api, body, webhookSecret)
 	})
 	return mux
+}
+
+// serveSigned serves body through api's webhook route, signed as Stripe would.
+func serveSigned(w http.ResponseWriter, r *http.Request, api http.Handler, body []byte, secret string) {
+	signed := webhook.GenerateTestSignedPayload(&webhook.UnsignedPayload{Payload: body, Secret: secret})
+	req := httptest.NewRequestWithContext(r.Context(), http.MethodPost, "/v1/webhooks/stripe", bytes.NewReader(signed.Payload))
+	req.Header.Set("Stripe-Signature", signed.Header)
+	api.ServeHTTP(w, req)
 }
 
 // proxied reports whether r came through a reverse proxy.

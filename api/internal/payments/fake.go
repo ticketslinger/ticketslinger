@@ -362,6 +362,16 @@ func (f *Fake) FeeRefunds() []plugin.FeeRefundInput {
 	return append([]plugin.FeeRefundInput(nil), f.feeLog...)
 }
 
+// LatestRefund is the newest refund made: what was asked for, and its id.
+func (f *Fake) LatestRefund() (plugin.RefundInput, string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.made) == 0 {
+		return plugin.RefundInput{}, "", false
+	}
+	return f.refundLog[len(f.refundLog)-1], f.made[len(f.made)-1].r.ID, true
+}
+
 // Refunds lists every distinct refund asked for, oldest first.
 func (f *Fake) Refunds() []plugin.RefundInput {
 	f.mu.Lock()

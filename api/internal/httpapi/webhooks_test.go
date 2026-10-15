@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -178,5 +179,28 @@ func TestDeauthorizedInAnyAPIVersion(t *testing.T) {
 	s.must(s.webhook(deauth, webhookSecret, time.Now()), 200)
 	if !disconnected() {
 		t.Fatal("deauthorize in an older version didn't disconnect")
+	}
+}
+
+// A refund we don't know of is recorded and answered 200, so Stripe stops
+// sending it. Refund events in any other API version are refused: only
+// account.application.deauthorized is read leniently.
+func TestRefundEventForARefundWeDontKnow(t *testing.T) {
+	s := newShop(t, nil)
+	owner := testdb.Owner(t, s.pool)
+	refund := map[string]any{"id": "re_unknown", "object": "refund", "amount": 2600, "payment_intent": "pi_unknown",
+		"status": "succeeded", "metadata": map[string]string{"refund_id": "0199e5a0-0000-7000-8000-000000000001", "attempt": "0"}}
+	if b := s.must(s.webhook(event("evt_refund", "refund.updated", refund), webhookSecret, time.Now()), 200); b["received"] != true {
+		t.Fatalf("refund.updated: %v", b)
+	}
+	var n int
+	if err := owner.QueryRow(context.Background(), `select count(*) from stripe_events where id = 'evt_refund'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("recorded %d %v, want 1", n, err)
+	}
+	for i, typ := range []string{"refund.created", "refund.updated", "refund.failed", "charge.refunded"} {
+		old := bytes.Replace(event("evt_old_"+strconv.Itoa(i), typ, refund), []byte(stripe.APIVersion), []byte("2026-07-29.dahlia"), 1)
+		if res := s.webhook(old, webhookSecret, time.Now()); res.StatusCode != 400 || s.errorCode(res) != "bad_signature" {
+			t.Errorf("%s in an older version: %d %q, want 400", typ, res.StatusCode, s.errorCode(res))
+		}
 	}
 }
