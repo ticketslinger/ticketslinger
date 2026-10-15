@@ -1,0 +1,10 @@
+{
+  "id": "fr_test1",
+  "object": "fee_refund",
+  "amount": 100,
+  "balance_transaction": null,
+  "created": 1680651573,
+  "currency": "usd",
+  "fee": "fee_test1",
+  "metadata": {}
+}

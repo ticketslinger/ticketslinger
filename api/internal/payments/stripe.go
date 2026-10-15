@@ -136,22 +136,76 @@ func (s *Stripe) CreatePaymentIntent(ctx context.Context, in plugin.PaymentInten
 	return plugin.PaymentIntent{ID: pi.ID, ClientSecret: pi.ClientSecret, Account: in.Account, AmountCents: pi.Amount}, nil
 }
 
-func (s *Stripe) Refund(ctx context.Context, in plugin.RefundInput) (string, error) {
-	p := &stripe.RefundCreateParams{PaymentIntent: stripe.String(in.PaymentIntentID), RefundApplicationFee: stripe.Bool(in.RefundApplicationFee)}
-	if in.AmountCents > 0 {
-		p.Amount = stripe.Int64(in.AmountCents)
+// onAccount sends the call as the connected account; "" (direct mode) sends
+// it as ourselves, with no Stripe-Account header at all.
+func onAccount(p *stripe.Params, account string) {
+	if account != "" {
+		p.SetStripeAccount(account)
 	}
-	p.SetStripeAccount(in.Account)
+}
+
+// Refund gives back an exact amount. refund_application_fee stays unset:
+// Stripe's flag refunds the fee pro rata, which is wrong for mixed-price
+// orders, so RefundApplicationFee gives back the exact fee instead.
+func (s *Stripe) Refund(ctx context.Context, in plugin.RefundInput) (plugin.Refund, error) {
+	p := &stripe.RefundCreateParams{PaymentIntent: stripe.String(in.PaymentIntentID), Amount: stripe.Int64(in.AmountCents)}
+	for k, v := range in.Metadata {
+		p.AddMetadata(k, v)
+	}
+	onAccount(&p.Params, in.Account)
 	p.SetIdempotencyKey(in.IdempotencyKey)
 	r, err := s.c.V1Refunds.Create(ctx, p)
 	var se *stripe.Error
 	if errors.As(err, &se) && se.Code == stripe.ErrorCodeChargeAlreadyRefunded {
-		return "", plugin.ErrAlreadyRefunded
+		return plugin.Refund{}, plugin.ErrAlreadyRefunded
 	}
 	if err != nil {
-		return "", fail("refund", err)
+		return plugin.Refund{}, fail("refund", err)
 	}
-	return r.ID, nil
+	return plugin.Refund{ID: r.ID, Status: string(r.Status)}, nil
+}
+
+// RefundApplicationFee refunds part or all of our fee on the intent's charge.
+// The fee id is read on the connected account; the fee itself is ours, so the
+// refund runs on the platform with no Stripe-Account header.
+func (s *Stripe) RefundApplicationFee(ctx context.Context, in plugin.FeeRefundInput) (string, error) {
+	g := &stripe.PaymentIntentRetrieveParams{}
+	g.AddExpand("latest_charge")
+	onAccount(&g.Params, in.Account)
+	pi, err := s.c.V1PaymentIntents.Retrieve(ctx, in.PaymentIntentID, g)
+	if err != nil {
+		return "", fail("fee refund", err)
+	}
+	if pi.LatestCharge == nil || pi.LatestCharge.ApplicationFee == nil || pi.LatestCharge.ApplicationFee.ID == "" {
+		return "", &plugin.ProviderError{Op: "stripe: fee refund", Refused: true, Code: "no_application_fee"}
+	}
+	p := &stripe.FeeRefundCreateParams{ID: stripe.String(pi.LatestCharge.ApplicationFee.ID), Amount: stripe.Int64(in.AmountCents)}
+	p.SetIdempotencyKey(in.IdempotencyKey)
+	fr, err := s.c.V1FeeRefunds.Create(ctx, p)
+	if err != nil {
+		return "", fail("fee refund", err)
+	}
+	return fr.ID, nil
+}
+
+func (s *Stripe) PaymentIntentStatus(ctx context.Context, account, intentID string) (string, error) {
+	p := &stripe.PaymentIntentRetrieveParams{}
+	onAccount(&p.Params, account)
+	pi, err := s.c.V1PaymentIntents.Retrieve(ctx, intentID, p)
+	if err != nil {
+		return "", fail("payment intent status", err)
+	}
+	return string(pi.Status), nil
+}
+
+func (s *Stripe) CancelPaymentIntent(ctx context.Context, account, intentID, key string) error {
+	p := &stripe.PaymentIntentCancelParams{}
+	onAccount(&p.Params, account)
+	p.SetIdempotencyKey(key)
+	if _, err := s.c.V1PaymentIntents.Cancel(ctx, intentID, p); err != nil {
+		return fail("cancel payment intent", err)
+	}
+	return nil
 }
 
 // LinkURL is Stripe's OAuth page for Standard accounts, asking for
