@@ -48,18 +48,19 @@ func (f fixture) paidOrder(t *testing.T, s *sales.Service, fake *payments.Fake, 
 	return order, intent.ID, tickets
 }
 
-func refundWorker(s *sales.Service) *jobs.Worker {
+// refundWorker runs refunds and sends their emails to m.
+func refundWorker(s *sales.Service, m *mailer.Memory) *jobs.Worker {
 	return &jobs.Worker{Pool: s.Pool,
-		Handlers: map[string]jobs.Handler{sales.RefundJob: sales.Refund(s), sales.OrderConfirmationJob: s.OrderConfirmation(&mailer.Memory{}),
-			"send_email": jobs.SendEmail(&mailer.Memory{})},
+		Handlers: map[string]jobs.Handler{sales.RefundJob: sales.Refund(s), sales.OrderConfirmationJob: s.OrderConfirmation(m),
+			"send_email": jobs.SendEmail(m)},
 		Parked: map[string]func(context.Context, []byte, string){sales.RefundJob: sales.RefundParked(s)}}
 }
 
-// drain runs every due job until none is left. A failed job backs off, so
-// it isn't run again here.
-func drain(t *testing.T, s *sales.Service, _ *payments.Fake) {
+// drain runs every due job until none is left, mailing to m. A failed job
+// backs off, so it isn't run again here.
+func drain(t *testing.T, s *sales.Service, m *mailer.Memory) {
 	t.Helper()
-	w := refundWorker(s)
+	w := refundWorker(s, m)
 	for {
 		ran, err := w.RunOnce(context.Background())
 		if err != nil {
@@ -96,8 +97,9 @@ func TestLatePaymentRefundsThroughARefundRow(t *testing.T) {
 	if string(payload) != `{"refund_id": "`+refund.String()+`", "organizer_id": "`+f.org.String()+`"}` {
 		t.Fatalf("job payload %s, want only the two ids", payload)
 	}
-	drain(t, s, fake)
-	drain(t, s, fake) // a second run changes nothing
+	m := &mailer.Memory{}
+	drain(t, s, m)
+	drain(t, s, m) // a second run changes nothing
 	if got, gotFee := fake.Refunded(pi.ID); got != c.Quote.TotalCents || gotFee != c.Quote.FeeCents {
 		t.Fatalf("Stripe refunded %d and fee %d", got, gotFee)
 	}
@@ -109,17 +111,16 @@ func TestLatePaymentRefundsThroughARefundRow(t *testing.T) {
 	if fr := fake.FeeRefunds(); len(fr) != 1 || fr[0].IdempotencyKey != "appfee-"+refund.String()+"-0" || fr[0].AmountCents != c.Quote.FeeCents {
 		t.Fatalf("fee refunds %+v", fr)
 	}
-	if n := f.count(t, `select count(*) from refunds where status = 'succeeded' and stripe_refund_id like 're_fake%' and fee_refund_id like 'fr_fake%'`); n != 1 {
+	if n := f.count(t, `select count(*) from refunds where status = 'succeeded' and stripe_refund_id like 're_fake%' and fee_refund_id like 'fr_fake%'
+		and fee_refunded_at is not null`); n != 1 {
 		t.Fatal("the refund row doesn't keep Stripe's ids")
 	}
 	if _, _, st := f.orderOf(t, c.ID); st != "refunded" {
 		t.Fatalf("order %s, want refunded", st)
 	}
 	// Exactly one buyer email, with P3a's words and no link.
-	var mail []byte
-	f.must(t, f.owner.QueryRow(ctx, `select coalesce(jsonb_agg(payload), '[]') from jobs where kind = 'send_email'`).Scan(&mail))
-	if strings.Count(string(mail), `"to"`) > 1 || strings.Contains(string(mail), "http") {
-		t.Fatalf("emails %s", mail)
+	if len(m.Sent) != 1 || m.Sent[0].To != "late@example.com" || strings.Contains(m.Sent[0].Text, "http") {
+		t.Fatalf("emails %+v, want one, with no link", m.Sent)
 	}
 }
 
@@ -161,7 +162,7 @@ func TestRefundFinishesWhenStripeSaysAlreadyRefunded(t *testing.T) {
 	}
 	fake.FailCall("RefundApplicationFee", plugin.ErrAlreadyRefunded)
 	f.must(t, sales.Refund(s)(ctx, payload))
-	if n := f.count(t, `select count(*) from refunds where id = $1 and fee_refund_id is not null`, refund); n != 1 {
+	if n := f.count(t, `select count(*) from refunds where id = $1 and fee_refunded_at is not null and fee_refund_id is null`, refund); n != 1 {
 		t.Fatal("an already refunded fee isn't marked done")
 	}
 	// Any other error is retried.
@@ -263,7 +264,7 @@ func TestNoAccessFailsTheRefundAtOnce(t *testing.T) {
 	f := seed(t, s.Pool, seedOpts{quota: 1, price: 2500})
 	_, order, _ := latePaid(t, s, f, fake, "late@example.com")
 	fake.FailCall("Refund", &plugin.ProviderError{Op: "refund", Refused: true, NoAccess: true, Status: 403, Code: "account_invalid"})
-	drain(t, s, fake)
+	drain(t, s, &mailer.Memory{})
 	if n := f.count(t, `select count(*) from refunds r join payments p on p.id = r.payment_id
 		where p.order_id = $1 and r.status = 'failed' and r.failure = 'no_access'`, order); n != 1 {
 		t.Fatal("refund not failed with no_access")
@@ -283,7 +284,7 @@ func TestRefundStillGoesToADisconnectedAccount(t *testing.T) {
 	f := seed(t, s.Pool, seedOpts{quota: 1, price: 2500})
 	_, _, _ = latePaid(t, s, f, fake, "late@example.com")
 	f.exec(t, `update organizers set stripe_disconnected_at = now(), stripe_charges_enabled = false where id = $1`, f.org)
-	drain(t, s, fake)
+	drain(t, s, &mailer.Memory{})
 	if in := fake.Refunds(); len(in) != 1 || in[0].Account != "acct_fake1" {
 		t.Fatalf("refunds %+v", in)
 	}
@@ -311,7 +312,7 @@ func TestSeatsComeBackOnlyWhenTheRefundSucceeds(t *testing.T) {
 		return
 	}
 	fake.RefundsPending(true)
-	drain(t, s, fake)
+	drain(t, s, &mailer.Memory{})
 	if used() != 2 {
 		t.Fatalf("quota used %d while the refund is pending, want 2", used())
 	}
@@ -372,7 +373,7 @@ func TestAStuckRefundSurfaces(t *testing.T) {
 			prev := slog.Default()
 			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 			t.Cleanup(func() { slog.SetDefault(prev) })
-			w := refundWorker(s)
+			w := refundWorker(s, &mailer.Memory{})
 			failed := func() int {
 				return f.count(t, `select count(*) from audit_log where action = 'refund.failed' and actor_system and entity_id = $1
 					and after->>'failure' = 'gave_up'`, refund)
@@ -445,7 +446,7 @@ func TestShutdownOnTheLastTryRaisesNothing(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	f.exec(t, `update jobs set attempts = 9 where kind = 'refund'`)
-	if ran, err := refundWorker(s).RunOnce(ctx); !ran || err != nil {
+	if ran, err := refundWorker(s, &mailer.Memory{}).RunOnce(ctx); !ran || err != nil {
 		t.Fatalf("last try: %v %v", ran, err)
 	}
 	if n := f.count(t, `select count(*) from audit_log where action = 'refund.failed'`); n != 0 {
@@ -459,5 +460,151 @@ func TestShutdownOnTheLastTryRaisesNothing(t *testing.T) {
 	}
 	if n := f.count(t, `select count(*) from jobs where kind = 'refund' and attempts = 9 and run_at <> 'infinity'`); n != 1 {
 		t.Fatalf("job not handed back: %d", n)
+	}
+}
+
+// voidedRefund is a paid two-ticket order with its first ticket voided under
+// a requested refund of 2500, written as Task 4's RefundTickets will.
+func voidedRefund(t *testing.T, s *sales.Service, f fixture, fake *payments.Fake) (refund uuid.UUID, used func() int) {
+	t.Helper()
+	ctx := context.Background()
+	order, _, tickets := f.paidOrder(t, s, fake, 2, 1)
+	payment := f.id(t, `select id from payments where order_id = $1`, order)
+	f.must(t, system.Run(ctx, s.Pool, f.org, func(tx pgx.Tx) (err error) {
+		refund, err = sales.RequestRefundForTest(ctx, tx, f.org, payment, 2500, 0, false, "organizer", nil)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `update tickets set status = 'void', refund_id = $2 where id = $1`, tickets[0], refund)
+		return err
+	}))
+	return refund, func() (n int) {
+		f.must(t, f.owner.QueryRow(ctx, `select quota_used($1, null)`, f.hall).Scan(&n))
+		return
+	}
+}
+
+// crashPark parks every refund job as if its worker died ten times.
+func crashPark(t *testing.T, s *sales.Service, f fixture) {
+	t.Helper()
+	f.exec(t, `update jobs set attempts = 10, locked_until = now() - interval '1 second' where kind = 'refund'`)
+	drain(t, s, &mailer.Memory{}) // whatever else is due runs; the refund jobs are parked
+	if n := f.count(t, `select count(*) from jobs where kind = 'refund' and run_at <> 'infinity'`); n != 0 {
+		t.Fatalf("%d refund jobs not parked", n)
+	}
+}
+
+// We gave up asking, but the money went out after all: Stripe's word still
+// finishes the refund, gives the seat back and tells the buyer, once.
+func TestAGaveUpRefundStillFinishesWhenStripeSaysSucceeded(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	ctx := context.Background()
+	refund, used := voidedRefund(t, s, f, fake)
+	crashPark(t, s, f)
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'failed' and failure = 'gave_up'`, refund); n != 1 {
+		t.Fatal("not given up")
+	}
+	if used() != 2 {
+		t.Fatalf("quota used %d after giving up, want 2", used())
+	}
+	for range 2 {
+		f.must(t, system.Run(ctx, s.Pool, f.org, func(tx pgx.Tx) error { return sales.FinishRefundForTest(s, ctx, tx, f.org, refund, "succeeded") }))
+	}
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'succeeded' and failure is null`, refund); n != 1 {
+		t.Fatal("Stripe's succeeded didn't finish a given-up refund")
+	}
+	if used() != 1 {
+		t.Fatalf("quota used %d after success, want 1", used())
+	}
+	if n := f.count(t, `select count(*) from jobs where kind = 'send_email'`); n != 1 {
+		t.Fatalf("%d emails, want 1", n)
+	}
+}
+
+// A refund Stripe already has (we hold its id) isn't given up on when its
+// job is parked: Stripe's webhook will finish it.
+func TestAParkedRefundStripeHasStaysRequested(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	refund, _ := voidedRefund(t, s, f, fake)
+	f.exec(t, `update refunds set stripe_refund_id = 're_waiting' where id = $1`, refund)
+	crashPark(t, s, f)
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'requested'`, refund); n != 1 {
+		t.Fatal("a refund Stripe has was given up on")
+	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'refund.failed'`); n != 0 {
+		t.Fatalf("%d refund.failed rows, want 0", n)
+	}
+}
+
+// The buyer has their money but our fee step ran out of tries: the refund
+// stays succeeded, and one system audit row says the fee is stuck.
+func TestAParkedFeeStepIsAudited(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 1, price: 2500})
+	ctx := context.Background()
+	c, order, _ := latePaid(t, s, f, fake, "late@example.com")
+	refund, _ := refundOf(t, f, order)
+	fake.FailCall("RefundApplicationFee", &plugin.ProviderError{Op: "fee refund", Refused: true, Status: 400})
+	drain(t, s, &mailer.Memory{}) // refund succeeds, the fee step fails once
+	f.exec(t, `update jobs set attempts = 9, run_at = now() where kind = 'refund'`)
+	fake.FailCall("RefundApplicationFee", &plugin.ProviderError{Op: "fee refund", Refused: true, Status: 400})
+	if ran, err := refundWorker(s, &mailer.Memory{}).RunOnce(ctx); !ran || err != nil {
+		t.Fatalf("last try: %v %v", ran, err)
+	}
+	assertFeeStuck(t, f, refund, c.Quote.TotalCents, c.Quote.FeeCents)
+}
+
+// A revoked account can't take a fee refund on any try: stuck at once.
+func TestNoAccessOnTheFeeStepStopsAtOnce(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 1, price: 2500})
+	c, order, _ := latePaid(t, s, f, fake, "late@example.com")
+	refund, _ := refundOf(t, f, order)
+	fake.FailCall("RefundApplicationFee", &plugin.ProviderError{Op: "fee refund", Refused: true, NoAccess: true, Status: 403, Code: "account_invalid"})
+	drain(t, s, &mailer.Memory{})
+	if n := f.count(t, `select count(*) from jobs where kind = 'refund'`); n != 0 {
+		t.Fatalf("%d refund jobs left, want none", n)
+	}
+	assertFeeStuck(t, f, refund, c.Quote.TotalCents, c.Quote.FeeCents)
+}
+
+func assertFeeStuck(t *testing.T, f fixture, refund uuid.UUID, amount, fee int64) {
+	t.Helper()
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'succeeded' and fee_refunded_at is null`, refund); n != 1 {
+		t.Fatal("the refund isn't succeeded with its fee still owed")
+	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'refund.fee_stuck' and actor_system and entity_id = $1
+		and (after->>'amount_cents')::bigint = $2 and (after->>'fee_cents')::bigint = $3`, refund, amount, fee); n != 1 {
+		t.Fatalf("%d refund.fee_stuck rows with the amounts, want 1", n)
+	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'refund.failed'`); n != 0 {
+		t.Fatalf("%d refund.failed rows, want 0", n)
+	}
+}
+
+// Two runs of one job at once (a lock that ran out, say) refund once and
+// email once: the same key at Stripe, and the order lock for our side.
+func TestTwoRunsOfOneRefundPayOnce(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 1, price: 2500})
+	ctx := context.Background()
+	_, order, _ := latePaid(t, s, f, fake, "late@example.com")
+	_, payload := refundOf(t, f, order)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(func() {
+			if err := sales.Refund(s)(ctx, payload); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	if n := len(fake.Refunds()); n != 1 {
+		t.Fatalf("%d Stripe refunds, want 1", n)
+	}
+	if n := f.count(t, `select count(*) from jobs where kind = 'send_email'`); n != 1 {
+		t.Fatalf("%d emails, want 1", n)
 	}
 }

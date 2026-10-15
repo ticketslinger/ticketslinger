@@ -40,20 +40,21 @@ func requestRefund(ctx context.Context, tx pgx.Tx, org, payment uuid.UUID, amoun
 }
 
 type refundRow struct {
-	id, order             uuid.UUID
-	status                string
-	amount, fee           int64
-	stripeID, feeRefundID *string
-	attempt               int
-	intent, account       string
+	id, order       uuid.UUID
+	status          string
+	amount, fee     int64
+	stripeID        *string
+	feeDone         bool
+	attempt         int
+	intent, account string
 }
 
 func loadRefund(ctx context.Context, tx pgx.Tx, id uuid.UUID) (refundRow, error) {
 	r := refundRow{id: id}
-	err := tx.QueryRow(ctx, `select p.order_id, r.status, r.amount_cents, r.fee_cents, r.stripe_refund_id, r.fee_refund_id, r.attempt,
+	err := tx.QueryRow(ctx, `select p.order_id, r.status, r.amount_cents, r.fee_cents, r.stripe_refund_id, r.fee_refunded_at is not null, r.attempt,
 			p.payment_intent_id, p.stripe_account_id
 		from refunds r join payments p on p.id = r.payment_id where r.id = $1`, id).
-		Scan(&r.order, &r.status, &r.amount, &r.fee, &r.stripeID, &r.feeRefundID, &r.attempt, &r.intent, &r.account)
+		Scan(&r.order, &r.status, &r.amount, &r.fee, &r.stripeID, &r.feeDone, &r.attempt, &r.intent, &r.account)
 	return r, err
 }
 
@@ -80,7 +81,7 @@ func Refund(s *Service) jobs.Handler {
 		switch {
 		case r.status == "requested" && r.stripeID == nil:
 			return s.sendRefund(ctx, j.Organizer, r)
-		case r.status == "succeeded" && r.fee > 0 && r.feeRefundID == nil:
+		case r.status == "succeeded" && r.fee > 0 && !r.feeDone:
 			return s.sendFeeRefund(ctx, j.Organizer, r)
 		}
 		return nil // waiting for Stripe's word, failed, or done
@@ -92,7 +93,10 @@ func (s *Service) sendRefund(ctx context.Context, org uuid.UUID, r refundRow) er
 		IdempotencyKey: fmt.Sprintf("refund-%s-%d", r.id, r.attempt), Metadata: map[string]string{"refund_id": r.id.String()}})
 	switch {
 	case errors.Is(err, plugin.ErrAlreadyRefunded):
-		out = plugin.Refund{Status: "succeeded"} // nothing left on the charge: what we asked for went out
+		// The charge is empty: nothing is left on it to refund. That doesn't
+		// prove this row's amount went out (another refund may have taken
+		// it), but no retry of ours can send anything now, so it's final.
+		out = plugin.Refund{Status: "succeeded"}
 	case errors.Is(err, plugin.ErrNoAccess):
 		slog.ErrorContext(ctx, "refund: our platform can't reach the account any more", "organizer", org, "order", r.order, "refund", r.id, "err", err)
 		return system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error { return s.failRefund(ctx, tx, org, r.id, "no_access") })
@@ -115,21 +119,32 @@ func (s *Service) sendRefund(ctx context.Context, org uuid.UUID, r refundRow) er
 func (s *Service) sendFeeRefund(ctx context.Context, org uuid.UUID, r refundRow) error {
 	id, err := s.Payments.RefundApplicationFee(ctx, plugin.FeeRefundInput{Account: r.account, PaymentIntentID: r.intent,
 		AmountCents: r.fee, IdempotencyKey: fmt.Sprintf("appfee-%s-%d", r.id, r.attempt)})
+	var feeRefund *string // Stripe's id; unknown past its idempotency window
 	switch {
 	case errors.Is(err, plugin.ErrAlreadyRefunded):
-		// Past the idempotency window, and Stripe has it back already. Its
-		// fee refund id is lost to us, so the row says so in its place.
-		id = "already_refunded:" + r.id.String()
+	case errors.Is(err, plugin.ErrNoAccess):
+		// The account is gone: no retry can reach it, so stop here.
+		slog.ErrorContext(ctx, "refund: our fee can't go back, the account is gone", "organizer", org, "order", r.order, "refund", r.id, "err", err)
+		return system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error { return feeStuck(ctx, tx, org, r) })
 	case errors.Is(err, plugin.ErrRefused):
 		return errors.Join(err, s.nextAttempt(ctx, org, r))
 	case err != nil:
 		return err
+	default:
+		feeRefund = &id
 	}
 	return system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `update refunds set fee_refund_id = $2, updated_at = statement_timestamp()
-			where id = $1 and fee_refund_id is null`, r.id, id)
+		_, err := tx.Exec(ctx, `update refunds set fee_refund_id = $2, fee_refunded_at = statement_timestamp(), updated_at = statement_timestamp()
+			where id = $1 and fee_refunded_at is null`, r.id, feeRefund)
 		return err
 	})
+}
+
+// feeStuck records that the buyer has their money but our fee didn't go
+// back to the organizer, and nothing will retry it. The refund keeps its status.
+func feeStuck(ctx context.Context, tx pgx.Tx, org uuid.UUID, r refundRow) error {
+	return audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: audit.Actor{System: true}, Action: "refund.fee_stuck",
+		EntityType: "refund", EntityID: r.id, After: map[string]int64{"amount_cents": r.amount, "fee_cents": r.fee}})
 }
 
 // nextAttempt moves the row to its next key after Stripe refused outright.
@@ -144,8 +159,9 @@ func (s *Service) nextAttempt(ctx context.Context, org uuid.UUID, r refundRow) e
 // order, then its tickets, then the refund (the order refunds always take
 // them in). succeeded: the seats its tickets held go back, a late payment's
 // order becomes refunded, the fee step is queued when one is due, and the
-// buyer is told. failed or canceled: the refund is failed for the organizer
-// to see and retry; seats already given back stay given back. Anything else
+// buyer is told, even when we had given up asking (gave_up) and the money
+// went out after all. failed or canceled: the refund is failed for the
+// organizer to see and retry; seats already given back stay given back. Anything else
 // (pending, requires_action) waits for the next word. A final row is left
 // alone, so replays change nothing.
 func (s *Service) finishRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, stripeStatus string) error {
@@ -162,18 +178,21 @@ func (s *Service) finishRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID
 		return err
 	}
 	var status, reason string
+	var failure *string
 	var amount, fee int64
 	var feeDone bool
-	if err := tx.QueryRow(ctx, `select status, reason, amount_cents, fee_cents, fee_refund_id is not null from refunds where id = $1 for update`, id).
-		Scan(&status, &reason, &amount, &fee, &feeDone); err != nil {
+	if err := tx.QueryRow(ctx, `select status, failure, reason, amount_cents, fee_cents, fee_refunded_at is not null from refunds where id = $1 for update`, id).
+		Scan(&status, &failure, &reason, &amount, &fee, &feeDone); err != nil {
 		return err
 	}
 	switch stripeStatus {
 	case "succeeded":
-		if status != "requested" {
+		// We may have given up asking while the money went out after all.
+		gaveUp := status == "failed" && failure != nil && *failure == "gave_up"
+		if status != "requested" && !gaveUp {
 			return nil
 		}
-		if _, err := tx.Exec(ctx, `update refunds set status = 'succeeded', updated_at = statement_timestamp() where id = $1`, id); err != nil {
+		if _, err := tx.Exec(ctx, `update refunds set status = 'succeeded', failure = null, updated_at = statement_timestamp() where id = $1`, id); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `update tickets set released_at = statement_timestamp() where refund_id = $1 and released_at is null`, id); err != nil {
@@ -213,13 +232,17 @@ func (s *Service) failRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, 
 		EntityType: "refund", EntityID: id, After: map[string]string{"failure": failure}})
 }
 
-// RefundParked is the queue's word that a refund job ran out of tries. The
-// buyer may still be owed money, so it can't stay quiet: an ERROR naming the
-// organizer, order and refund (never the buyer), and the refund failed
-// (gave_up) so the organizer sees it and can try again. A buyer refund that
-// already succeeded only lost its fee step: logged, nothing marked. The
-// queue parks only real failures, never a shutdown (that hands the job back),
-// so this runs once per parked job.
+// RefundParked is the queue's word that a refund job ran out of tries.
+// Nothing here names the buyer.
+//   - Not yet with Stripe (no Stripe id): the buyer may still be owed money,
+//     so the refund is failed (gave_up) for the organizer to see and retry,
+//     with an ERROR naming the organizer, order and refund. Stripe's later
+//     word still finishes it if the money went out after all.
+//   - With Stripe, waiting for its word: left requested for the webhook.
+//   - Succeeded with our fee still owed: a refund.fee_stuck audit row.
+//
+// The queue parks only real failures, never a shutdown (that hands the job
+// back), and failRefund is a no-op on a failed row, so this raises once.
 func RefundParked(s *Service) func(ctx context.Context, payload []byte, cause string) {
 	return func(ctx context.Context, payload []byte, cause string) {
 		ctx = context.WithoutCancel(ctx)
@@ -228,21 +251,31 @@ func RefundParked(s *Service) func(ctx context.Context, payload []byte, cause st
 			slog.ErrorContext(ctx, "refund stuck: unreadable job", "err", err)
 			return
 		}
-		var order uuid.UUID
-		err := system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) error {
-			var status string
-			if err := tx.QueryRow(ctx, `select r.status, p.order_id from refunds r join payments p on p.id = r.payment_id where r.id = $1`, j.Refund).
-				Scan(&status, &order); err != nil {
+		var r refundRow
+		var marked string
+		err := system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) (err error) {
+			if r, err = loadRefund(ctx, tx, j.Refund); err != nil {
 				return err
 			}
-			if status != "requested" {
-				return nil
+			switch {
+			case r.status == "requested" && r.stripeID == nil:
+				marked = "gave up"
+				return s.failRefund(ctx, tx, j.Organizer, j.Refund, "gave_up")
+			case r.status == "succeeded" && r.fee > 0 && !r.feeDone:
+				marked = "fee stuck"
+				return feeStuck(ctx, tx, j.Organizer, r)
 			}
-			return s.failRefund(ctx, tx, j.Organizer, j.Refund, "gave_up")
+			return nil
 		})
-		slog.ErrorContext(ctx, "refund stuck: nothing will retry it", "organizer", j.Organizer, "order", order, "refund", j.Refund, "err", cause)
-		if err != nil {
-			slog.ErrorContext(ctx, "refund stuck: not marked failed", "refund", j.Refund, "err", err)
+		switch {
+		case err != nil:
+			slog.ErrorContext(ctx, "refund stuck: not marked", "organizer", j.Organizer, "refund", j.Refund, "err", err, "cause", cause)
+		case marked != "":
+			slog.ErrorContext(ctx, "refund stuck: nothing will retry it", "organizer", j.Organizer, "order", r.order, "refund", j.Refund,
+				"stuck", marked, "err", cause)
+		default:
+			slog.WarnContext(ctx, "refund job parked with nothing to mark", "organizer", j.Organizer, "order", r.order, "refund", j.Refund,
+				"status", r.status, "err", cause)
 		}
 	}
 }

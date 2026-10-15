@@ -2,16 +2,19 @@
 -- Each refund is its own row with its own Stripe idempotency key
 -- (refund-<id>-<attempt>, appfee-<id>-<attempt>). attempt moves on only after
 -- Stripe refuses outright, since Stripe replays a refusal for 24 hours.
--- fee_cents is our application fee that goes back with it (0 when it doesn't).
+-- fee_cents is our application fee that goes back with it (0 when it doesn't);
+-- fee_refunded_at says it went back, and fee_refund_id is Stripe's id for
+-- that when we have one (past Stripe's idempotency window we may not).
 ALTER TABLE refunds
   ADD COLUMN fee_cents     bigint NOT NULL DEFAULT 0 CHECK (fee_cents >= 0),
-  ADD COLUMN fee_refund_id text UNIQUE,
+  ADD COLUMN fee_refund_id text UNIQUE CHECK (fee_refund_id IS NULL OR fee_refund_id LIKE 'fr\_%'),
+  ADD COLUMN fee_refunded_at timestamptz,
   ADD COLUMN attempt       int NOT NULL DEFAULT 0 CHECK (attempt >= 0),
   ADD COLUMN failure       text CHECK (failure IN ('stripe_failed', 'no_access', 'gave_up')),
   ADD CONSTRAINT refunds_failure_when_failed CHECK ((status = 'failed') = (failure IS NOT NULL)),
   ADD CONSTRAINT refunds_id_organizer_key UNIQUE (id, organizer_id);
 -- No production data yet (ruling L71); late refunds written before this gave the whole fee back.
-UPDATE refunds r SET fee_cents = p.application_fee_cents FROM payments p WHERE p.id = r.payment_id AND r.fee_refunded;
+UPDATE refunds r SET fee_cents = p.application_fee_cents, fee_refunded_at = r.updated_at FROM payments p WHERE p.id = r.payment_id AND r.fee_refunded;
 CREATE INDEX ON refunds (payment_id);
 
 -- A void ticket keeps its seat until its refund succeeds (released_at), so
@@ -53,4 +56,4 @@ ALTER TABLE tickets DROP CONSTRAINT tickets_refund_fkey, DROP CONSTRAINT tickets
   DROP COLUMN released_at, DROP COLUMN refund_id;
 DROP INDEX refunds_payment_id_idx;
 ALTER TABLE refunds DROP CONSTRAINT refunds_id_organizer_key, DROP CONSTRAINT refunds_failure_when_failed,
-  DROP COLUMN failure, DROP COLUMN attempt, DROP COLUMN fee_refund_id, DROP COLUMN fee_cents;
+  DROP COLUMN failure, DROP COLUMN attempt, DROP COLUMN fee_refunded_at, DROP COLUMN fee_refund_id, DROP COLUMN fee_cents;
