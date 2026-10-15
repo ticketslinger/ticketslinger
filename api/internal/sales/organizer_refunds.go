@@ -18,7 +18,7 @@ import (
 
 // RefundRequest is an organizer's refund of an order.
 type RefundRequest struct {
-	TicketIDs []uuid.UUID // empty: every ticket still valid
+	TicketIDs []uuid.UUID // nil: every ticket still valid; empty but not nil names none (bad_tickets)
 	FeeBack   bool        // our fee on those tickets goes back too
 }
 
@@ -38,15 +38,20 @@ var (
 		Message: "Some of those tickets aren't in this order, or they're refunded already. Reload the order and pick again."}
 	errTooManyTickets = catalogue.ErrInvalid{Code: "too_many", Field: "ticket_ids",
 		Message: "Pick up to 100 tickets at a time, or leave the list out to refund the whole order."}
-	errNotFailed = catalogue.ErrConflict{Code: "not_failed", Message: "Only a refund that failed can be sent again."}
+	errNotFailed  = catalogue.ErrConflict{Code: "not_failed", Message: "Only a refund that failed can be sent again."}
+	errFeeNoMoney = catalogue.ErrInvalid{Code: "fee_without_refund", Field: "refund_fee",
+		Message: "Those tickets cost nothing, so there's no payment to send our fee back through. Refund them with refund_fee false."}
 )
 
 // RefundTickets voids tickets of one order of event and asks Stripe for the
 // money back. Runs in the caller's transaction; locks the order, then its
 // tickets. reason: "organizer" or "event_cancelled".
 func RefundTickets(ctx context.Context, tx pgx.Tx, org, event, order uuid.UUID, in RefundRequest, reason string, actor audit.Actor) (RefundResult, error) {
-	if len(in.TicketIDs) > MaxRefundTickets {
+	switch {
+	case len(in.TicketIDs) > MaxRefundTickets:
 		return RefundResult{}, errTooManyTickets
+	case in.TicketIDs != nil && len(in.TicketIDs) == 0:
+		return RefundResult{}, errBadTickets
 	}
 	var status, feeMode string
 	err := tx.QueryRow(ctx, `select status, fee_mode from orders where id = $1 and event_id = $2 for update`, order, event).Scan(&status, &feeMode)
@@ -89,6 +94,9 @@ func RefundTickets(ctx context.Context, tx pgx.Tx, org, event, order uuid.UUID, 
 			res.AmountCents += fees
 		}
 	}
+	if res.AmountCents == 0 && res.FeeCents > 0 {
+		return RefundResult{}, errFeeNoMoney
+	}
 	if res.AmountCents > 0 {
 		var payment uuid.UUID
 		if err := tx.QueryRow(ctx, `select id from payments where order_id = $1 and status = 'succeeded'`, order).Scan(&payment); err != nil {
@@ -120,11 +128,13 @@ func RefundTickets(ctx context.Context, tx pgx.Tx, org, event, order uuid.UUID, 
 }
 
 // RetryRefund sends a failed refund again: the same row, back to requested,
-// with a new job. It keeps its key (refund-<id>-<attempt>), so if Stripe did
-// take the first try after all, Stripe answers with that refund instead of
-// making a second one. Only when Stripe itself failed the refund does the
-// row move to its next key, since the old one would replay that failure.
-// Runs in the caller's transaction; locks the order, then the refund.
+// with a new job. It keeps its key family (refund-<id>-<attempt>), and the
+// job looks at Stripe before sending a row it sent before, so a first try
+// Stripe made after all is taken up, not made twice. Only when Stripe itself
+// failed the refund does the row move to its next key, since the old one
+// would replay that failure. retry_refund (00030) makes the change: members
+// can't write refunds directly. Runs in the caller's transaction; locks the
+// order, then the refund.
 func RetryRefund(ctx context.Context, tx pgx.Tx, org, event, order, refund uuid.UUID, actor audit.Actor) (RefundView, error) {
 	err := tx.QueryRow(ctx, `select 1 from orders where id = $1 and event_id = $2 for update`, order, event).Scan(new(int))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -133,24 +143,21 @@ func RetryRefund(ctx context.Context, tx pgx.Tx, org, event, order, refund uuid.
 	if err != nil {
 		return RefundView{}, err
 	}
-	var status string
 	var failure *string
-	err = tx.QueryRow(ctx, `select r.status, r.failure from refunds r join payments p on p.id = r.payment_id
-		where r.id = $1 and p.order_id = $2 for update of r`, refund, order).Scan(&status, &failure)
+	err = tx.QueryRow(ctx, `select r.failure from refunds r join payments p on p.id = r.payment_id where r.id = $1 and p.order_id = $2`,
+		refund, order).Scan(&failure)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RefundView{}, catalogue.ErrNotFound
 	}
 	if err != nil {
 		return RefundView{}, err
 	}
-	if status != "failed" {
-		return RefundView{}, errNotFailed
-	}
-	if _, err := tx.Exec(ctx, `update refunds set status = 'requested', failure = null, updated_at = statement_timestamp(),
-			attempt = attempt + (failure = 'stripe_failed')::int,
-			stripe_refund_id = case when failure = 'stripe_failed' then null else stripe_refund_id end
-		where id = $1`, refund); err != nil {
+	var retried bool
+	if err := tx.QueryRow(ctx, `select retry_refund($1)`, refund).Scan(&retried); err != nil {
 		return RefundView{}, err
+	}
+	if !retried {
+		return RefundView{}, errNotFailed
 	}
 	if err := jobs.Enqueue(ctx, tx, RefundJob, refundJob{Organizer: org, Refund: refund}); err != nil {
 		return RefundView{}, err

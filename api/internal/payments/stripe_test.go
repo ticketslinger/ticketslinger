@@ -464,3 +464,25 @@ func TestStripeName(t *testing.T) {
 		t.Fatalf("%q %q", s.Name(), s.PublishableKey())
 	}
 }
+
+// ListRefunds asks the connected account for the intent's refunds and
+// keeps each one's metadata.
+func TestListRefundsReadsTheIntentsRefunds(t *testing.T) {
+	s, rec := newStripe(t)
+	rec.bodies = map[string]string{"/v1/refunds": `{"object":"list","url":"/v1/refunds","has_more":false,"data":[
+		{"id":"re_2","object":"refund","status":"pending","metadata":{"refund_id":"r1","attempt":"1"}},
+		{"id":"re_1","object":"refund","status":"failed","metadata":{"refund_id":"r1","attempt":"0"}}]}`}
+	list, err := s.ListRefunds(context.Background(), "acct_test1", "pi_test1")
+	if err != nil || len(list) != 2 || list[0].ID != "re_2" || list[0].Status != "pending" || list[0].Metadata["attempt"] != "1" ||
+		list[1].Metadata["refund_id"] != "r1" {
+		t.Fatalf("listed %+v %v", list, err)
+	}
+	r := rec.last()
+	if r.method != "GET" || r.path != "/v1/refunds" || r.account != "acct_test1" || r.form.Get("payment_intent") != "pi_test1" {
+		t.Fatalf("%s %s account %q form %v", r.method, r.path, r.account, r.form)
+	}
+	rec.status, rec.fail = 403, `{"error":{"type":"invalid_request_error","code":"account_invalid"}}`
+	if _, err := s.ListRefunds(context.Background(), "acct_test1", "pi_test1"); !errors.Is(err, plugin.ErrNoAccess) {
+		t.Fatalf("lost account: %v, want ErrNoAccess", err)
+	}
+}

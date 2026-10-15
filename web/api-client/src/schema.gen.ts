@@ -575,7 +575,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Name the tickets in ticket_ids, or leave it out to refund every ticket still valid. The buyer gets back what they paid for those tickets; with refund_fee true our fee on them goes back too, to the buyer when they paid it and to you when you absorbed it. Those tickets stop scanning straight away, and their seats go back on sale once the refund goes through. A ticket that cost nothing is cancelled and its seat freed at once, with no refund (refund is null). 409 not_refundable when nothing is left to refund. 422 bad_tickets (field ticket_ids) when a ticket isn't in this order or is refunded already; 422 too_many over 100 tickets; 422 missing_field without refund_fee. 404 for an order that isn't this event's. */
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Name the tickets in ticket_ids, or leave it out to refund every ticket still valid. The buyer gets back what they paid for those tickets; with refund_fee true our fee on them goes back too, to the buyer when they paid it and to you when you absorbed it. Those tickets stop scanning straight away, and their seats go back on sale once the refund goes through. A ticket that cost nothing is cancelled and its seat freed at once, with no refund (refund is null). 409 not_refundable when nothing is left to refund. 422 bad_tickets (field ticket_ids) when a ticket isn't in this order or is refunded already, or the list is empty or null; 422 too_many over 100 tickets; 422 missing_field without refund_fee; 422 fee_without_refund (field refund_fee) when the tickets cost nothing but refund_fee is true. 404 for an order that isn't this event's. */
         post: operations["refundOrder"];
         delete?: never;
         options?: never;
@@ -592,7 +592,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Sends a failed refund again: the same refund, for the same money, back to requested. If Stripe did make the first one after all, you still only pay it once. Its tickets keep their seats until it goes through. 409 not_failed unless the refund failed. 404 for a refund that isn't this order's. */
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Sends a failed refund again: the same refund, for the same money, back to requested. Before it asks Stripe again, we check whether Stripe made the first one after all; if it did, we use that one instead of sending a second. Its tickets keep their seats until it goes through. 409 not_failed unless the refund failed. 404 for a refund that isn't this order's. */
         post: operations["retryRefund"];
         delete?: never;
         options?: never;
@@ -1143,7 +1143,7 @@ export interface components {
             created_at: string;
         };
         RefundOrderRequest: {
-            /** @description The tickets to refund. Leave it out to refund every ticket still valid. */
+            /** @description The tickets to refund, 1 to 100 of them. Leave it out to refund every ticket still valid; an empty list or null is refused (422 bad_tickets), so a slip can't refund the whole order. */
             ticket_ids?: string[];
             /** @description true gives our fee on these tickets back as well. */
             refund_fee: boolean;

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -149,13 +150,14 @@ func TestRefundNamesOnlyThisOrdersTickets(t *testing.T) {
 	f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500})
 	order, _, _ := f.paidOrder(t, s, fake, 1, 1)
 	_, _, others := f.paidOrder(t, s, fake, 1, 2)
-	for _, id := range []uuid.UUID{others[0], uuid.New()} {
+	// An empty list names no tickets: never "the whole order".
+	for _, ids := range [][]uuid.UUID{{others[0]}, {uuid.New()}, {}} {
 		err := db.WithOrganizer(context.Background(), s.Pool, f.user, f.org, func(tx pgx.Tx, _ string) error {
-			_, err := sales.RefundTickets(context.Background(), tx, f.org, f.event, order, sales.RefundRequest{TicketIDs: []uuid.UUID{id}}, "organizer", audit.Actor{User: f.user})
+			_, err := sales.RefundTickets(context.Background(), tx, f.org, f.event, order, sales.RefundRequest{TicketIDs: ids}, "organizer", audit.Actor{User: f.user})
 			return err
 		})
 		if invalidCode(err) != "bad_tickets" {
-			t.Fatalf("refunding ticket %s: %v, want bad_tickets", id, err)
+			t.Fatalf("refunding tickets %v: %v, want bad_tickets", ids, err)
 		}
 	}
 	err := db.WithOrganizer(context.Background(), s.Pool, f.user, f.org, func(tx pgx.Tx, _ string) error {
@@ -244,14 +246,17 @@ func TestRetryRequeuesTheSameRefund(t *testing.T) {
 }
 
 // Stripe said failed: no money went out under that key, so the retry moves
-// to the next one (Stripe would replay the failure under the old key).
+// to the next one (Stripe would replay the failure under the old key), and
+// the failed refund of the old attempt isn't mistaken for this one.
 func TestRetryAfterStripeSaidFailedUsesTheNextKey(t *testing.T) {
 	s, fake := newPaidService(t)
 	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
 	ctx := context.Background()
 	order, _, tickets := f.paidOrder(t, s, fake, 2, 1)
 	id := *f.refund(t, s, order, sales.RefundRequest{TicketIDs: tickets[:1]}).RefundID
-	f.exec(t, `update refunds set stripe_refund_id = 're_failed' where id = $1`, id)
+	fake.RefundsPending(true)
+	drain(t, s, &mailer.Memory{})
+	fake.RefundsPending(false)
 	f.must(t, system.Run(ctx, s.Pool, f.org, func(tx pgx.Tx) error { return sales.FinishRefundForTest(s, ctx, tx, f.org, id, "failed") }))
 	_, err := f.retry(s, order, id)
 	f.must(t, err)
@@ -259,11 +264,159 @@ func TestRetryAfterStripeSaidFailedUsesTheNextKey(t *testing.T) {
 		t.Fatal("a refund Stripe failed isn't on its next key")
 	}
 	drain(t, s, &mailer.Memory{})
-	if in := fake.Refunds(); len(in) != 1 || in[0].IdempotencyKey != "refund-"+id.String()+"-1" {
-		t.Fatalf("Stripe asked for %+v, want refund-%s-1", in, id)
+	in := fake.Refunds()
+	if len(in) != 2 || in[0].IdempotencyKey != "refund-"+id.String()+"-0" || in[1].IdempotencyKey != "refund-"+id.String()+"-1" ||
+		in[1].Metadata["attempt"] != "1" || in[1].Metadata["refund_id"] != id.String() {
+		t.Fatalf("Stripe asked for %+v, want refund-%s-0 then -1", in, id)
 	}
-	if f.quotaUsed(t) != 1 {
-		t.Fatalf("quota used %d, want 1", f.quotaUsed(t))
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'succeeded'`, id); n != 1 || f.quotaUsed(t) != 1 {
+		t.Fatalf("succeeded %d, quota used %d; want 1 and 1", n, f.quotaUsed(t))
+	}
+}
+
+// Stripe made the refund but its answer was lost, we gave up, and "Try
+// again" came after Stripe forgot the key (24 hours). The job finds the first
+// refund by its metadata and takes it as the answer: one refund, not two.
+func TestARetryPastStripesKeyWindowFindsTheFirstRefund(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	order, pi, tickets := f.paidOrder(t, s, fake, 2, 1)
+	id := *f.refund(t, s, order, sales.RefundRequest{TicketIDs: tickets[:1], FeeBack: true}).RefundID
+	fake.LoseNextRefundAnswer()
+	drain(t, s, &mailer.Memory{})
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'requested' and stripe_refund_id is null and sent_at is not null`, id); n != 1 {
+		t.Fatal("the lost answer isn't waiting, marked as sent")
+	}
+	crashPark(t, s, f)
+	fake.Advance(25 * time.Hour)
+	_, err := f.retry(s, order, id)
+	f.must(t, err)
+	// A refused look at the list is no reason to move to the next key.
+	fake.FailCall("ListRefunds", &plugin.ProviderError{Op: "list refunds", Refused: true, Status: 400})
+	drain(t, s, &mailer.Memory{})
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'requested' and attempt = 0`, id); n != 1 || len(fake.Refunds()) != 1 {
+		t.Fatalf("after a refused look: %d rows on attempt 0, %d Stripe refunds; want 1 and 1", n, len(fake.Refunds()))
+	}
+	f.exec(t, `update jobs set run_at = now() where kind = 'refund' and run_at <> 'infinity'`)
+	m := &mailer.Memory{}
+	drain(t, s, m)
+	in := fake.Refunds()
+	if len(in) != 1 || in[0].Metadata["refund_id"] != id.String() || in[0].Metadata["attempt"] != "0" {
+		t.Fatalf("Stripe asked for %+v, want the first refund only", in)
+	}
+	if amount, fee := fake.Refunded(pi); amount != 2600 || fee != 100 {
+		t.Fatalf("Stripe refunded %d and fee %d", amount, fee)
+	}
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'succeeded' and stripe_refund_id like 're_fake%'`, id); n != 1 {
+		t.Fatal("the first refund wasn't taken up")
+	}
+	if f.quotaUsed(t) != 1 || refundEmails(m) != 1 {
+		t.Fatalf("quota used %d, %d refund emails; want 1 and 1", f.quotaUsed(t), refundEmails(m))
+	}
+}
+
+// Two clicks on "Try again" at once re-queue the refund once.
+func TestTwoRetriesAtOnceRequeueOnce(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	order, _, tickets := f.paidOrder(t, s, fake, 2, 1)
+	id := *f.refund(t, s, order, sales.RefundRequest{TicketIDs: tickets[:1]}).RefundID
+	crashPark(t, s, f)
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for i := range 2 {
+		wg.Go(func() { _, errs[i] = f.retry(s, order, id) })
+	}
+	wg.Wait()
+	if (errs[0] == nil) == (errs[1] == nil) || conflictCode(errors.Join(errs...)) != "not_failed" {
+		t.Fatalf("retries: %v, want one ok and one not_failed", errs)
+	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'refund.retried' and entity_id = $1`, id); n != 1 {
+		t.Fatalf("%d refund.retried rows, want 1", n)
+	}
+	if n := f.count(t, `select count(*) from jobs where kind = 'refund' and payload->>'refund_id' = $1 and run_at <> 'infinity'`, id.String()); n != 1 {
+		t.Fatalf("%d refund jobs queued, want 1", n)
+	}
+}
+
+// Even with raw SQL, a member can't mark money as refunded, bring a
+// refunded ticket back, or retry someone else's refund.
+func TestMembersCantForgeRefunds(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	ctx := context.Background()
+	order, _, tickets := f.paidOrder(t, s, fake, 2, 1)
+	id := *f.refund(t, s, order, sales.RefundRequest{TicketIDs: tickets[:1]}).RefundID
+	payment := f.id(t, `select id from payments where order_id = $1`, order)
+	asApp := func(user uuid.UUID, sql string, args ...any) error {
+		return db.WithOrganizer(ctx, s.Pool, user, f.org, func(tx pgx.Tx, _ string) error {
+			_, err := tx.Exec(ctx, sql, args...)
+			return err
+		})
+	}
+	for name, sql := range map[string]string{
+		"refund succeeded":   `update refunds set status = 'succeeded' where id = $1`,
+		"refund new key":     `update refunds set attempt = attempt + 1 where id = $1`,
+		"ticket valid again": `update tickets set status = 'valid' where refund_id = $1`,
+		"ticket repointed":   `update tickets set refund_id = null where refund_id = $1`,
+	} {
+		if err := asApp(f.user, sql, id); err == nil {
+			t.Errorf("%s: allowed", name)
+		}
+	}
+	if err := asApp(f.user, `insert into refunds (organizer_id, payment_id, amount_cents, fee_refunded, status, reason)
+		values ($1, $2, 100, false, 'succeeded', 'organizer')`, f.org, payment); err == nil {
+		t.Error("a member inserted a succeeded refund")
+	}
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'requested' and attempt = 0`, id) +
+		f.count(t, `select count(*) from tickets where refund_id = $1 and status = 'void'`, id); n != 2 {
+		t.Fatal("a member changed the refund or its ticket")
+	}
+
+	// Another organizer's failed refund, and a checkin member here: retry_refund does nothing.
+	other := f.organizer(t, "other")
+	otherEvent, _, _ := f.liveEvent(t, other, seedOpts{quota: 1, price: 100})
+	theirs := f.id(t, `with o as (insert into orders (organizer_id, event_id, code, email, status, subtotal_cents, discount_cents, tax_cents,
+			fee_cents, total_cents, fee_mode, quote, details, paid_at)
+			values ($1, $2, 'TS-00000', 'x@example.com', 'paid', 100, 0, 0, 0, 100, 'pass', '{}', '{}', now()) returning id),
+		p as (insert into payments (organizer_id, order_id, provider, stripe_account_id, payment_intent_id, client_secret, amount_cents,
+			application_fee_cents, status) select $1, id, 'test', 'acct_x', 'pi_other', '', 100, 0, 'succeeded' from o returning id)
+		insert into refunds (organizer_id, payment_id, amount_cents, fee_refunded, status, reason, failure)
+		select $1, id, 100, false, 'failed', 'organizer', 'gave_up' from p returning id`, other, otherEvent)
+	f.exec(t, `update refunds set status = 'failed', failure = 'gave_up' where id = $1`, id)
+	door := f.id(t, `insert into users(email, name) values ('door@example.com', 'D') returning id`)
+	f.exec(t, `insert into memberships(organizer_id, user_id, role) values ($1, $2, 'checkin')`, f.org, door)
+	for name, c := range map[string]struct {
+		user, refund uuid.UUID
+	}{"another organizer's": {f.user, theirs}, "a checkin member's": {door, id}} {
+		var retried bool
+		f.must(t, db.WithOrganizer(ctx, s.Pool, c.user, f.org, func(tx pgx.Tx, _ string) error {
+			return tx.QueryRow(ctx, `select retry_refund($1)`, c.refund).Scan(&retried)
+		}))
+		if retried {
+			t.Errorf("%s retry went through", name)
+		}
+	}
+	if n := f.count(t, `select count(*) from refunds where id in ($1, $2) and status = 'failed'`, id, theirs); n != 2 {
+		t.Fatal("a refund was retried by someone who may not")
+	}
+}
+
+// A ticket that charged nothing can't carry a fee back: there's no payment
+// to send it through.
+func TestFeeBackNeedsMoneyToGoWith(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	order, _, tickets := f.paidOrder(t, s, fake, 2, 1)
+	f.exec(t, `update orders set fee_mode = 'absorb' where id = $1`, order)
+	f.exec(t, `update tickets set charge_cents = 0 where id = $1`, tickets[0])
+	err := db.WithOrganizer(context.Background(), s.Pool, f.user, f.org, func(tx pgx.Tx, _ string) error {
+		_, err := sales.RefundTickets(context.Background(), tx, f.org, f.event, order, sales.RefundRequest{TicketIDs: tickets[:1], FeeBack: true},
+			"organizer", audit.Actor{User: f.user})
+		return err
+	})
+	if invalidCode(err) != "fee_without_refund" || fieldOf(err) != "refund_fee" {
+		t.Fatalf("fee back on a free ticket: %v", err)
 	}
 }
 

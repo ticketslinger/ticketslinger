@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -44,6 +45,7 @@ type refundRow struct {
 	status          string
 	amount, fee     int64
 	stripeID        *string
+	sent            bool // asked Stripe before (sent_at)
 	feeDone         bool
 	attempt         int
 	intent, account string
@@ -51,10 +53,10 @@ type refundRow struct {
 
 func loadRefund(ctx context.Context, tx pgx.Tx, id uuid.UUID) (refundRow, error) {
 	r := refundRow{id: id}
-	err := tx.QueryRow(ctx, `select p.order_id, r.status, r.amount_cents, r.fee_cents, r.stripe_refund_id, r.fee_refunded_at is not null, r.attempt,
-			p.payment_intent_id, p.stripe_account_id
+	err := tx.QueryRow(ctx, `select p.order_id, r.status, r.amount_cents, r.fee_cents, r.stripe_refund_id, r.sent_at is not null,
+			r.fee_refunded_at is not null, r.attempt, p.payment_intent_id, p.stripe_account_id
 		from refunds r join payments p on p.id = r.payment_id where r.id = $1`, id).
-		Scan(&r.order, &r.status, &r.amount, &r.fee, &r.stripeID, &r.feeDone, &r.attempt, &r.intent, &r.account)
+		Scan(&r.order, &r.status, &r.amount, &r.fee, &r.stripeID, &r.sent, &r.feeDone, &r.attempt, &r.intent, &r.account)
 	return r, err
 }
 
@@ -88,9 +90,35 @@ func Refund(s *Service) jobs.Handler {
 	}
 }
 
+// sendRefund asks Stripe for the row's money under its key for this
+// attempt. A row asked for before, with no Stripe id stored, may already be
+// at Stripe (the answer was lost) after Stripe has forgotten the key (24
+// hours), when the same key would make a second refund. So it looks first,
+// and a refund carrying this row's id and attempt is taken as the answer.
 func (s *Service) sendRefund(ctx context.Context, org uuid.UUID, r refundRow) error {
-	out, err := s.Payments.Refund(ctx, plugin.RefundInput{Account: r.account, PaymentIntentID: r.intent, AmountCents: r.amount,
-		IdempotencyKey: fmt.Sprintf("refund-%s-%d", r.id, r.attempt), Metadata: map[string]string{"refund_id": r.id.String()}})
+	var out plugin.Refund
+	if r.sent {
+		found, err := s.findRefund(ctx, r)
+		if errors.Is(err, plugin.ErrNoAccess) {
+			slog.ErrorContext(ctx, "refund: our platform can't reach the account any more", "organizer", org, "order", r.order, "refund", r.id, "err", err)
+			return system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error { return s.failRefund(ctx, tx, org, r.id, "no_access") })
+		}
+		if err != nil {
+			return err // never a reason to move to the next key
+		}
+		out = found
+	} else if err := system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `update refunds set sent_at = statement_timestamp() where id = $1 and sent_at is null`, r.id)
+		return err
+	}); err != nil {
+		return err
+	}
+	var err error
+	if out.ID == "" {
+		out, err = s.Payments.Refund(ctx, plugin.RefundInput{Account: r.account, PaymentIntentID: r.intent, AmountCents: r.amount,
+			IdempotencyKey: fmt.Sprintf("refund-%s-%d", r.id, r.attempt),
+			Metadata:       map[string]string{"refund_id": r.id.String(), "attempt": strconv.Itoa(r.attempt)}})
+	}
 	switch {
 	case errors.Is(err, plugin.ErrAlreadyRefunded):
 		// The charge is empty: nothing is left on it to refund. That doesn't
@@ -114,6 +142,22 @@ func (s *Service) sendRefund(ctx context.Context, org uuid.UUID, r refundRow) er
 		}
 		return s.finishRefund(ctx, tx, org, r.id, out.Status)
 	})
+}
+
+// findRefund is the refund Stripe made for this row's current attempt, if
+// any: its metadata names the row and the attempt. A refund of an earlier
+// attempt that Stripe failed doesn't count; that's why the row moved on.
+func (s *Service) findRefund(ctx context.Context, r refundRow) (plugin.Refund, error) {
+	list, err := s.Payments.ListRefunds(ctx, r.account, r.intent)
+	if err != nil {
+		return plugin.Refund{}, err
+	}
+	for _, x := range list {
+		if x.Metadata["refund_id"] == r.id.String() && x.Metadata["attempt"] == strconv.Itoa(r.attempt) {
+			return x, nil
+		}
+	}
+	return plugin.Refund{}, nil
 }
 
 func (s *Service) sendFeeRefund(ctx context.Context, org uuid.UUID, r refundRow) error {
@@ -175,6 +219,12 @@ func (s *Service) nextAttempt(ctx context.Context, org uuid.UUID, r refundRow) e
 // organizer to see and retry; seats already given back stay given back. Anything else
 // (pending, requires_action) waits for the next word. A final row is left
 // alone, so replays change nothing.
+//
+// Stripe's refund webhooks (Task 5) find their row by metadata.refund_id and
+// apply only when the event's refund id equals the stored stripe_refund_id,
+// or no id is stored yet and metadata.attempt equals the row's attempt. That
+// keeps a late "failed" for an attempt the row has moved past from failing
+// the retry that replaced it.
 func (s *Service) finishRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, stripeStatus string) error {
 	var order uuid.UUID
 	if err := tx.QueryRow(ctx, `select p.order_id from refunds r join payments p on p.id = r.payment_id where r.id = $1`, id).Scan(&order); err != nil {

@@ -688,8 +688,11 @@ func (s *server) RefundOrder(ctx context.Context, req RefundOrderRequestObject) 
 			return missingField("refund_fee", "true to give our fee back too, false to keep it")
 		}
 		in := sales.RefundRequest{FeeBack: *req.Body.RefundFee}
-		if req.Body.TicketIds != nil {
-			in.TicketIDs = *req.Body.TicketIds
+		// Absent: the whole order. Present, a list of at least one; null or
+		// [] names no tickets (bad_tickets), never "all of them".
+		if req.Body.TicketIds.IsSpecified() {
+			ids, _ := req.Body.TicketIds.Get() // null: an error, and no ids
+			in.TicketIDs = append([]uuid.UUID{}, ids...)
 		}
 		res, err := sales.RefundTickets(ctx, tx, org.ID, req.Event, req.Order, in, "organizer", actorFrom(ctx))
 		if err != nil {
@@ -717,8 +720,11 @@ func (s *server) RetryRefund(ctx context.Context, req RetryRefundRequestObject) 
 	var out RetryRefund200JSONResponse
 	err := s.inOrganizer(ctx, req.Organizer, refundsWrite, func(org organizers.Organizer, tx pgx.Tx) error {
 		r, err := sales.RetryRefund(ctx, tx, org.ID, req.Event, req.Order, req.Refund, actorFrom(ctx))
+		if err != nil {
+			return err
+		}
 		out = RetryRefund200JSONResponse(toRefund(r))
-		return err
+		return nil
 	})
 	if err != nil {
 		return nil, salesError(err)

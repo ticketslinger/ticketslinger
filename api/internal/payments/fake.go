@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 )
@@ -31,8 +32,11 @@ type Fake struct {
 	intents   map[string]plugin.PaymentIntent // by idempotency key
 	latest    *plugin.PaymentIntent
 	byID      map[string]*fakeIntent
-	refunds   map[string]plugin.Refund // by idempotency key
+	refunds   map[string]fakeRefund // by idempotency key, until it expires
+	made      []fakeRefund          // every refund made, oldest first
 	refundLog []plugin.RefundInput
+	skew      time.Duration     // Advance
+	lose      bool              // LoseNextRefundAnswer
 	feeKeys   map[string]string // fee refund ids by idempotency key
 	feeLog    []plugin.FeeRefundInput
 	pending   bool
@@ -46,7 +50,7 @@ type Fake struct {
 var _ plugin.PaymentProvider = (*Fake)(nil)
 
 func NewFake() *Fake {
-	return &Fake{accounts: map[string]bool{}, onboarded: map[string]bool{}, intents: map[string]plugin.PaymentIntent{}, byID: map[string]*fakeIntent{}, refunds: map[string]plugin.Refund{}, feeKeys: map[string]string{}}
+	return &Fake{accounts: map[string]bool{}, onboarded: map[string]bool{}, intents: map[string]plugin.PaymentIntent{}, byID: map[string]*fakeIntent{}, refunds: map[string]fakeRefund{}, feeKeys: map[string]string{}}
 }
 
 func (f *Fake) Name() string           { return "test" }
@@ -177,27 +181,81 @@ func tooMuch(op string) error {
 	return &plugin.ProviderError{Op: "fake: " + op, Refused: true, Status: 400, Code: "amount_too_large"}
 }
 
+type fakeRefund struct {
+	r      plugin.Refund
+	intent string
+	at     time.Time
+}
+
+// keyWindow is how long Stripe remembers an idempotency key.
+const keyWindow = 24 * time.Hour
+
+func (f *Fake) now() time.Time { return time.Now().Add(f.skew) }
+
+// Advance moves the fake's clock on, so idempotency keys older than 24 hours
+// are forgotten, as Stripe forgets them.
+func (f *Fake) Advance(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.skew += d
+}
+
+// LoseNextRefundAnswer makes the next refund go through but its answer
+// never arrive: the caller sees a timeout.
+func (f *Fake) LoseNextRefundAnswer() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lose = true
+}
+
 func (f *Fake) Refund(_ context.Context, in plugin.RefundInput) (plugin.Refund, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.failedFor("Refund"); err != nil {
 		return plugin.Refund{}, err
 	}
-	if r, ok := f.refunds[in.IdempotencyKey]; ok && in.IdempotencyKey != "" {
-		return r, nil
+	if r, ok := f.refunds[in.IdempotencyKey]; ok && in.IdempotencyKey != "" && f.now().Sub(r.at) < keyWindow {
+		return r.r, nil
 	}
 	pi := f.byID[in.PaymentIntentID]
 	if pi == nil || in.AmountCents <= 0 || pi.refunded+in.AmountCents > pi.intent.AmountCents {
 		return plugin.Refund{}, tooMuch("refund")
 	}
 	pi.refunded += in.AmountCents
-	r := plugin.Refund{ID: fakeID("re_fake", in.IdempotencyKey), Status: "succeeded"}
+	md := map[string]string{}
+	for k, v := range in.Metadata {
+		md[k] = v
+	}
+	// A forgotten key makes a new refund with a new id, as at Stripe.
+	r := plugin.Refund{ID: fakeID("re_fake", in.IdempotencyKey+"#"+strconv.Itoa(len(f.made))), Status: "succeeded", Metadata: md}
 	if f.pending {
 		r.Status = "pending"
 	}
-	f.refunds[in.IdempotencyKey] = r
+	fr := fakeRefund{r: r, intent: in.PaymentIntentID, at: f.now()}
+	f.refunds[in.IdempotencyKey] = fr
+	f.made = append(f.made, fr)
 	f.refundLog = append(f.refundLog, in)
+	if f.lose {
+		f.lose = false
+		return plugin.Refund{}, &plugin.ProviderError{Op: "fake: refund", Cause: "timeout"}
+	}
 	return r, nil
+}
+
+// ListRefunds is every refund made on the intent, newest first.
+func (f *Fake) ListRefunds(_ context.Context, _, intentID string) ([]plugin.Refund, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.failedFor("ListRefunds"); err != nil {
+		return nil, err
+	}
+	var out []plugin.Refund
+	for i := len(f.made) - 1; i >= 0; i-- {
+		if f.made[i].intent == intentID {
+			out = append(out, f.made[i].r)
+		}
+	}
+	return out, nil
 }
 
 func (f *Fake) RefundApplicationFee(_ context.Context, in plugin.FeeRefundInput) (string, error) {

@@ -107,6 +107,8 @@ func TestRefundBodyRules(t *testing.T) {
 		{"no refund_fee", `{}`, "missing_field", "refund_fee"},
 		{"unknown ticket", `{"ticket_ids":["00000000-0000-0000-0000-000000000000"],"refund_fee":false}`, "bad_tickets", "ticket_ids"},
 		{"another order's ticket", `{"ticket_ids":["` + theirs + `"],"refund_fee":false}`, "bad_tickets", "ticket_ids"},
+		{"an empty list", `{"ticket_ids":[],"refund_fee":false}`, "bad_tickets", "ticket_ids"},
+		{"a null list", `{"ticket_ids":null,"refund_fee":false}`, "bad_tickets", "ticket_ids"},
 		{"over 100 tickets", `{"ticket_ids":[` + many + `],"refund_fee":false}`, "too_many", "ticket_ids"},
 	} {
 		res := s.do(s.owner, "POST", s.orderPath(order)+"/refunds", c.body)
