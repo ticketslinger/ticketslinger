@@ -138,6 +138,14 @@ func TestFakeRefundsAreExactAndBounded(t *testing.T) {
 	if got := f.FeeRefunds(); len(got) != 1 || got[0].AmountCents != 100 {
 		t.Fatalf("fee refunds %+v", got)
 	}
+	// Past the idempotency window: a new key for a share that went back
+	// already finds the fee refunded, the same answer Stripe's fee read gives.
+	if _, err := f.RefundApplicationFee(ctx, plugin.FeeRefundInput{Account: "acct_fake1", PaymentIntentID: pi.ID, AmountCents: 100, IdempotencyKey: "appfee-b-0"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.RefundApplicationFee(ctx, plugin.FeeRefundInput{Account: "acct_fake1", PaymentIntentID: pi.ID, AmountCents: 100, IdempotencyKey: "appfee-a-1"}); !errors.Is(err, plugin.ErrAlreadyRefunded) {
+		t.Fatalf("fee refunded twice: %v, want ErrAlreadyRefunded", err)
+	}
 }
 
 func TestFakeIntentStatusAndCancel(t *testing.T) {

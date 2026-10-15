@@ -35,19 +35,15 @@ func Enqueue(ctx context.Context, tx pgx.Tx, kind string, payload any) error {
 // say the same in SQL).
 const MaxAttempts = 10
 
-type attemptKey struct{}
-
-// Attempt is which run of its job this is, from 1, inside a Handler; 0
-// outside one. At MaxAttempts a failure parks the job.
-func Attempt(ctx context.Context) int {
-	n, _ := ctx.Value(attemptKey{}).(int)
-	return n
-}
-
 type Worker struct {
 	Pool     *pgxpool.Pool
 	Handlers map[string]Handler
-	Poll     time.Duration // default 1s
+	// Parked is told about each job the queue gives up on, by kind: after
+	// MaxAttempts failures, or after its worker crashed MaxAttempts times.
+	// The cause is the last error. Runs outside any transaction; it must not
+	// fail the queue.
+	Parked map[string]func(ctx context.Context, payload []byte, cause string)
+	Poll   time.Duration // default 1s
 }
 
 const claim = `update jobs set locked_until = now() + interval '5 minutes', attempts = attempts + 1
@@ -112,14 +108,23 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	err := w.Pool.QueryRow(ctx, claim).Scan(&id, &kind, &payload, &attempts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// A job that crashed its worker ten times is poison: park it.
-		_, err = w.Pool.Exec(ctx, `update jobs set run_at = 'infinity', locked_until = null, last_error = 'gave up after a crash'
-			where attempts >= 10 and run_at <> 'infinity' and locked_until < now()`)
+		const crashed = "gave up after a crash"
+		rows, _ := w.Pool.Query(ctx, `update jobs set run_at = 'infinity', locked_until = null, last_error = $1
+			where attempts >= 10 and run_at <> 'infinity' and locked_until < now() returning kind, payload`, crashed)
+		// Collected first, so the update has committed before any hook runs.
+		parked, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
+			Kind    string
+			Payload []byte
+		}])
+		for _, p := range parked {
+			w.park(ctx, p.Kind, p.Payload, crashed)
+		}
 		return false, err
 	}
 	if err != nil {
 		return false, err
 	}
-	herr := w.handle(context.WithValue(ctx, attemptKey{}, attempts), kind, payload)
+	herr := w.handle(ctx, kind, payload)
 	// A shutdown mid-job must still record the outcome.
 	rec := context.WithoutCancel(ctx)
 	if herr != nil && ctx.Err() != nil {
@@ -132,6 +137,9 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		}
 		log(ctx, "jobs: failed", "kind", kind, "id", id, "attempt", attempts, "parked", attempts >= MaxAttempts, "err", herr)
 		_, err = w.Pool.Exec(rec, fail, id, herr.Error())
+		if err == nil && attempts >= MaxAttempts {
+			w.park(rec, kind, payload, herr.Error())
+		}
 	} else {
 		_, err = w.Pool.Exec(rec, `delete from jobs where id = $1`, id)
 	}
@@ -139,6 +147,13 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		err = fmt.Errorf("jobs: record outcome: %w", err)
 	}
 	return true, err
+}
+
+// park tells kind's Parked hook, if it has one, that the queue gave up.
+func (w *Worker) park(ctx context.Context, kind string, payload []byte, cause string) {
+	if hook := w.Parked[kind]; hook != nil {
+		hook(ctx, payload, cause)
+	}
 }
 
 func (w *Worker) handle(ctx context.Context, kind string, payload []byte) (err error) {

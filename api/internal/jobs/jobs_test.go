@@ -416,3 +416,39 @@ func TestSweepPredicatesAreIndexed(t *testing.T) {
 		}
 	}
 }
+
+func mustExec(t *testing.T, pool *pgxpool.Pool, sql string) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), sql); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Both ways a job gets parked tell its kind's hook, once: ten failures, and
+// ten crashes of the whole worker.
+func TestParkedJobsReachTheirHook(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	var mu sync.Mutex
+	var got []string
+	w := &jobs.Worker{Pool: pool,
+		Handlers: map[string]jobs.Handler{"boom": func(context.Context, []byte) error { return errors.New("no") }},
+		Parked: map[string]func(context.Context, []byte, string){"boom": func(_ context.Context, p []byte, cause string) {
+			mu.Lock()
+			got = append(got, string(p)+" "+cause)
+			mu.Unlock()
+		}}}
+	owner := testdb.Owner(t, pool)
+	mustExec(t, owner, `insert into jobs (kind, payload, attempts) values ('boom', '{"n":1}', 9)`)
+	if ran, err := w.RunOnce(ctx); !ran || err != nil {
+		t.Fatal(ran, err)
+	}
+	// A job whose worker died on its tenth run: claimed, never recorded.
+	mustExec(t, owner, `insert into jobs (kind, payload, attempts, locked_until) values ('boom', '{"n":2}', 10, now() - interval '1 second')`)
+	if ran, err := w.RunOnce(ctx); ran || err != nil {
+		t.Fatal(ran, err)
+	}
+	if len(got) != 2 || got[0] != `{"n": 1} no` || got[1] != `{"n": 2} gave up after a crash` {
+		t.Fatalf("hook calls %q", got)
+	}
+}

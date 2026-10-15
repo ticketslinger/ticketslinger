@@ -247,20 +247,10 @@ func (s *Service) settle(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, stat
 	return err
 }
 
-// RefundPaymentJob refunds a cancelled order's payment in full.
-const RefundPaymentJob = "refund_payment"
-
-// refundJob is the job's whole payload: no amounts, ids or secrets of
-// Stripe's. The handler reads them from the order when it runs.
-type refundJob struct {
-	Organizer uuid.UUID `json:"organizer_id"`
-	Order     uuid.UUID `json:"order_id"`
-}
-
 // cancelLate is the paid order that can't be sold any more: the payment went
 // through, but the seats (or the event, a ticket type, the code's last use)
 // went first. Cancel it, free the checkout's holds, record it as the
-// system's own decision, and queue the refund.
+// system's own decision, and request a refund of all of it, our fee included.
 func (s *Service) cancelLate(ctx context.Context, tx pgx.Tx, org, orderID uuid.UUID, checkout *uuid.UUID, reason string) error {
 	slog.WarnContext(ctx, "paid order can't be sold any more: cancelling and refunding", "order", orderID, "reason", reason)
 	if err := closeCheckout(ctx, tx, checkout); err != nil {
@@ -273,7 +263,13 @@ func (s *Service) cancelLate(ctx context.Context, tx pgx.Tx, org, orderID uuid.U
 		EntityType: "order", EntityID: orderID, After: map[string]string{"reason": reason}}); err != nil {
 		return err
 	}
-	return jobs.Enqueue(ctx, tx, RefundPaymentJob, refundJob{Organizer: org, Order: orderID})
+	var payment uuid.UUID
+	var amount, fee int64
+	if err := tx.QueryRow(ctx, `select id, amount_cents, application_fee_cents from payments where order_id = $1`, orderID).Scan(&payment, &amount, &fee); err != nil {
+		return err
+	}
+	_, err := requestRefund(ctx, tx, org, payment, amount, fee, true, "late_payment", nil)
+	return err
 }
 
 // OrderConfirmationJob emails a paid order's link to its buyer.

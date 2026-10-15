@@ -210,7 +210,14 @@ func (f *Fake) RefundApplicationFee(_ context.Context, in plugin.FeeRefundInput)
 		return id, nil
 	}
 	pi := f.byID[in.PaymentIntentID]
-	if pi == nil || in.AmountCents <= 0 || pi.feeRefunded+in.AmountCents > pi.fee {
+	if pi == nil || in.AmountCents <= 0 {
+		return "", tooMuch("fee refund")
+	}
+	if left := pi.fee - pi.feeRefunded; left < in.AmountCents {
+		// As Stripe's fee read: done when it's all back, or this share is.
+		if pi.fee > 0 && (left == 0 || pi.feeRefunded >= in.AmountCents) {
+			return "", plugin.ErrAlreadyRefunded
+		}
 		return "", tooMuch("fee refund")
 	}
 	pi.feeRefunded += in.AmountCents

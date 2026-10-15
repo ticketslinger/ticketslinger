@@ -122,8 +122,8 @@ func newWorker(pool *pgxpool.Pool, m mailer.Mailer, cfg config.Config, pay plugi
 	return &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{
 		"send_email":               jobs.SendEmail(m),
 		sales.OrderConfirmationJob: shop.OrderConfirmation(m),
-		sales.RefundPaymentJob:     sales.RefundPayment(shop),
-	}}
+		sales.RefundJob:            sales.Refund(shop),
+	}, Parked: map[string]func(context.Context, []byte, string){sales.RefundJob: sales.RefundParked(shop)}}
 }
 
 // newHandler builds the API and its job worker, which share one mailer and
