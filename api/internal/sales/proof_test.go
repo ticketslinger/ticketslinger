@@ -107,7 +107,8 @@ func TestOversellProof(t *testing.T) {
 
 // deliverRefunds sends Stripe's word on every refund it holds that we still
 // call requested: refund.created saying pending, then refund.updated saying
-// status, each event times over, all at once. Copies of one event share its
+// status, then that word again under a second event id, each event times
+// over, all at once. Copies of one event share its
 // id, as Stripe's redeliveries do.
 func (f fixture) deliverRefunds(t *testing.T, s *sales.Service, status string, times int) {
 	t.Helper()
@@ -136,7 +137,11 @@ func (f fixture) deliverRefunds(t *testing.T, s *sales.Service, status string, t
 		pending.ID, pending.Type = "evt_"+r.stripeID+"_created", stripe.EventTypeRefundCreated
 		final := refundEvent(r.stripeID, r.intent, r.account, r.amount, status, ours(r.id, r.attempt), 0)
 		final.ID = "evt_" + r.stripeID + "_" + status
-		for _, ev := range []stripe.Event{pending, final} {
+		// refund.created and refund.updated can both carry the final word,
+		// under different ids, so the dedup on ids alone can't hide a replay.
+		again := final
+		again.ID += "_again"
+		for _, ev := range []stripe.Event{pending, final, again} {
 			for range times {
 				wg.Go(func() {
 					if err := s.HandleStripeEvent(ctx, ev); err != nil {
@@ -155,8 +160,8 @@ func (f fixture) deliverRefunds(t *testing.T, s *sales.Service, status string, t
 // Spec success criterion 6. A full refund, a one-ticket refund and an event
 // cancellation each void exactly the tickets they name, give their seats
 // back only once Stripe says the money went, and leave our books matching
-// the fake Stripe's to the cent. Refunds race new sales, and every Stripe
-// event arrives twice.
+// the fake Stripe's to the cent. Refunds race new sales, and every refund
+// event, and the late payment's, arrives twice (the setup payments once).
 func TestRefundProof(t *testing.T) {
 	s, fake := newPaidService(t)
 	fake.RefundsPending(true) // as in live mode: Stripe's word comes by webhook
@@ -187,6 +192,9 @@ func TestRefundProof(t *testing.T) {
 	})
 	held := concurrently(t, 12, func() (sales.Checkout, error) { return s.CreateCheckout(ctx, general) })
 	wg.Wait()
+	if t.Failed() {
+		t.FailNow()
+	}
 	if len(held) != 4 || f.quotaUsed(t) != 10 {
 		t.Fatalf("%d holds while refunds are pending (want 4), quota used %d (want 10)", len(held), f.quotaUsed(t))
 	}
@@ -203,8 +211,8 @@ func TestRefundProof(t *testing.T) {
 		t.Fatalf("quota used %d after the refunds went through, want 7", f.quotaUsed(t))
 	}
 	late := concurrently(t, 6, func() (sales.Checkout, error) { return s.CreateCheckout(ctx, general) })
-	if len(late) != 3 {
-		t.Fatalf("%d of the freed seats sold, want 3", len(late))
+	if len(late) != 3 || late[0].Quote.FeeCents <= 0 {
+		t.Fatalf("%d of the freed seats sold (want 3), fee %d (want > 0)", len(late), late[0].Quote.FeeCents)
 	}
 
 	// 3. One holder pays now; their webhook arrives, twice, after the
@@ -224,6 +232,9 @@ func TestRefundProof(t *testing.T) {
 		})
 	}
 	wg.Wait()
+	if t.Failed() {
+		t.FailNow()
+	}
 	drain(t, s, m)
 	if f.quotaUsed(t) != 9 { // C's 2 and B's last still taken; 6 holds; the late payer's hold gone
 		t.Fatalf("quota used %d before Stripe confirmed the cancellation's refunds, want 9", f.quotaUsed(t))
@@ -254,8 +265,8 @@ func TestRefundProof(t *testing.T) {
 		t.Fatalf("tickets by refund:\n got %v\nwant %v", got, want)
 	}
 	// Each refund is what its tickets cost, fee included when it went back.
-	if n := f.count(t, `select count(*) from refunds r where r.reason <> 'late_payment' and r.amount_cents <> (select sum(t.charge_cents +
-			case when r.fee_refunded then t.fee_cents else 0 end) from tickets t where t.refund_id = r.id)`); n != 0 {
+	if n := f.count(t, `select count(*) from refunds r where r.reason <> 'late_payment' and r.amount_cents <> coalesce((select sum(t.charge_cents +
+			case when r.fee_refunded then t.fee_cents else 0 end) from tickets t where t.refund_id = r.id), -1)`); n != 0 {
 		t.Fatalf("%d refunds don't add up to their tickets", n)
 	}
 	for _, o := range []struct {

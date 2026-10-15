@@ -163,6 +163,44 @@ func TestRefundWebhookFinishesTheRefund(t *testing.T) {
 	}
 }
 
+// A refund event delivered again under its id does nothing, even when the
+// row has gone back to looking as it did before: the handler runs once per
+// event id, not just once per state.
+func TestARefundEventRunsOncePerID(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	ctx := context.Background()
+	_, pi, ticket, refund, stripeID := pendingRefund(t, s, f, fake)
+	ev := refundEvent(stripeID, pi, "acct_fake1", 2600, "succeeded", ours(refund, 0), 1)
+	f.must(t, s.HandleStripeEvent(ctx, ev))
+	if f.quotaUsed(t) != 1 {
+		t.Fatalf("quota used %d after the refund went through, want 1", f.quotaUsed(t))
+	}
+	// Put the row and its seat back as they were, so a second run of the
+	// handler would show: it would succeed the refund again.
+	f.exec(t, `update refunds set status = 'requested' where id = $1`, refund)
+	f.exec(t, `update tickets set released_at = null where id = $1`, ticket)
+	before := f.rowState(t, refund)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(func() {
+			if err := s.HandleStripeEvent(ctx, ev); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	if after := f.rowState(t, refund); after != before {
+		t.Fatalf("the replay changed the refund: %s, was %s", after, before)
+	}
+	if n := f.count(t, `select count(*) from stripe_events where id = $1`, ev.ID); n != 1 {
+		t.Fatalf("%d stripe_events rows for the event, want 1", n)
+	}
+	if n := f.count(t, `select count(*) from jobs where kind = 'send_email' and payload->>'subject' = 'Your refund for Gala'`); n != 1 {
+		t.Fatalf("%d refund emails queued, want 1", n)
+	}
+}
+
 // Stripe failed a refund it had called pending: the organizer sees it
 // failed, and the seat stays held until a retry succeeds.
 func TestRefundStripeFailsIsShown(t *testing.T) {
