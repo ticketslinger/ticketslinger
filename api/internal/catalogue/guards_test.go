@@ -101,8 +101,8 @@ func (f fixture) sell(t *testing.T, sale string, n int) {
 		_, err = f.owner.Exec(ctx, `with o as (insert into orders(organizer_id, event_id, code, email, status, subtotal_cents, discount_cents,
 				tax_cents, fee_cents, total_cents, fee_mode, quote, details)
 				values ($1, $2, $5, 'b@example.com', 'paid', 0, 0, 0, 0, 0, 'pass', '{}', '{}') returning id)
-			insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, secret)
-			select $1, $2, o.id, $3, 2500, 0, 0, 0, decode(md5(random()::text), 'hex') from o, generate_series(1, $4)`,
+			insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, charge_cents, secret)
+			select $1, $2, o.id, $3, 2500, 0, 0, 0, 2500, decode(md5(random()::text), 'hex') from o, generate_series(1, $4)`,
 			f.org, f.event, f.general, n, fmt.Sprintf("TS-%05d", orderNo.Add(1)))
 	default:
 		t.Fatalf("unknown sale %q", sale)

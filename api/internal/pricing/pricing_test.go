@@ -109,3 +109,20 @@ func TestUnknownFeeModeIsPass(t *testing.T) {
 		t.Fatalf("absorb fee %d", q.FeeCents)
 	}
 }
+
+func TestQuoteSaysWhichTaxIsIncluded(t *testing.T) {
+	tt := uuid.New()
+	in := pricing.Compute([]pricing.Line{{TicketTypeID: tt, Quantity: 2, PriceCents: 2200, TaxRateBP: 1000, PricesIncludeTax: true}}, nil, pricing.FeePass, pricing.Fee{})
+	ex := pricing.Compute([]pricing.Line{{TicketTypeID: tt, Quantity: 1, PriceCents: 2000, TaxRateBP: 1000}}, nil, pricing.FeePass, pricing.Fee{})
+	if !in.Tickets[0].TaxIncluded || in.IncludedTaxCents != 400 || in.TaxCents != 400 {
+		t.Fatalf("inclusive: %+v", in)
+	}
+	if ex.Tickets[0].TaxIncluded || ex.IncludedTaxCents != 0 || ex.Tickets[0].ChargeCents != 2200 {
+		t.Fatalf("exclusive: %+v", ex)
+	}
+	// 0% inclusive tax is still "included", even though charge == net.
+	zero := pricing.Compute([]pricing.Line{{TicketTypeID: tt, Quantity: 1, PriceCents: 1000, PricesIncludeTax: true}}, nil, pricing.FeePass, pricing.Fee{})
+	if !zero.Tickets[0].TaxIncluded {
+		t.Fatal("0% inclusive tax lost its flag")
+	}
+}

@@ -40,6 +40,7 @@ type Ticket struct {
 	TicketTypeID                                  uuid.UUID
 	PriceCents, DiscountCents, TaxCents, FeeCents int64
 	ChargeCents                                   int64 // what the buyer pays for this ticket, excluding a passed fee
+	TaxIncluded                                   bool  // TaxCents is already inside PriceCents − DiscountCents
 }
 
 // Quote is the price of a whole order.
@@ -47,6 +48,8 @@ type Quote struct {
 	Tickets                                                      []Ticket
 	SubtotalCents, DiscountCents, TaxCents, FeeCents, TotalCents int64
 	FeeMode                                                      string // "pass" | "absorb"
+	// Σ TaxCents of tickets whose price already includes it; the rest was added on top.
+	IncludedTaxCents int64
 	// FeeCents is the platform's application fee either way; TotalCents
 	// includes it only when FeeMode is "pass".
 }
@@ -81,6 +84,7 @@ func Compute(lines []Line, promo *Promo, feeMode string, fee Fee) Quote {
 				preTax = (net*10000 + d/2) / d
 				t.TaxCents = net - preTax
 				t.ChargeCents = net
+				t.TaxIncluded = true
 			} else {
 				t.TaxCents = bp(net, int64(l.TaxRateBP))
 				t.ChargeCents = net + t.TaxCents
@@ -95,6 +99,9 @@ func Compute(lines []Line, promo *Promo, feeMode string, fee Fee) Quote {
 			q.SubtotalCents += t.PriceCents
 			q.DiscountCents += t.DiscountCents
 			q.TaxCents += t.TaxCents
+			if t.TaxIncluded {
+				q.IncludedTaxCents += t.TaxCents
+			}
 			q.FeeCents += t.FeeCents
 			q.TotalCents += t.ChargeCents
 		}

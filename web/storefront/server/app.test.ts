@@ -657,12 +657,14 @@ const checkout = (over: Record<string, unknown> = {}) => ({
       tax_cents: 0,
       fee_cents: 95,
       charge_cents: 2250,
+      tax_included: false,
     })),
     subtotal_cents: 5000,
     discount_cents: 500,
     tax_cents: 0,
     fee_cents: 190,
     total_cents: 4690,
+    included_tax_cents: 0,
     fee_mode: "pass",
   },
   event: checkoutEvent,
@@ -976,8 +978,22 @@ const sumsUp = (html: string) => {
 const taxed = (inclusive: boolean) => {
   // $25 at 8.25%: inclusive keeps $25.00 with $1.91 inside; exclusive adds $2.06.
   const t = inclusive
-    ? { price_cents: 2500, discount_cents: 0, tax_cents: 191, fee_cents: 96, charge_cents: 2500 }
-    : { price_cents: 2500, discount_cents: 0, tax_cents: 206, fee_cents: 100, charge_cents: 2706 };
+    ? {
+        price_cents: 2500,
+        discount_cents: 0,
+        tax_cents: 191,
+        fee_cents: 96,
+        charge_cents: 2500,
+        tax_included: true,
+      }
+    : {
+        price_cents: 2500,
+        discount_cents: 0,
+        tax_cents: 206,
+        fee_cents: 100,
+        charge_cents: 2706,
+        tax_included: false,
+      };
   return checkout({
     items: [{ ticket_type_id: "t1", quantity: 1 }],
     quote: {
@@ -987,6 +1003,7 @@ const taxed = (inclusive: boolean) => {
       tax_cents: t.tax_cents,
       fee_cents: t.fee_cents,
       total_cents: t.charge_cents + t.fee_cents,
+      included_tax_cents: t.tax_included ? t.tax_cents : 0,
       fee_mode: "pass",
     },
   });
@@ -998,6 +1015,37 @@ test("tax on top is its own line, and the lines add up", async () => {
   expect(html).toContain("<span>Tax</span><span>$2.06</span>");
   expect(html).not.toContain("Includes");
   expect(sumsUp(html)).toEqual({ sum: 2806, total: 2806 });
+});
+
+test("included tax comes from the API's flag", async () => {
+  const one = async (t: Record<string, unknown>, included: number) => {
+    const c = taxed(true);
+    const quote = {
+      ...c.quote,
+      tickets: [{ ticket_type_id: "t1", discount_cents: 0, fee_cents: 0, ...t }],
+      included_tax_cents: included,
+    };
+    const body = { ...c, quote };
+    return (await app(() => Response.json(body)).a.request(`/checkout/${TOK}`)).text();
+  };
+  // 0% inclusive tax: charge equals the price either way, only the flag says so.
+  const zero = await one(
+    { price_cents: 1000, tax_cents: 0, charge_cents: 1000, tax_included: true },
+    0,
+  );
+  expect(zero).not.toContain("<span>Tax</span>");
+  expect(zero).not.toContain("Includes");
+  const inside = await one(
+    { price_cents: 2200, tax_cents: 200, charge_cents: 2200, tax_included: true },
+    200,
+  );
+  expect(inside).toContain("Includes $2.00 tax");
+  expect(inside).not.toContain("<span>Tax</span>");
+  const added = await one(
+    { price_cents: 2000, tax_cents: 160, charge_cents: 2160, tax_included: false },
+    0,
+  );
+  expect(added).toContain("<span>Tax</span><span>$1.60</span>");
 });
 
 test("tax inside the price is noted under the total, and the lines add up", async () => {

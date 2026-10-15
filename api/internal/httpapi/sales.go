@@ -528,10 +528,10 @@ func toCheckout(c sales.Checkout) Checkout {
 	}
 	q := c.Quote
 	out.Quote = Quote{Tickets: []QuoteTicket{}, SubtotalCents: q.SubtotalCents, DiscountCents: q.DiscountCents, TaxCents: q.TaxCents,
-		FeeCents: q.FeeCents, TotalCents: q.TotalCents, FeeMode: QuoteFeeMode(q.FeeMode)}
+		FeeCents: q.FeeCents, TotalCents: q.TotalCents, FeeMode: QuoteFeeMode(q.FeeMode), IncludedTaxCents: q.IncludedTaxCents}
 	for _, t := range q.Tickets {
 		out.Quote.Tickets = append(out.Quote.Tickets, QuoteTicket{TicketTypeId: t.TicketTypeID, PriceCents: t.PriceCents, DiscountCents: t.DiscountCents,
-			TaxCents: t.TaxCents, FeeCents: t.FeeCents, ChargeCents: t.ChargeCents})
+			TaxCents: t.TaxCents, FeeCents: t.FeeCents, ChargeCents: t.ChargeCents, TaxIncluded: t.TaxIncluded})
 	}
 	return out
 }

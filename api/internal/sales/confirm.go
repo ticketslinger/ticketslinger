@@ -192,7 +192,7 @@ func stillSellable(ctx context.Context, tx pgx.Tx, event uuid.UUID, promo *uuid.
 func cut(ctx context.Context, tx pgx.Tx, org, event, orderID uuid.UUID, q pricing.Quote, d Details) error {
 	n := len(q.Tickets)
 	secrets, names, ticketTypes := make([][]byte, n), make([]string, n), make([]uuid.UUID, n)
-	price, disc, tax, fee := make([]int64, n), make([]int64, n), make([]int64, n), make([]int64, n)
+	price, disc, tax, fee, charge := make([]int64, n), make([]int64, n), make([]int64, n), make([]int64, n), make([]int64, n)
 	for i, t := range q.Tickets {
 		secrets[i] = make([]byte, 16)
 		_, _ = rand.Read(secrets[i]) // never fails
@@ -200,10 +200,11 @@ func cut(ctx context.Context, tx pgx.Tx, org, event, orderID uuid.UUID, q pricin
 			names[i] = d.Attendees[i]
 		}
 		ticketTypes[i], price[i], disc[i], tax[i], fee[i] = t.TicketTypeID, t.PriceCents, t.DiscountCents, t.TaxCents, t.FeeCents
+		charge[i] = t.ChargeCents
 	}
-	rows, _ := tx.Query(ctx, `insert into tickets (organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, attendee_name, secret)
-		select $1, $2, $3, unnest($4::uuid[]), unnest($5::bigint[]), unnest($6::bigint[]), unnest($7::bigint[]), unnest($8::bigint[]), unnest($9::text[]), unnest($10::bytea[])
-		returning id, secret`, org, event, orderID, ticketTypes, price, disc, tax, fee, names, secrets)
+	rows, _ := tx.Query(ctx, `insert into tickets (organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, charge_cents, attendee_name, secret)
+		select $1, $2, $3, unnest($4::uuid[]), unnest($5::bigint[]), unnest($6::bigint[]), unnest($7::bigint[]), unnest($8::bigint[]), unnest($9::bigint[]), unnest($10::text[]), unnest($11::bytea[])
+		returning id, secret`, org, event, orderID, ticketTypes, price, disc, tax, fee, charge, names, secrets)
 	bySecret := map[string]uuid.UUID{}
 	var id uuid.UUID
 	var secret []byte

@@ -903,7 +903,7 @@ components:
         turnstile_token: { $ref: "#/components/schemas/TurnstileToken" }
     QuoteTicket:
       type: object
-      required: [ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, charge_cents]
+      required: [ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, charge_cents, tax_included]
       properties:
         ticket_type_id: { type: string, format: uuid }
         price_cents: { type: integer, format: int64 }
@@ -911,9 +911,10 @@ components:
         tax_cents: { type: integer, format: int64 }
         fee_cents: { type: integer, format: int64 }
         charge_cents: { type: integer, format: int64, description: "What the buyer pays for this ticket, before a passed-on fee." }
+        tax_included: { type: boolean, description: "Whether tax_cents is already inside the price. When false it's added on top." }
     Quote:
       type: object
-      required: [tickets, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents, fee_mode]
+      required: [tickets, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents, fee_mode, included_tax_cents]
       properties:
         tickets: { type: array, items: { $ref: "#/components/schemas/QuoteTicket" } }
         subtotal_cents: { type: integer, format: int64 }
@@ -921,6 +922,7 @@ components:
         tax_cents: { type: integer, format: int64 }
         fee_cents: { type: integer, format: int64, description: "Our service fee. The buyer pays it on top when fee_mode is pass; with absorb it comes out of the organizer's price." }
         total_cents: { type: integer, format: int64 }
+        included_tax_cents: { type: integer, format: int64, description: "Tax already inside the prices, for an \"Includes $X tax\" note." }
         fee_mode: { type: string, enum: [absorb, pass] }
     Checkout:
       type: object
