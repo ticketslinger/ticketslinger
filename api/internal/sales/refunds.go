@@ -145,15 +145,17 @@ func (s *Service) sendRefund(ctx context.Context, org uuid.UUID, r refundRow) er
 }
 
 // findRefund is the refund Stripe made for this row's current attempt, if
-// any: its metadata names the row and the attempt. A refund of an earlier
-// attempt that Stripe failed doesn't count; that's why the row moved on.
+// any: its metadata names the row and the attempt, and its amount is the
+// row's. A refund of an earlier attempt that Stripe failed doesn't count
+// (that's why the row moved on), and neither does one for another amount:
+// metadata alone could be copied onto any refund.
 func (s *Service) findRefund(ctx context.Context, r refundRow) (plugin.Refund, error) {
 	list, err := s.Payments.ListRefunds(ctx, r.account, r.intent)
 	if err != nil {
 		return plugin.Refund{}, err
 	}
 	for _, x := range list {
-		if x.Metadata["refund_id"] == r.id.String() && x.Metadata["attempt"] == strconv.Itoa(r.attempt) {
+		if x.Metadata["refund_id"] == r.id.String() && x.Metadata["attempt"] == strconv.Itoa(r.attempt) && x.AmountCents == r.amount {
 			return x, nil
 		}
 	}

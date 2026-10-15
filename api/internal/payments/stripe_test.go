@@ -470,10 +470,10 @@ func TestStripeName(t *testing.T) {
 func TestListRefundsReadsTheIntentsRefunds(t *testing.T) {
 	s, rec := newStripe(t)
 	rec.bodies = map[string]string{"/v1/refunds": `{"object":"list","url":"/v1/refunds","has_more":false,"data":[
-		{"id":"re_2","object":"refund","status":"pending","metadata":{"refund_id":"r1","attempt":"1"}},
+		{"id":"re_2","object":"refund","status":"pending","amount":2600,"metadata":{"refund_id":"r1","attempt":"1"}},
 		{"id":"re_1","object":"refund","status":"failed","metadata":{"refund_id":"r1","attempt":"0"}}]}`}
 	list, err := s.ListRefunds(context.Background(), "acct_test1", "pi_test1")
-	if err != nil || len(list) != 2 || list[0].ID != "re_2" || list[0].Status != "pending" || list[0].Metadata["attempt"] != "1" ||
+	if err != nil || len(list) != 2 || list[0].ID != "re_2" || list[0].Status != "pending" || list[0].AmountCents != 2600 || list[0].Metadata["attempt"] != "1" ||
 		list[1].Metadata["refund_id"] != "r1" {
 		t.Fatalf("listed %+v %v", list, err)
 	}

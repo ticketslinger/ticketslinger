@@ -84,8 +84,9 @@ type RefundInput struct {
 // requires_action, succeeded, failed, canceled). Metadata is what we sent
 // with it, as ListRefunds reads it back.
 type Refund struct {
-	ID, Status string
-	Metadata   map[string]string
+	ID, Status  string
+	AmountCents int64
+	Metadata    map[string]string
 }
 
 type FeeRefundInput struct {

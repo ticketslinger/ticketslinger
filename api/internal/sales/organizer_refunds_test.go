@@ -315,6 +315,32 @@ func TestARetryPastStripesKeyWindowFindsTheFirstRefund(t *testing.T) {
 	}
 }
 
+// Metadata alone could be copied onto any refund: one for another amount
+// that names this row isn't taken as its answer. The row sends its own.
+func TestALookalikeRefundIsNotTakenUp(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	ctx := context.Background()
+	order, pi, tickets := f.paidOrder(t, s, fake, 2, 1)
+	id := *f.refund(t, s, order, sales.RefundRequest{TicketIDs: tickets[:1], FeeBack: true}).RefundID
+	lookalike, err := fake.Refund(ctx, plugin.RefundInput{Account: "acct_fake1", PaymentIntentID: pi, AmountCents: 1, IdempotencyKey: "copied",
+		Metadata: map[string]string{"refund_id": id.String(), "attempt": "0"}})
+	f.must(t, err)
+	f.exec(t, `update refunds set sent_at = now() where id = $1`, id) // as if sent and the answer lost
+	m := &mailer.Memory{}
+	drain(t, s, m)
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'succeeded' and stripe_refund_id <> $2`, id, lookalike.ID); n != 1 {
+		t.Fatal("the lookalike was taken as the row's refund")
+	}
+	in := fake.Refunds()
+	if len(in) != 2 || in[1].IdempotencyKey != "refund-"+id.String()+"-0" || in[1].AmountCents != 2600 {
+		t.Fatalf("Stripe asked for %+v, want the row's own 2600 after the lookalike", in)
+	}
+	if amount, fee := fake.Refunded(pi); amount != 2601 || fee != 100 || refundEmails(m) != 1 {
+		t.Fatalf("refunded %d, fee %d, %d emails", amount, fee, refundEmails(m))
+	}
+}
+
 // Two clicks on "Try again" at once re-queue the refund once.
 func TestTwoRetriesAtOnceRequeueOnce(t *testing.T) {
 	s, fake := newPaidService(t)
@@ -363,6 +389,18 @@ func TestMembersCantForgeRefunds(t *testing.T) {
 		if err := asApp(f.user, sql, id); err == nil {
 			t.Errorf("%s: allowed", name)
 		}
+	}
+	// Nor point a ticket that stays valid at a refund, or release its seat.
+	for name, sql := range map[string]string{
+		"valid ticket pointed": `update tickets set refund_id = $1 where id = $2`,
+		"valid ticket freed":   `update tickets set released_at = now() where id = $2 and $1::uuid is not null`,
+	} {
+		if err := asApp(f.user, sql, id, tickets[1]); err == nil {
+			t.Errorf("%s: allowed", name)
+		}
+	}
+	if n := f.count(t, `select count(*) from tickets where id = $1 and status = 'valid' and refund_id is null and released_at is null`, tickets[1]); n != 1 {
+		t.Fatal("a member changed a valid ticket")
 	}
 	if err := asApp(f.user, `insert into refunds (organizer_id, payment_id, amount_cents, fee_refunded, status, reason)
 		values ($1, $2, 100, false, 'succeeded', 'organizer')`, f.org, payment); err == nil {

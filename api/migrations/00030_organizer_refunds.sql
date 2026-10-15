@@ -19,7 +19,8 @@ CREATE POLICY refunds_app_insert ON refunds AS RESTRICTIVE FOR INSERT TO ts_app
 ALTER TABLE refunds ADD COLUMN sent_at timestamptz;
 
 -- ts_app moves tickets one way only: valid to void, pointed at a refund once,
--- released once. Nothing it does brings a refunded ticket back.
+-- released once, and only as it voids them. Nothing it does brings a
+-- refunded ticket back.
 -- +goose StatementBegin
 CREATE FUNCTION tickets_app_one_way() RETURNS trigger LANGUAGE plpgsql
   SET search_path = pg_catalog, public, pg_temp AS $$
@@ -27,7 +28,9 @@ BEGIN
   IF current_user = 'ts_app' AND (
        (NEW.status IS DISTINCT FROM OLD.status AND NOT (OLD.status = 'valid' AND NEW.status = 'void'))
     OR (NEW.refund_id IS DISTINCT FROM OLD.refund_id AND OLD.refund_id IS NOT NULL)
-    OR (NEW.released_at IS DISTINCT FROM OLD.released_at AND OLD.released_at IS NOT NULL)) THEN
+    OR (NEW.released_at IS DISTINCT FROM OLD.released_at AND OLD.released_at IS NOT NULL)
+    OR ((NEW.refund_id IS DISTINCT FROM OLD.refund_id OR NEW.released_at IS DISTINCT FROM OLD.released_at)
+        AND NEW.status IS DISTINCT FROM 'void')) THEN
     RAISE EXCEPTION 'tickets: only valid to void, once' USING ERRCODE = 'insufficient_privilege';
   END IF;
   RETURN NEW;

@@ -162,7 +162,7 @@ func (s *Stripe) Refund(ctx context.Context, in plugin.RefundInput) (plugin.Refu
 	if err != nil {
 		return plugin.Refund{}, fail("refund", err)
 	}
-	return plugin.Refund{ID: r.ID, Status: string(r.Status), Metadata: r.Metadata}, nil
+	return plugin.Refund{ID: r.ID, Status: string(r.Status), AmountCents: r.Amount, Metadata: r.Metadata}, nil
 }
 
 // ListRefunds reads GET /v1/refunds?payment_intent= on the connected
@@ -178,7 +178,7 @@ func (s *Stripe) ListRefunds(ctx context.Context, account, intentID string) ([]p
 		if err != nil {
 			return nil, fail("list refunds", err)
 		}
-		out = append(out, plugin.Refund{ID: r.ID, Status: string(r.Status), Metadata: r.Metadata})
+		out = append(out, plugin.Refund{ID: r.ID, Status: string(r.Status), AmountCents: r.Amount, Metadata: r.Metadata})
 	}
 	return out, nil
 }

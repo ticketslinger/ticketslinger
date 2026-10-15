@@ -227,7 +227,7 @@ func (f *Fake) Refund(_ context.Context, in plugin.RefundInput) (plugin.Refund, 
 		md[k] = v
 	}
 	// A forgotten key makes a new refund with a new id, as at Stripe.
-	r := plugin.Refund{ID: fakeID("re_fake", in.IdempotencyKey+"#"+strconv.Itoa(len(f.made))), Status: "succeeded", Metadata: md}
+	r := plugin.Refund{ID: fakeID("re_fake", in.IdempotencyKey+"#"+strconv.Itoa(len(f.made))), Status: "succeeded", AmountCents: in.AmountCents, Metadata: md}
 	if f.pending {
 		r.Status = "pending"
 	}
