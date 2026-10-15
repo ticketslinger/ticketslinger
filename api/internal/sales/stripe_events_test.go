@@ -16,8 +16,19 @@ import (
 
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/payments"
+	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 	"github.com/ticketslinger/ticketslinger/api/internal/sales"
 )
+
+// failedWith makes ev a refund.failed carrying Stripe's failure_reason.
+func failedWith(ev stripe.Event, reason string) stripe.Event {
+	var obj map[string]any
+	_ = json.Unmarshal(ev.Data.Raw, &obj)
+	obj["failure_reason"] = reason
+	ev.Data.Raw, _ = json.Marshal(obj)
+	ev.Type = stripe.EventTypeRefundFailed
+	return ev
+}
 
 // ours is the metadata we send with a refund: the row and its attempt.
 func ours(refund uuid.UUID, attempt int) map[string]string {
@@ -164,7 +175,7 @@ func TestRefundStripeFailsIsShown(t *testing.T) {
 	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'failed' and failure = 'stripe_failed'`, refund); n != 1 {
 		t.Fatal("the refund isn't failed with stripe_failed")
 	}
-	if n := f.count(t, `select count(*) from audit_log where action = 'refund.failed' and entity_id = $1`, refund); n != 1 || f.quotaUsed(t) != 2 {
+	if n := f.count(t, `select count(*) from audit_log where action = 'refund.failed' and entity_id = $1 and before->>'status' = 'requested'`, refund); n != 1 || f.quotaUsed(t) != 2 {
 		t.Fatalf("%d refund.failed rows, quota used %d; want 1 and 2", n, f.quotaUsed(t))
 	}
 	if n := f.count(t, `select count(*) from jobs where kind = 'send_email'`); n != 0 {
@@ -206,14 +217,30 @@ func TestRefundThatFailsLaterIsShown(t *testing.T) {
 	f.must(t, s.HandleStripeEvent(ctx, refundEvent(stripeID, pi, "acct_fake1", 2600, "succeeded", ours(refund, 0), 1)))
 	var before string
 	f.must(t, f.owner.QueryRow(ctx, `select status from orders where id = $1`, order).Scan(&before))
-	ev := refundEvent(stripeID, pi, "acct_fake1", 2600, "failed", ours(refund, 0), 9)
-	ev.Type = stripe.EventTypeRefundFailed
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	ev := failedWith(refundEvent(stripeID, pi, "acct_fake1", 2600, "failed", ours(refund, 0), 9), "expired_or_canceled_card")
 	f.must(t, s.HandleStripeEvent(ctx, ev))
 	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'failed' and failure = 'stripe_failed'`, refund); n != 1 {
 		t.Fatal("the refund isn't failed with stripe_failed")
 	}
-	if n := f.count(t, `select count(*) from audit_log where action = 'refund.failed' and actor_user_id is null and entity_id = $1`, refund); n != 1 {
-		t.Fatalf("%d refund.failed system rows, want 1", n)
+	if n := f.count(t, `select count(*) from audit_log where action = 'refund.failed' and actor_user_id is null and entity_id = $1
+		and before->>'status' = 'succeeded' and after->>'failure' = 'stripe_failed' and after->>'failure_reason' = 'expired_or_canceled_card'`, refund); n != 1 {
+		t.Fatalf("%d refund.failed system rows saying it was succeeded, with Stripe's reason; want 1", n)
+	}
+	line := ""
+	for _, l := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(l, "level=ERROR") {
+			line = l
+		}
+	}
+	if !strings.Contains(line, "organizer="+f.org.String()) || !strings.Contains(line, "order="+order.String()) || !strings.Contains(line, "refund="+refund.String()) {
+		t.Fatalf("no ERROR naming the organizer, order and refund:\n%s", logs.String())
+	}
+	if strings.Contains(logs.String(), "@") {
+		t.Fatalf("the log names the buyer:\n%s", logs.String())
 	}
 	if n := f.count(t, `select count(*) from tickets where id = $1 and released_at is not null`, ticket); n != 1 {
 		t.Fatal("the released ticket came back")
@@ -323,6 +350,10 @@ func TestChargeRefundedIsOnlyChecked(t *testing.T) {
 	if strings.Contains(logs.String(), "WARN") {
 		t.Fatalf("a matching charge.refunded warned: %s", logs.String())
 	}
+	f.must(t, s.HandleStripeEvent(ctx, charge(0, 3))) // ours still on its way
+	if strings.Contains(logs.String(), "WARN") {
+		t.Fatalf("Stripe refunding less than we asked for warned: %s", logs.String())
+	}
 	f.must(t, s.HandleStripeEvent(ctx, charge(5200, 2)))
 	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), pi) {
 		t.Fatalf("a disagreeing charge.refunded didn't warn naming the intent: %s", logs.String())
@@ -330,7 +361,78 @@ func TestChargeRefundedIsOnlyChecked(t *testing.T) {
 	if got := f.rowState(t, refund); got != state {
 		t.Fatalf("charge.refunded changed the refund: %s -> %s", state, got)
 	}
-	if n := f.count(t, `select count(*) from stripe_events where id like 'evt_c%'`); n != 2 {
-		t.Fatalf("%d charge events recorded, want 2", n)
+	if n := f.count(t, `select count(*) from stripe_events where id like 'evt_c%'`); n != 3 {
+		t.Fatalf("%d charge events recorded, want 3", n)
+	}
+}
+
+// We gave up on a refund, then Stripe said it failed. That's final, so the
+// organizer's retry moves to the next key and sends a new refund, rather
+// than waiting forever on an event already handled.
+func TestAGaveUpRefundStripeFailedRetriesOnTheNextKey(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	ctx := context.Background()
+	order, pi, tickets := f.paidOrder(t, s, fake, 2, 1)
+	refund := *f.refund(t, s, order, sales.RefundRequest{TicketIDs: tickets[:1], FeeBack: true}).RefundID
+	fake.LoseNextRefundAnswer()
+	drain(t, s, &mailer.Memory{})
+	crashPark(t, s, f)
+	list, err := fake.ListRefunds(ctx, "acct_fake1", pi)
+	f.must(t, err)
+	re0 := list[0].ID
+	f.must(t, s.HandleStripeEvent(ctx, failedWith(refundEvent(re0, pi, "acct_fake1", 2600, "failed", ours(refund, 0), 1), "unknown")))
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'failed' and failure = 'stripe_failed' and stripe_refund_id = $2`, refund, re0); n != 1 {
+		t.Fatal("Stripe's failed didn't make the given-up refund stripe_failed")
+	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'refund.failed' and entity_id = $1
+		and before->>'failure' = 'gave_up' and after->>'failure' = 'stripe_failed'`, refund); n != 1 {
+		t.Fatalf("%d refund.failed rows from gave_up to stripe_failed, want 1", n)
+	}
+	_, err = f.retry(s, order, refund)
+	f.must(t, err)
+	m := &mailer.Memory{}
+	drain(t, s, m)
+	in := fake.Refunds()
+	if len(in) != 2 || in[1].IdempotencyKey != "refund-"+refund.String()+"-1" {
+		t.Fatalf("Stripe asked for %+v, want a second refund on attempt 1", in)
+	}
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'succeeded' and attempt = 1 and stripe_refund_id <> $2`, refund, re0); n != 1 {
+		t.Fatal("the retry didn't finish on a new Stripe refund")
+	}
+	if f.quotaUsed(t) != 1 || refundEmails(m) != 1 || len(fake.FeeRefunds()) != 1 {
+		t.Fatalf("quota used %d, %d refund emails, %d fee refunds; want 1, 1, 1", f.quotaUsed(t), refundEmails(m), len(fake.FeeRefunds()))
+	}
+}
+
+// movingOn answers a refund only after the row has moved to its next
+// attempt, as when another run of the job got a refusal first.
+type movingOn struct {
+	*payments.Fake
+	t      *testing.T
+	f      fixture
+	refund uuid.UUID
+}
+
+func (m *movingOn) Refund(ctx context.Context, in plugin.RefundInput) (plugin.Refund, error) {
+	out, err := m.Fake.Refund(ctx, in)
+	m.f.exec(m.t, `update refunds set attempt = attempt + 1 where id = $1`, m.refund)
+	return out, err
+}
+
+// Stripe's answer for attempt 0, arriving after the row moved to attempt 1,
+// changes nothing.
+func TestAStaleAnswerChangesNothing(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	order, _, tickets := f.paidOrder(t, s, fake, 2, 1)
+	refund := *f.refund(t, s, order, sales.RefundRequest{TicketIDs: tickets[:1], FeeBack: true}).RefundID
+	s.Payments = &movingOn{Fake: fake, t: t, f: f, refund: refund}
+	drain(t, s, &mailer.Memory{})
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'requested' and attempt = 1 and stripe_refund_id is null`, refund); n != 1 {
+		t.Fatal("a stale answer changed the row")
+	}
+	if f.quotaUsed(t) != 2 || f.count(t, `select count(*) from jobs where kind = 'send_email'`) != 0 {
+		t.Fatalf("quota used %d after a stale answer, want 2 and no email", f.quotaUsed(t))
 	}
 }

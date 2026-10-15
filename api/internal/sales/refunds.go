@@ -101,7 +101,7 @@ func (s *Service) sendRefund(ctx context.Context, org uuid.UUID, r refundRow) er
 		found, err := s.findRefund(ctx, r)
 		if errors.Is(err, plugin.ErrNoAccess) {
 			slog.ErrorContext(ctx, "refund: our platform can't reach the account any more", "organizer", org, "order", r.order, "refund", r.id, "err", err)
-			return system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error { return s.failRefund(ctx, tx, org, r.id, "no_access") })
+			return system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error { return s.failRefund(ctx, tx, org, r.id, "no_access", "") })
 		}
 		if err != nil {
 			return err // never a reason to move to the next key
@@ -127,20 +127,28 @@ func (s *Service) sendRefund(ctx context.Context, org uuid.UUID, r refundRow) er
 		out = plugin.Refund{Status: "succeeded"}
 	case errors.Is(err, plugin.ErrNoAccess):
 		slog.ErrorContext(ctx, "refund: our platform can't reach the account any more", "organizer", org, "order", r.order, "refund", r.id, "err", err)
-		return system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error { return s.failRefund(ctx, tx, org, r.id, "no_access") })
+		return system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error { return s.failRefund(ctx, tx, org, r.id, "no_access", "") })
 	case errors.Is(err, plugin.ErrRefused):
 		return errors.Join(err, s.nextAttempt(ctx, org, r))
 	case err != nil:
 		return err
 	}
+	var stripeID *string
+	if out.ID != "" {
+		stripeID = &out.ID
+	}
 	return system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error {
-		if out.ID != "" {
-			if _, err := tx.Exec(ctx, `update refunds set stripe_refund_id = $2, updated_at = statement_timestamp()
-				where id = $1 and stripe_refund_id is null`, r.id, out.ID); err != nil {
-				return err
-			}
+		// The order first, as every refund path takes it, then the row, and
+		// only if it's still on the attempt this answer is for.
+		if _, err := tx.Exec(ctx, `select 1 from orders where id = $1 for update`, r.order); err != nil {
+			return err
 		}
-		return s.finishRefund(ctx, tx, org, r.id, out.Status)
+		tag, err := tx.Exec(ctx, `update refunds set stripe_refund_id = coalesce($2, stripe_refund_id), updated_at = statement_timestamp()
+			where id = $1 and attempt = $3 and ($2::text is null or stripe_refund_id is null or stripe_refund_id = $2)`, r.id, stripeID, r.attempt)
+		if err != nil || tag.RowsAffected() == 0 {
+			return err // 0 rows: the row moved on, so this answer is stale
+		}
+		return s.finishRefund(ctx, tx, org, r.id, out.Status, "")
 	})
 }
 
@@ -227,7 +235,7 @@ func (s *Service) nextAttempt(ctx context.Context, org uuid.UUID, r refundRow) e
 // or no id is stored yet and metadata.attempt equals the row's attempt. That
 // keeps a late "failed" for an attempt the row has moved past from failing
 // the retry that replaced it.
-func (s *Service) finishRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, stripeStatus string) error {
+func (s *Service) finishRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, stripeStatus, failureReason string) error {
 	var order uuid.UUID
 	if err := tx.QueryRow(ctx, `select p.order_id from refunds r join payments p on p.id = r.payment_id where r.id = $1`, id).Scan(&order); err != nil {
 		return err
@@ -281,24 +289,48 @@ func (s *Service) finishRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID
 		subject, text := refundEmail(reason, event, organizer, amount)
 		return jobs.Enqueue(ctx, tx, "send_email", map[string]string{"to": email, "subject": subject, "text": text})
 	case "failed", "canceled":
-		if status == "failed" {
+		// A row we gave up on, or couldn't reach, becomes stripe_failed:
+		// Stripe's word is final, so a retry moves to the next key.
+		if status == "failed" && *failure == "stripe_failed" {
 			return nil
 		}
-		return s.failRefund(ctx, tx, org, id, "stripe_failed")
+		if status == "succeeded" {
+			// The money is back in the organizer's balance. Seats stay
+			// released and our fee stays returned; the organizer sees it
+			// failed and can retry.
+			slog.ErrorContext(ctx, "refund: Stripe failed a refund it had called succeeded", "organizer", org, "order", order, "refund", id)
+		}
+		return s.failRefund(ctx, tx, org, id, "stripe_failed", failureReason)
 	}
 	return nil
 }
 
 // failRefund marks a refund failed and says so in the organizer's audit
-// log. The caller holds the order lock or needs none (the row alone).
-func (s *Service) failRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, failure string) error {
-	tag, err := tx.Exec(ctx, `update refunds set status = 'failed', failure = $2, updated_at = statement_timestamp()
-		where id = $1 and status <> 'failed'`, id, failure)
-	if err != nil || tag.RowsAffected() == 0 {
+// log, with what it was before and Stripe's failure_reason when there is
+// one. A failed row changes only to stripe_failed, from gave_up or
+// no_access. The caller holds the order lock or needs none (the row alone).
+func (s *Service) failRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, failure, stripeReason string) error {
+	var status string
+	var was *string
+	if err := tx.QueryRow(ctx, `select status, failure from refunds where id = $1 for update`, id).Scan(&status, &was); err != nil {
 		return err
 	}
+	if status == "failed" && (failure != "stripe_failed" || *was == "stripe_failed") {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `update refunds set status = 'failed', failure = $2, updated_at = statement_timestamp() where id = $1`, id, failure); err != nil {
+		return err
+	}
+	before := map[string]string{"status": status}
+	if was != nil {
+		before["failure"] = *was
+	}
+	after := map[string]string{"failure": failure}
+	if stripeReason != "" {
+		after["failure_reason"] = stripeReason
+	}
 	return audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: audit.Actor{System: true}, Action: "refund.failed",
-		EntityType: "refund", EntityID: id, After: map[string]string{"failure": failure}})
+		EntityType: "refund", EntityID: id, Before: before, After: after})
 }
 
 // RefundParked is the queue's word that a refund job ran out of tries.
@@ -329,7 +361,7 @@ func RefundParked(s *Service) func(ctx context.Context, payload []byte, cause st
 			switch {
 			case r.status == "requested" && r.stripeID == nil:
 				marked = "gave up"
-				return s.failRefund(ctx, tx, j.Organizer, j.Refund, "gave_up")
+				return s.failRefund(ctx, tx, j.Organizer, j.Refund, "gave_up", "")
 			case r.status == "succeeded" && r.fee > 0 && !r.feeDone:
 				marked = "fee stuck"
 				return feeStuck(ctx, tx, j.Organizer, r)

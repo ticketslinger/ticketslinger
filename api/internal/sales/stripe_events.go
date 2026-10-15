@@ -101,12 +101,21 @@ func (s *Service) refundUpdated(ctx context.Context, tx pgx.Tx, org uuid.UUID, e
 		Amount        int64             `json:"amount"`
 		Status        string            `json:"status"`
 		PaymentIntent string            `json:"payment_intent"`
+		FailureReason string            `json:"failure_reason"`
 		Metadata      map[string]string `json:"metadata"`
 	}
 	if ev.Data != nil {
 		if err := json.Unmarshal(ev.Data.Raw, &r); err != nil {
 			return err
 		}
+	}
+	notOurs := func() error {
+		slog.InfoContext(ctx, "refund event that isn't for a refund of ours as it stands; changing nothing",
+			"event", ev.ID, "type", ev.Type, "refund", r.ID, "payment_intent", r.PaymentIntent, "account", ev.Account)
+		return nil
+	}
+	if r.ID == "" || r.PaymentIntent == "" {
+		return notOurs()
 	}
 	// The payment's order first, as every refund path takes it, so the match
 	// below can't race a retry or the job moving the row on.
@@ -121,10 +130,8 @@ func (s *Service) refundUpdated(ctx context.Context, tx pgx.Tx, org uuid.UUID, e
 			  and (r.stripe_refund_id = $3 or (r.stripe_refund_id is null and r.id::text = $4 and r.attempt = $5 and $6))
 			for update of r`, order, r.Amount, r.ID, r.Metadata["refund_id"], attempt, aerr == nil).Scan(&id)
 	}
-	if errors.Is(err, pgx.ErrNoRows) || r.ID == "" {
-		slog.InfoContext(ctx, "refund event that isn't for a refund of ours as it stands; changing nothing",
-			"event", ev.ID, "type", ev.Type, "refund", r.ID, "payment_intent", r.PaymentIntent, "account", ev.Account)
-		return nil
+	if errors.Is(err, pgx.ErrNoRows) {
+		return notOurs()
 	}
 	if err != nil {
 		return err
@@ -133,14 +140,14 @@ func (s *Service) refundUpdated(ctx context.Context, tx pgx.Tx, org uuid.UUID, e
 		where id = $1 and stripe_refund_id is null`, id, r.ID); err != nil {
 		return err
 	}
-	return s.finishRefund(ctx, tx, org, id, r.Status)
+	return s.finishRefund(ctx, tx, org, id, r.Status, r.FailureReason)
 }
 
 // chargeRefunded only cross-checks: in this API version it names no refund,
-// so it can't say which row it's about. Stripe's total refunded on the
-// charge should equal what we asked for and haven't seen fail; a difference
-// (a refund made by hand in Stripe, or one of ours not heard back on yet)
-// is a WARN for a person to look at.
+// so it can't say which row it's about. Stripe having refunded more on the
+// charge than all we asked for and haven't seen fail means money went back
+// that we didn't send (a refund made by hand in Stripe, say): a WARN for a
+// person to look at. Less is normal while our refunds are on their way.
 func chargeRefunded(ctx context.Context, tx pgx.Tx, ev stripe.Event) error {
 	var c struct {
 		PaymentIntent  string `json:"payment_intent"`
@@ -151,14 +158,18 @@ func chargeRefunded(ctx context.Context, tx pgx.Tx, ev stripe.Event) error {
 			return err
 		}
 	}
-	var ours int64
-	if err := tx.QueryRow(ctx, `select coalesce(sum(r.amount_cents), 0) from refunds r join payments p on p.id = r.payment_id
-		where p.payment_intent_id = $1 and p.stripe_account_id = $2 and r.status <> 'failed'`, c.PaymentIntent, ev.Account).Scan(&ours); err != nil {
+	var ours *int64
+	err := tx.QueryRow(ctx, `select (select coalesce(sum(r.amount_cents), 0) from refunds r where r.payment_id = p.id and r.status <> 'failed')
+		from payments p where p.payment_intent_id = $1 and p.stripe_account_id = $2`, c.PaymentIntent, ev.Account).Scan(&ours)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil // not a payment of ours
+	}
+	if err != nil {
 		return err
 	}
-	if ours != c.AmountRefunded {
-		slog.WarnContext(ctx, "charge.refunded disagrees with our refunds", "event", ev.ID, "payment_intent", c.PaymentIntent,
-			"stripe_refunded_cents", c.AmountRefunded, "our_refunds_cents", ours)
+	if c.AmountRefunded > *ours {
+		slog.WarnContext(ctx, "charge.refunded: Stripe refunded more than we asked for", "event", ev.ID, "payment_intent", c.PaymentIntent,
+			"stripe_refunded_cents", c.AmountRefunded, "our_refunds_cents", *ours)
 	}
 	return nil
 }
