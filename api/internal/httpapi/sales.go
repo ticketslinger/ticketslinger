@@ -631,8 +631,93 @@ func (s *server) ListOrders(ctx context.Context, req ListOrdersRequestObject) (L
 		list, err := sales.ListOrders(ctx, tx, req.Event)
 		for _, o := range list {
 			out = append(out, OrderSummary{Id: o.ID, Code: o.Code, Email: o.Email, Status: OrderSummaryStatus(o.Status), TicketCount: o.TicketCount,
-				TotalCents: o.TotalCents, FeeCents: o.FeeCents, FeeMode: OrderSummaryFeeMode(o.FeeMode), CreatedAt: o.CreatedAt, PaidAt: nullOf(o.PaidAt)})
+				TotalCents: o.TotalCents, FeeCents: o.FeeCents, FeeMode: OrderSummaryFeeMode(o.FeeMode), CreatedAt: o.CreatedAt, PaidAt: nullOf(o.PaidAt),
+				RefundedCents: o.RefundedCents, FeeRefundedCents: o.FeeRefundedCents})
 		}
+		return err
+	})
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return out, nil
+}
+
+// GetOrderDetail shows the buyer's email and tickets to any member or key,
+// as ListOrders does; nothing here logs them.
+func (s *server) GetOrderDetail(ctx context.Context, req GetOrderDetailRequestObject) (GetOrderDetailResponseObject, error) {
+	var d sales.OrderDetailView
+	err := s.inOrganizer(ctx, req.Organizer, catalogueRead, func(_ organizers.Organizer, tx pgx.Tx) (err error) {
+		d, err = sales.OrderDetail(ctx, tx, req.Event, req.Order)
+		return err
+	})
+	if err != nil {
+		return nil, salesError(err)
+	}
+	out := GetOrderDetail200JSONResponse{Id: d.ID, Code: d.Code, Email: d.Email, Status: OrderDetailStatus(d.Status), TicketCount: d.TicketCount,
+		TotalCents: d.TotalCents, FeeCents: d.FeeCents, FeeMode: OrderDetailFeeMode(d.FeeMode), CreatedAt: d.CreatedAt, PaidAt: nullOf(d.PaidAt),
+		RefundedCents: d.RefundedCents, FeeRefundedCents: d.FeeRefundedCents, Tickets: []OrderDetailTicket{}, Refunds: []Refund{}}
+	for _, t := range d.Tickets {
+		out.Tickets = append(out.Tickets, OrderDetailTicket{Id: t.ID, TicketTypeName: t.TicketTypeName, AttendeeName: t.AttendeeName,
+			Status: OrderDetailTicketStatus(t.Status), ChargeCents: t.ChargeCents, FeeCents: t.FeeCents, RefundId: nullOf(t.RefundID)})
+	}
+	for _, r := range d.Refunds {
+		out.Refunds = append(out.Refunds, toRefund(r))
+	}
+	return out, nil
+}
+
+func toRefund(r sales.RefundView) Refund {
+	out := Refund{Id: r.ID, AmountCents: r.AmountCents, FeeCents: r.FeeCents, FeeBack: r.FeeBack, Status: RefundStatus(r.Status),
+		Reason: RefundReason(r.Reason), CreatedAt: r.CreatedAt, Failure: nullable.NewNullNullable[RefundFailure]()}
+	if r.Failure != nil {
+		out.Failure.Set(RefundFailure(*r.Failure))
+	}
+	return out
+}
+
+// refundsWrite: money leaving the organizer's Stripe balance is a person's
+// call, never an integration's (a leaked key mustn't refund an event).
+var refundsWrite = Access{Roles: ownerAdmin, Write: true, SessionOnly: true}
+
+// RefundOrder refunds chosen tickets of an order, or all it has left. Stripe
+// is asked by the refund job after this commits, never inside it.
+func (s *server) RefundOrder(ctx context.Context, req RefundOrderRequestObject) (RefundOrderResponseObject, error) {
+	var out RefundOrder201JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, refundsWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		if req.Body.RefundFee == nil {
+			return missingField("refund_fee", "true to give our fee back too, false to keep it")
+		}
+		in := sales.RefundRequest{FeeBack: *req.Body.RefundFee}
+		if req.Body.TicketIds != nil {
+			in.TicketIDs = *req.Body.TicketIds
+		}
+		res, err := sales.RefundTickets(ctx, tx, org.ID, req.Event, req.Order, in, "organizer", actorFrom(ctx))
+		if err != nil {
+			return err
+		}
+		out = RefundOrder201JSONResponse{TicketIds: res.TicketIDs, AmountCents: res.AmountCents, FeeCents: res.FeeCents,
+			OrderStatus: RefundResultOrderStatus(res.OrderStatus), Refund: nullable.NewNullNullable[Refund]()}
+		if res.RefundID != nil {
+			r, err := sales.RefundByID(ctx, tx, *res.RefundID)
+			if err != nil {
+				return err
+			}
+			out.Refund.Set(toRefund(r))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return out, nil
+}
+
+// RetryRefund sends a failed refund again, as the same refund.
+func (s *server) RetryRefund(ctx context.Context, req RetryRefundRequestObject) (RetryRefundResponseObject, error) {
+	var out RetryRefund200JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, refundsWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		r, err := sales.RetryRefund(ctx, tx, org.ID, req.Event, req.Order, req.Refund, actorFrom(ctx))
+		out = RetryRefund200JSONResponse(toRefund(r))
 		return err
 	})
 	if err != nil {

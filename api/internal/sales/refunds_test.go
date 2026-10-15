@@ -520,6 +520,9 @@ func TestAGaveUpRefundStillFinishesWhenStripeSaysSucceeded(t *testing.T) {
 	if n := f.count(t, `select count(*) from jobs where kind = 'send_email'`); n != 1 {
 		t.Fatalf("%d emails, want 1", n)
 	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'refund.succeeded_late' and actor_system and entity_id = $1`, refund); n != 1 {
+		t.Fatalf("%d refund.succeeded_late rows, want 1", n)
+	}
 }
 
 // A refund Stripe already has (we hold its id) isn't given up on when its

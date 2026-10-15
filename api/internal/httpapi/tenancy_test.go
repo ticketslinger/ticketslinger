@@ -47,6 +47,8 @@ var sessionOnly = map[string]string{
 	"connectPayments":    "a person signs Stripe's terms, and the link is theirs to follow",
 	"startStripeLink":    "a person picks the Stripe account, and the state is tied to their session",
 	"disconnectPayments": "switching payments off is a person's call",
+	"refundOrder":        "a refund moves the organizer's money; a person decides",
+	"retryRefund":        "sending a refund again is a person's call too",
 }
 
 // Every secured operation not in userScoped, called by a signed-in mfa user
@@ -99,8 +101,23 @@ func seedCatalogue(h *harness, owner, slug, apiKey string) map[string]string {
 	quota := h.must(h.do(owner, "POST", base+"/events/"+event+"/quotas", `{"name":"Hall","size":100,"ticket_type_ids":["`+ticketType+`"]}`), 201)["id"].(string)
 	promoCode := h.must(h.do(owner, "POST", base+"/events/"+event+"/promo-codes", `{"code":"EARLY","kind":"percent","value":1000}`), 201)["id"].(string)
 	question := h.must(h.do(owner, "POST", base+"/events/"+event+"/questions", `{"label":"Dietary needs","kind":"text","scope":"order"}`), 201)["id"].(string)
+	// A paid order with no tickets left, and a refund of it that failed.
+	var order, refund string
+	if err := testdb.Owner(h.t, h.pool).QueryRow(context.Background(), `with o as (
+			insert into orders (organizer_id, event_id, code, email, status, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents,
+				fee_mode, quote, details, paid_at)
+			select organizer_id, id, 'TS-' || upper(substr(md5($2), 1, 5)), 'seed@example.com', 'paid', 2500, 0, 0, 100, 2600,
+				'pass', '{}', '{}', now() from events where id = $1 returning id, organizer_id),
+		p as (insert into payments (organizer_id, order_id, provider, stripe_account_id, payment_intent_id, client_secret, amount_cents,
+				application_fee_cents, status)
+			select organizer_id, id, 'test', 'acct_seed', 'pi_seed_' || $2, '', 2600, 100, 'succeeded' from o returning id, organizer_id),
+		r as (insert into refunds (organizer_id, payment_id, amount_cents, fee_refunded, status, reason, failure)
+			select organizer_id, id, 100, false, 'failed', 'organizer', 'gave_up' from p returning id)
+		select o.id::text, r.id::text from o, r`, event, slug).Scan(&order, &refund); err != nil {
+		h.t.Fatal(err)
+	}
 	return map[string]string{"organizer": slug, "apiKey": apiKey, "event": event, "ticketType": ticketType, "quota": quota, "promoCode": promoCode, "question": question, "challengeId": "0190a0a0-0000-7000-8000-000000000000",
-		"eventSlug": "gala", "token": "no-such-checkout-token-0000000000000000000"}
+		"eventSlug": "gala", "token": "no-such-checkout-token-0000000000000000000", "order": order, "refund": refund}
 }
 
 // walk calls every secured operation with token and checks the status (and

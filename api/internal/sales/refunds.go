@@ -141,8 +141,19 @@ func (s *Service) sendFeeRefund(ctx context.Context, org uuid.UUID, r refundRow)
 }
 
 // feeStuck records that the buyer has their money but our fee didn't go
-// back to the organizer, and nothing will retry it. The refund keeps its status.
+// back to the organizer, and nothing will retry it. The refund keeps its
+// status. It writes at most one row per refund (the refund's row lock makes
+// two at once take turns), and none while another job for the refund is
+// still due to try the fee again.
 func feeStuck(ctx context.Context, tx pgx.Tx, org uuid.UUID, r refundRow) error {
+	if _, err := tx.Exec(ctx, `select 1 from refunds where id = $1 for update`, r.id); err != nil {
+		return err
+	}
+	// A statement of its own, so it sees what a turn before ours wrote.
+	var due bool
+	if err := tx.QueryRow(ctx, `select refund_fee_stuck_due($1)`, r.id).Scan(&due); err != nil || !due {
+		return err
+	}
 	return audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: audit.Actor{System: true}, Action: "refund.fee_stuck",
 		EntityType: "refund", EntityID: r.id, After: map[string]int64{"amount_cents": r.amount, "fee_cents": r.fee}})
 }
@@ -194,6 +205,12 @@ func (s *Service) finishRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID
 		}
 		if _, err := tx.Exec(ctx, `update refunds set status = 'succeeded', failure = null, updated_at = statement_timestamp() where id = $1`, id); err != nil {
 			return err
+		}
+		if gaveUp {
+			if err := audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: audit.Actor{System: true}, Action: "refund.succeeded_late",
+				EntityType: "refund", EntityID: id, Before: map[string]string{"failure": "gave_up"}}); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.Exec(ctx, `update tickets set released_at = statement_timestamp() where refund_id = $1 and released_at is null`, id); err != nil {
 			return err

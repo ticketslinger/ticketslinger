@@ -81,31 +81,43 @@ func (s *Service) Order(ctx context.Context, code, token string) (OrderView, err
 	return out, nil
 }
 
-// OrderSummary is one row of an event's order list.
+// OrderSummary is one row of an event's order list. TicketCount counts the
+// tickets still valid; RefundedCents and FeeRefundedCents add up every refund
+// that hasn't failed, whether it has gone through or is still on its way.
 type OrderSummary struct {
-	ID                           uuid.UUID
-	Code, Email, Status, FeeMode string
-	TicketCount                  int
-	TotalCents, FeeCents         int64
-	CreatedAt                    time.Time
-	PaidAt                       *time.Time
+	ID                              uuid.UUID
+	Code, Email, Status, FeeMode    string
+	TicketCount                     int
+	TotalCents, FeeCents            int64
+	RefundedCents, FeeRefundedCents int64
+	CreatedAt                       time.Time
+	PaidAt                          *time.Time
 }
 
-// ListOrders is the event's orders, newest first, pending ones left out. It
-// runs in the caller's organizer transaction: row-level security keeps it to
-// that organizer, so no role switch.
+// orderSummarySelect lists the orders of event $1 that took money or were
+// confirmed free; ones still pending, or abandoned before payment, are left out.
+const orderSummarySelect = `select o.id, o.code, o.email::text, o.status,
+		(select count(*) from tickets t where t.order_id = o.id and t.status = 'valid'),
+		o.total_cents, o.fee_cents, o.fee_mode, o.created_at, o.paid_at,
+		coalesce((select sum(r.amount_cents) from refunds r join payments p on p.id = r.payment_id where p.order_id = o.id and r.status <> 'failed'), 0),
+		coalesce((select sum(r.fee_cents) from refunds r join payments p on p.id = r.payment_id where p.order_id = o.id and r.status <> 'failed'), 0)
+	from orders o
+	where o.event_id = $1 and o.status <> 'pending'
+	  and (o.paid_at is not null or exists (select 1 from payments p where p.order_id = o.id and p.status = 'succeeded'))`
+
+func scanOrderSummary(r pgx.CollectableRow) (o OrderSummary, err error) {
+	err = r.Scan(&o.ID, &o.Code, &o.Email, &o.Status, &o.TicketCount, &o.TotalCents, &o.FeeCents, &o.FeeMode, &o.CreatedAt, &o.PaidAt,
+		&o.RefundedCents, &o.FeeRefundedCents)
+	return o, err
+}
+
+// ListOrders is the event's orders, newest first. It runs in the caller's
+// organizer transaction: row-level security keeps it to that organizer, so
+// no role switch.
 func ListOrders(ctx context.Context, tx pgx.Tx, event uuid.UUID) ([]OrderSummary, error) {
 	if _, err := catalogue.GetEvent(ctx, tx, event); err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(ctx, `select o.id, o.code, o.email::text, o.status, (select count(*) from tickets t where t.order_id = o.id),
-			o.total_cents, o.fee_cents, o.fee_mode, o.created_at, o.paid_at
-		from orders o where o.event_id = $1 and o.status <> 'pending' order by o.created_at desc, o.id desc`, event)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (o OrderSummary, err error) {
-		err = r.Scan(&o.ID, &o.Code, &o.Email, &o.Status, &o.TicketCount, &o.TotalCents, &o.FeeCents, &o.FeeMode, &o.CreatedAt, &o.PaidAt)
-		return
-	})
+	rows, _ := tx.Query(ctx, orderSummarySelect+` order by o.created_at desc, o.id desc`, event)
+	return pgx.CollectRows(rows, scanOrderSummary)
 }

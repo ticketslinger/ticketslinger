@@ -568,6 +568,54 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/OrderSummary" } } } } }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/orders/{order}:
+    get:
+      operationId: getOrderDetail
+      description: Any member, or any API key. One order with every ticket it ever had (refunded ones show as void, with the refund that covered them) and its refunds, newest first. email is the buyer's address.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OrderDetail" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/orders/{order}/refunds:
+    post:
+      operationId: refundOrder
+      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Name the tickets in ticket_ids, or leave it out to refund every ticket still valid. The buyer gets back what they paid for those tickets; with refund_fee true our fee on them goes back too, to the buyer when they paid it and to you when you absorbed it. Those tickets stop scanning straight away, and their seats go back on sale once the refund goes through. A ticket that cost nothing is cancelled and its seat freed at once, with no refund (refund is null). 409 not_refundable when nothing is left to refund. 422 bad_tickets (field ticket_ids) when a ticket isn't in this order or is refunded already; 422 too_many over 100 tickets; 422 missing_field without refund_fee. 404 for an order that isn't this event's."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RefundOrderRequest" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/RefundResult" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/orders/{order}/refunds/{refund}/retry:
+    post:
+      operationId: retryRefund
+      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Sends a failed refund again: the same refund, for the same money, back to requested. If Stripe did make the first one after all, you still only pay it once. Its tickets keep their seats until it goes through. 409 not_failed unless the refund failed. 404 for a refund that isn't this order's."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+        - { $ref: "#/components/parameters/RefundPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Refund" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/promo-codes:
     get:
       operationId: listPromoCodes
@@ -808,6 +856,8 @@ components:
     QuestionPath: { name: question, in: path, required: true, schema: { type: string, format: uuid } }
     TicketTypePath: { name: ticketType, in: path, required: true, schema: { type: string, format: uuid } }
     EventPath: { name: event, in: path, required: true, schema: { type: string, format: uuid } }
+    OrderPath: { name: order, in: path, required: true, schema: { type: string, format: uuid } }
+    RefundPath: { name: refund, in: path, required: true, schema: { type: string, format: uuid } }
     CheckoutTokenPath: { name: token, in: path, required: true, schema: { type: string }, description: "The token createCheckout returned." }
   responses:
     Error: { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -1030,18 +1080,66 @@ components:
         details_submitted: { type: boolean, description: Whether the organizer has finished Stripe's onboarding form. }
     OrderSummary:
       type: object
-      required: [id, code, email, status, ticket_count, total_cents, fee_cents, fee_mode, created_at, paid_at]
+      required: [id, code, email, status, ticket_count, total_cents, fee_cents, fee_mode, created_at, paid_at, refunded_cents, fee_refunded_cents]
       properties:
         id: { type: string, format: uuid }
         code: { type: string }
         email: { type: string }
         status: { type: string, enum: [paid, cancelled, refunded, partially_refunded] }
-        ticket_count: { type: integer }
+        ticket_count: { type: integer, description: "Tickets still valid." }
         total_cents: { type: integer, format: int64 }
         fee_cents: { type: integer, format: int64 }
         fee_mode: { type: string, enum: [absorb, pass] }
         created_at: { type: string, format: date-time }
         paid_at: { type: [string, "null"], format: date-time }
+        refunded_cents: { type: integer, format: int64, description: "Refunded to the buyer so far, counting refunds still on their way and leaving out failed ones." }
+        fee_refunded_cents: { type: integer, format: int64, description: "How much of our fee goes back with those refunds." }
+    OrderDetail:
+      allOf:
+        - { $ref: "#/components/schemas/OrderSummary" }
+        - type: object
+          required: [tickets, refunds]
+          properties:
+            tickets: { type: array, items: { $ref: "#/components/schemas/OrderDetailTicket" } }
+            refunds: { type: array, items: { $ref: "#/components/schemas/Refund" }, description: "Newest first." }
+    OrderDetailTicket:
+      type: object
+      required: [id, ticket_type_name, attendee_name, status, charge_cents, fee_cents, refund_id]
+      properties:
+        id: { type: string, format: uuid }
+        ticket_type_name: { type: string }
+        attendee_name: { type: string }
+        status: { type: string, enum: [valid, void] }
+        charge_cents: { type: integer, format: int64, description: "What the buyer paid for this ticket, before a passed-on fee." }
+        fee_cents: { type: integer, format: int64 }
+        refund_id: { type: [string, "null"], format: uuid, description: "The refund that covered this ticket; null when it hasn't been refunded, or cost nothing." }
+    Refund:
+      type: object
+      required: [id, amount_cents, fee_cents, fee_back, status, reason, failure, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        amount_cents: { type: integer, format: int64, description: "What goes back to the buyer's card." }
+        fee_cents: { type: integer, format: int64, description: "Our fee that goes back with it; 0 when it stays with us." }
+        fee_back: { type: boolean }
+        status: { type: string, enum: [requested, succeeded, failed] }
+        reason: { type: string, enum: [late_payment, organizer, event_cancelled] }
+        failure: { type: [string, "null"], enum: [stripe_failed, no_access, gave_up, null], description: "Why it failed. stripe_failed: Stripe turned it down. no_access: we can't reach your Stripe account any more, so refund from your own Stripe dashboard. gave_up: we couldn't get an answer from Stripe after ten tries." }
+        created_at: { type: string, format: date-time }
+    RefundOrderRequest:
+      type: object
+      required: [refund_fee]
+      properties:
+        ticket_ids: { type: array, maxItems: 100, items: { type: string, format: uuid }, description: "The tickets to refund. Leave it out to refund every ticket still valid." }
+        refund_fee: { type: boolean, x-go-type: "*bool", description: "true gives our fee on these tickets back as well." }
+    RefundResult:
+      type: object
+      required: [refund, ticket_ids, amount_cents, fee_cents, order_status]
+      properties:
+        refund: { oneOf: [{ $ref: "#/components/schemas/Refund" }, { type: "null" }], description: "null when the tickets cost nothing, so there was no money to send back." }
+        ticket_ids: { type: array, items: { type: string, format: uuid } }
+        amount_cents: { type: integer, format: int64 }
+        fee_cents: { type: integer, format: int64 }
+        order_status: { type: string, enum: [paid, cancelled, refunded, partially_refunded] }
     LinkMethod: { type: string, enum: [created, linked] }
     StripeLinkStart:
       type: object
