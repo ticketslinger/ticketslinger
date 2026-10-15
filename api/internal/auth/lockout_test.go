@@ -169,6 +169,31 @@ func TestAccountWideBrakeThrottlesWithoutTurnstile(t *testing.T) {
 	}
 }
 
+// A locked address never takes the account's slot: firing from it every 10
+// seconds can't keep the owner out from another address.
+func TestLockedAddressCantHogTheThrottle(t *testing.T) {
+	s := newGuardedSvc(t, nil)
+	clock := time.Now()
+	auth.SetClock(s, func() time.Time { return clock })
+	for i := 0; i < 5; i++ { // locks 203.0.113.1
+		_ = login(s, "wrong", "", "203.0.113.1")
+	}
+	for i := 0; i < 5; i++ { // the brake, without locking anyone else
+		_ = login(s, "wrong", "", "198.51.100."+strconv.Itoa(1+i/2))
+	}
+	for round := 0; round < 3; round++ {
+		if err := login(s, "wrong", "", "203.0.113.1"); !errors.Is(err, auth.ErrLocked) {
+			t.Fatalf("round %d, locked address: %v, want ErrLocked", round, err)
+		}
+		if round == 2 {
+			if err := login(s, pw, "", "192.0.2.1"); err != nil {
+				t.Fatalf("owner in the window after the locked address fired: %v, want signed in", err)
+			}
+		}
+		clock = clock.Add(auth.ThrottleEvery)
+	}
+}
+
 // With Turnstile on, the brake asks for a token and the throttle stays out of it.
 func TestThrottleIsOnlyForNoTurnstile(t *testing.T) {
 	s := newGuardedSvc(t, fakeTurnstile(t))

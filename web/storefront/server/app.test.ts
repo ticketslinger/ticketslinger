@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createApp } from "./app";
 
 const event = {
@@ -1006,4 +1006,21 @@ test("tax inside the price is noted under the total, and the lines add up", asyn
   expect(html).not.toContain("<span>Tax</span>");
   expect(html).toContain("Includes $1.91 tax");
   expect(sumsUp(html)).toEqual({ sum: 2596, total: 2596 });
+});
+
+// An error can carry the URL we fetched, token and all; the log gets its kind and a redacted message.
+test("a crash logs no token from the error's message", async () => {
+  const bad = structuredClone(event);
+  bad.event.timezone = `http://api/v1/checkouts/${TOK}/pay?t=${TOK}`;
+  const { a } = app(() => Response.json(bad));
+  const spy = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const res = await a.request("/acme/gala");
+    expect(res.status).toBe(500);
+    const logged = spy.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+    expect(logged).toContain("RangeError");
+    expect(logged).not.toContain(TOK);
+  } finally {
+    spy.mockRestore();
+  }
 });

@@ -494,8 +494,11 @@ export function createApp(opts: StorefrontOptions): Hono {
   });
 
   app.notFound((c) => notFound(c));
+  // An error can carry a URL we fetched, token and all: log its kind, the route pattern and its
+  // message with every URL and path cut out. Never the raw error or its stack.
   app.onError((e, c) => {
-    console.error(e);
+    const message = e.message.replace(/[a-z][a-z0-9+.-]*:\/\/\S*|\/\S*/gi, "<url>").slice(0, 200);
+    console.error(`${e.name}: ${message} (${c.req.method} ${c.req.routePath})`);
     return trouble(c, 500);
   });
 

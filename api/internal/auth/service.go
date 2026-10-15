@@ -246,9 +246,14 @@ func (s *Service) Login(ctx context.Context, email, password, totpCode, recovery
 	// ThrottleEvery from everywhere. Checked before counting, so a refused
 	// attempt never moves anyone toward a lock. Same query for any email.
 	if !s.opts.Turnstile.Enabled() {
-		braked, err := s.braked(ctx, account)
+		braked, locked, err := s.braked(ctx, account, ip)
 		if err != nil {
 			return Session{}, User{}, err
+		}
+		// A locked address never spends the account's slot: otherwise it
+		// could take every one and keep the owner out from everywhere.
+		if locked {
+			return Session{}, User{}, ErrLocked
 		}
 		if braked && !s.throttle.Allow(string(account), now) {
 			return Session{}, User{}, ErrThrottled
@@ -366,12 +371,14 @@ func (s *Service) accountKey(email string) []byte {
 }
 
 // braked reports whether the account has accountBrake failures in the
-// window, over all addresses.
-func (s *Service) braked(ctx context.Context, account []byte) (bool, error) {
+// window, over all addresses, and whether ip's own row is locked. One
+// statement, the same for any email.
+func (s *Service) braked(ctx context.Context, account []byte, ip string) (braked, locked bool, err error) {
 	var total int
-	err := s.pool.QueryRow(ctx, `SELECT coalesce(sum(failures), 0) FROM login_failures
-		WHERE account = $1 AND updated_at > now() - $2::interval`, account, lockout.String()).Scan(&total)
-	return total >= accountBrake, err
+	err = s.pool.QueryRow(ctx, `SELECT coalesce(sum(failures) FILTER (WHERE updated_at > now() - $2::interval), 0),
+		       coalesce(bool_or(ip = $3 AND locked_until > now()), false)
+		  FROM login_failures WHERE account = $1`, account, lockout.String(), ratelimit.AddrKey(ip)).Scan(&total, &locked)
+	return total >= accountBrake, locked, err
 }
 
 // reserve counts this attempt from ip before any check runs, so parallel

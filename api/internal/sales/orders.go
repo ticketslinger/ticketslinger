@@ -102,7 +102,9 @@ func RefundPayment(s *Service) jobs.Handler {
 			return err
 		}
 		err := s.refund(ctx, j)
-		if err != nil && jobs.Attempt(ctx) >= jobs.MaxAttempts {
+		// A shutdown (cancel, not the job's own timeout) hands the job back
+		// to the queue: not stuck, so nothing to raise.
+		if err != nil && jobs.Attempt(ctx) >= jobs.MaxAttempts && !errors.Is(ctx.Err(), context.Canceled) {
 			s.refundStuck(ctx, j, err)
 		}
 		return err

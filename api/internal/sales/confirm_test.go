@@ -631,6 +631,49 @@ func TestAStuckRefundSurfaces(t *testing.T) {
 	}
 }
 
+// cancelling is the fake provider whose refund is cut short by a shutdown.
+type cancelling struct {
+	*payments.Fake
+	cancel context.CancelFunc
+}
+
+func (c *cancelling) Refund(ctx context.Context, _ plugin.RefundInput) (string, error) {
+	c.cancel()
+	return "", ctx.Err()
+}
+
+// A shutdown during the last try isn't a stuck refund: the job goes back to
+// the queue, with no ERROR and no order.refund_stuck row.
+func TestShutdownOnTheLastTryRaisesNothing(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 1, price: 2500})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c, pi := paying(t, s, f, fake, sales.Details{Email: "late@example.com"}, sales.Item{TicketTypeID: f.general, Quantity: 1})
+	expire(t, f, c.ID)
+	f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
+	f.must(t, s.HandleStripeEvent(ctx, succeeded(pi.ID, "acct_fake1", c.Quote.TotalCents, 1)))
+	s.Payments = &cancelling{Fake: fake, cancel: cancel}
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	f.exec(t, `update jobs set attempts = 9 where kind = 'refund_payment'`)
+	w := &jobs.Worker{Pool: s.Pool, Handlers: map[string]jobs.Handler{sales.RefundPaymentJob: sales.RefundPayment(s)}}
+	if ran, err := w.RunOnce(ctx); !ran || err != nil {
+		t.Fatalf("last try: %v %v", ran, err)
+	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'order.refund_stuck'`); n != 0 {
+		t.Fatalf("%d order.refund_stuck rows after a shutdown, want 0", n)
+	}
+	if strings.Contains(logs.String(), "level=ERROR") {
+		t.Fatalf("a shutdown logged an ERROR:\n%s", logs.String())
+	}
+	if n := f.count(t, `select count(*) from jobs where kind = 'refund_payment' and attempts = 9 and run_at <> 'infinity'`); n != 1 {
+		t.Fatalf("job not handed back: %d", n)
+	}
+}
+
 // The order page is one statement whether the link is right or not, so its
 // timing doesn't say whether a code exists.
 func TestOrderPageIsOneStatementHitOrMiss(t *testing.T) {
