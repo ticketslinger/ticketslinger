@@ -47,6 +47,11 @@ var (
 var errPaymentsNotReady error = catalogue.ErrConflict{Code: "payments_not_ready",
 	Message: "This organizer can't take card payments right now, so paid tickets aren't on sale. Free ones still are."}
 
+// errEventCancelled: the organizer cancelled the event, so it sells nothing,
+// and every paid order is being refunded.
+var errEventCancelled error = catalogue.ErrConflict{Code: "event_cancelled",
+	Message: "This event has been cancelled, so it isn't selling tickets any more. If you'd already paid, we're refunding you in full."}
+
 // errPriceChanged: the order's stored totals no longer match its tickets.
 var errPriceChanged error = catalogue.ErrConflict{Code: "price_changed",
 	Message: "The price of these tickets changed after you started paying, so we've stopped here. Start a new checkout to see the new total."}

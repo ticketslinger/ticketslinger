@@ -17,6 +17,8 @@ export type PayRequest = Schemas["PayCheckout"];
 
 /** What the server puts in #checkout-data. */
 export type CheckoutData = {
+  /** The checkout's id: names what this page keeps in sessionStorage, where the token never goes. */
+  id: string;
   token: string;
   /** The checkout's status when the page was drawn. */
   status: Schemas["Checkout"]["status"];
@@ -99,7 +101,7 @@ const EXPIRED =
   "Your 15 minutes ran out and the tickets went back on sale. Start again and we'll hold them for you.";
 const PRICE_CHANGED =
   "The price changed while you were checking out. Start again to see the new total.";
-const MESSAGES: Record<string, string> = {
+export const MESSAGES: Record<string, string> = {
   payments_not_ready: NOT_READY,
   payments_not_configured: NOT_READY,
   below_minimum_charge: "Card payments start at $0.50, and this order comes to less.",
@@ -107,13 +109,24 @@ const MESSAGES: Record<string, string> = {
   try_again: BUSY,
   payments_unavailable: BUSY,
   idempotency_in_progress: BUSY,
+  payments_refused:
+    "Card payments for this event are switched off right now. Try again later, or contact the organizer.",
 };
 /** Once a card may have been charged. Never "back on sale", never "start again". */
 export const PENDING =
   "Your payment may still be going through. We'll email you the moment it does. Check your inbox before you try again.";
+/** The payment was stopped unfinished, an hour after the hold ran out. */
+export const CANCELLED =
+  "Your payment didn't go through, so you haven't been charged. The tickets you were holding have gone back on sale.";
+/** The organizer cancelled the event; the API says the same in its 409. */
+export const EVENT_CANCELLED =
+  "This event has been cancelled, so it isn't selling tickets any more. If you'd already paid, we're refunding you in full.";
 // Answers that end this checkout: the buyer has to start again from the event.
 // checkout_expired isn't one: a payment may already exist, so we ask the checkout first.
-const OVER: Record<string, string> = { price_changed: PRICE_CHANGED };
+const OVER: Record<string, string> = {
+  price_changed: PRICE_CHANGED,
+  event_cancelled: EVENT_CANCELLED,
+};
 
 /**
  * What one read of the checkout means while we wait on a payment. started: this page
@@ -126,12 +139,15 @@ export function waitStep(
   now = Date.now(),
 ): "done" | "over" | "late" | "wait" {
   if (c.status === "completed") return "done";
+  if (c.status === "cancelled") return "over";
   if (c.status === "expired") return started ? "late" : "over";
   if (c.status === "paying" && Date.parse(c.expires_at) <= now) return "late";
   return "wait";
 }
 
 const DECLINED = "Your bank didn't approve that payment. Try again, or use another card.";
+const UNFINISHED =
+  "You didn't finish your bank's check, so nothing was charged. Try again when you're ready.";
 /** A decline after the hold ran out: nothing was charged, and there's nothing left to pay for here. */
 export const DECLINED_LATE =
   "Your bank didn't approve that payment, so you haven't been charged. Your hold ran out in the meantime, so head back to the event to try again.";
@@ -154,6 +170,41 @@ export function firstPhase(
     return { kind: "waiting", test: false, started: true, late: true };
   }
   return { kind: "details" };
+}
+
+/** Where the page starts after the bank, from Stripe's own word on the payment. */
+export function afterReturn(status: string | undefined, lapsed: boolean): Phase {
+  switch (status) {
+    case "succeeded":
+    case "processing":
+      return { kind: "waiting", test: false, started: true };
+    case "requires_payment_method":
+    case "requires_action":
+      return lapsed ? { kind: "over", message: DECLINED_LATE } : { kind: "details" };
+    case "canceled":
+      return { kind: "over", message: CANCELLED };
+    default:
+      return { kind: "waiting", test: false, started: true };
+  }
+}
+
+// What reading the payment back after the bank needs: the publishable key and the account,
+// never the client secret (that comes back in the URL). Storage may be blocked: then we go
+// by the redirect's own word.
+type PayKeys = { publishable_key: string; account?: string };
+const keysName = (id: string) => `ts-pay:${id}`;
+function saveKeys(id: string, k: PayKeys) {
+  try {
+    sessionStorage.setItem(keysName(id), JSON.stringify(k));
+  } catch {}
+}
+function savedKeys(id: string): PayKeys | undefined {
+  try {
+    const k = JSON.parse(sessionStorage.getItem(keysName(id)) ?? "null");
+    return typeof k?.publishable_key === "string" ? k : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** The way back to the event, when both slugs check out. */
@@ -242,13 +293,9 @@ function Checkout({ data }: { data: CheckoutData }) {
   const fields = answersFor(data.questions, data.items);
   const tickets = ticketsOf(data.items);
   // Back from a bank's check (3D Secure): Stripe adds these to return_url.
-  // Read once, then dropped from the address bar: the client secret shouldn't linger there,
-  // and the next return_url shouldn't carry the last one's params.
-  const [back] = useState(() => {
-    const q = new URLSearchParams(location.search);
-    if (q.has("payment_intent")) history.replaceState(null, "", location.pathname);
-    return q;
-  });
+  // Read once, then dropped from the address bar (see below): the client secret shouldn't
+  // linger there, and the next return_url shouldn't carry the last one's params.
+  const [back] = useState(() => new URLSearchParams(location.search));
   const failed = back.get("redirect_status") === "failed";
   const [phase, setPhase] = useState<Phase>(() => firstPhase(back, data));
   // The last word on this page's payment was a decline: nothing was charged.
@@ -263,6 +310,33 @@ function Checkout({ data }: { data: CheckoutData }) {
   const start = useRef<Schemas["PaymentStart"]>(undefined);
 
   const expires = Date.parse(data.expires_at);
+  // After the bank, ask Stripe what became of the payment rather than trusting the redirect.
+  useEffect(() => {
+    if (!back.has("payment_intent")) return;
+    const drop = () => history.replaceState(null, "", location.pathname);
+    const secret = back.get("payment_intent_client_secret");
+    const keys = savedKeys(data.id);
+    if (!secret || !keys) return drop();
+    (async () => {
+      const s = await loadStripe(keys.publishable_key, { stripeAccount: keys.account }).catch(
+        () => null,
+      );
+      const r = await s?.retrievePaymentIntent(secret).catch(() => undefined);
+      drop();
+      const status = r?.paymentIntent?.status;
+      if (!status) return; // No answer: the redirect's word stands.
+      const next = afterReturn(status, Date.parse(data.expires_at) <= Date.now());
+      declined.current = next.kind !== "waiting";
+      setMessage(
+        status === "requires_action"
+          ? UNFINISHED
+          : status === "requires_payment_method"
+            ? DECLINED
+            : undefined,
+      );
+      setPhase(next);
+    })();
+  }, [back, data.id, data.expires_at]);
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(t);
@@ -291,6 +365,12 @@ function Checkout({ data }: { data: CheckoutData }) {
           const r = await fetch(`/api/checkouts/${data.token}`, {
             signal: AbortSignal.timeout(10_000),
           });
+          if (r.status === 409) {
+            const e = await r.json().catch(() => ({}));
+            if (e?.error?.code === "event_cancelled") {
+              return setPhase({ kind: "over", message: EVENT_CANCELLED });
+            }
+          }
           if (r.ok) {
             const c = await r.json();
             const step = waitStep(c, started);
@@ -298,7 +378,12 @@ function Checkout({ data }: { data: CheckoutData }) {
               if (!go(c.order_url, c.order_code)) setPhase({ kind: "over", message: PENDING });
               return;
             }
-            if (step === "over") return setPhase({ kind: "over", message: EXPIRED });
+            if (step === "over") {
+              return setPhase({
+                kind: "over",
+                message: c.status === "cancelled" ? CANCELLED : EXPIRED,
+              });
+            }
             // Keep polling: the webhook may still confirm it.
             if (step === "late") setPhase((p) => (p.kind === "waiting" ? { ...p, late: true } : p));
           }
@@ -377,6 +462,10 @@ function Checkout({ data }: { data: CheckoutData }) {
     if (!s || sending) return;
     setSending(true);
     setCardError(undefined);
+    const keys = start.current;
+    if (keys?.publishable_key) {
+      saveKeys(data.id, { publishable_key: keys.publishable_key, account: keys.account });
+    }
     const r = await s.stripe.confirmPayment({
       elements: s.elements,
       confirmParams: { return_url: location.href },

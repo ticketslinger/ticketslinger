@@ -77,11 +77,13 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 	}
 	var order pendingOrder
 	var free PaymentStart
+	var event uuid.UUID
 	err = system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error {
 		c, err := lockCheckout(ctx, tx, HashToken(token))
 		if err != nil {
 			return err
 		}
+		event = c.event
 		items, q, err := s.cart(ctx, tx, c.id, c.event, c.promo, c.feeMode)
 		if err != nil {
 			return err
@@ -145,6 +147,20 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 	// whatever the row holds, so every caller gets the same payment.
 	var p payment
 	err = system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error {
+		// The event is still on sale, and stays so until this commits: a
+		// cancellation (FOR NO KEY UPDATE) waits, and its cancel_payment job
+		// then finds this intent stored. One that got in first is seen here.
+		// Nothing else is held, so this adds no lock-order edge.
+		var status string
+		if err := tx.QueryRow(ctx, `select status from events where id = $1 for share`, event).Scan(&status); err != nil {
+			return err
+		}
+		if status == "cancelled" {
+			return errEventCancelled
+		}
+		if status != "live" {
+			return catalogue.ErrNotFound
+		}
 		err := tx.QueryRow(ctx, `insert into payments (organizer_id, order_id, provider, stripe_account_id, payment_intent_id, client_secret, amount_cents, application_fee_cents)
 			values ($1, $2, $3, $4, $5, $6, $7, $8) on conflict (order_id) do nothing
 			returning payment_intent_id, client_secret, stripe_account_id`,
@@ -155,6 +171,12 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 		}
 		return err
 	})
+	if errors.Is(err, errEventCancelled) || errors.Is(err, catalogue.ErrNotFound) {
+		// Taken off sale while the intent was made: nobody gets to pay it.
+		if cerr := s.Payments.CancelPaymentIntent(ctx, pi.Account, pi.ID, "cancel-"+order.ID.String()); cerr != nil {
+			slog.WarnContext(ctx, "cancelling an intent made as its event went off sale", "order", order.ID, "intent", pi.ID, "err", cerr)
+		}
+	}
 	if err != nil {
 		return PaymentStart{}, err
 	}
@@ -222,14 +244,14 @@ func lockCheckout(ctx context.Context, tx pgx.Tx, hash []byte) (lockedCheckout, 
 	var c lockedCheckout
 	var p promo
 	var promoID *uuid.UUID
-	var status, code string
-	var expired, live bool
-	err := tx.QueryRow(ctx, `select c.id, c.event_id, c.status, c.expires_at <= statement_timestamp(), e.status = 'live', c.promo_code_id,
+	var status, code, event string
+	var expired bool
+	err := tx.QueryRow(ctx, `select c.id, c.event_id, c.status, c.expires_at <= statement_timestamp(), e.status, c.promo_code_id,
 			coalesce(p.code, ''), coalesce(p.kind, ''), coalesce(p.value, 0), e.fee_mode,
 			coalesce((select o.code from orders o where o.checkout_id = c.id), '')
 		from checkouts c join events e on e.id = c.event_id left join promo_codes p on p.id = c.promo_code_id
 		where c.token_hash = $1 for update of c`, hash).
-		Scan(&c.id, &c.event, &status, &expired, &live, &promoID, &p.code, &p.kind, &p.value, &c.feeMode, &code)
+		Scan(&c.id, &c.event, &status, &expired, &event, &promoID, &p.code, &p.kind, &p.value, &c.feeMode, &code)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return c, catalogue.ErrNotFound // purged since checkout_scope looked
@@ -237,7 +259,9 @@ func lockCheckout(ctx context.Context, tx pgx.Tx, hash []byte) (lockedCheckout, 
 		return c, err
 	case status == "completed":
 		return c, CheckoutCompleted{OrderCode: code}
-	case !live: // taken off sale, or cancelled, since the hold
+	case event == "cancelled":
+		return c, errEventCancelled
+	case event != "live": // taken off sale since the hold
 		return c, catalogue.ErrNotFound
 	case expired:
 		return c, ErrCheckoutExpired

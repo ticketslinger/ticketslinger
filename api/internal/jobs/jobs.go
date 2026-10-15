@@ -175,8 +175,8 @@ const sweepBatch = 1000
 
 // Sweep deletes expired sessions, webauthn challenges, email tokens,
 // idempotency keys and Stripe link states, failed sign-in counts untouched
-// for a day, and old abandoned checkouts, a batch at a time. Every step runs; the errors
-// come back joined.
+// for a day, and old abandoned checkouts, a batch at a time, and queues a
+// settle for every abandoned order. Every step runs; the errors come back joined.
 func Sweep(ctx context.Context, pool *pgxpool.Pool) error {
 	var errs []error
 	for _, q := range []string{
@@ -198,7 +198,7 @@ func Sweep(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 	}
 	// Tenant tables the sweep can't see through RLS purge through a function.
-	for _, fn := range []string{`select purge_expired_checkouts($1)`, `select purge_expired_link_states($1)`} {
+	for _, fn := range []string{`select purge_expired_checkouts($1)`, `select purge_expired_link_states($1)`, `select queue_abandoned_orders($1)`} {
 		for {
 			var n int
 			if err := pool.QueryRow(ctx, fn, sweepBatch).Scan(&n); err != nil {

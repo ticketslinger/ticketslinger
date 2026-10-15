@@ -84,7 +84,11 @@ export function CancelEvent({
             label="Type the event's name to confirm"
             value={typed}
             autoComplete="off"
-            onChange={(e) => setTyped(e.target.value)}
+            onChange={(e) => {
+              // A different name is a different request: it gets its own key.
+              key.current = null;
+              setTyped(e.target.value);
+            }}
           />
           <ErrorText>{action.error}</ErrorText>
         </FormDialog>

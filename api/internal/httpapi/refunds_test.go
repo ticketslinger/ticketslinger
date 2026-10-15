@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -149,6 +150,7 @@ func TestCancelEventOverHTTP(t *testing.T) {
 	s := newShop(t, nil)
 	s.buyPaid(1, "one@example.com", "evt_cancel_one")
 	s.buyPaid(2, "two@example.com", "evt_cancel_two")
+	open := s.must(s.send("", "", "POST", "/v1/checkouts", s.cart(s.f["ticketType"], 1, "")), 201)["token"].(string)
 	path := "/v1/organizers/acme/events/" + s.f["event"] + "/cancel"
 	_, writeKey := s.createKey(s.owner, "acme", "write")
 	if res := s.do(writeKey, "POST", path, `{"confirm_name":"Gala"}`); res.StatusCode != 403 || s.errorCode(res) != "session_required" {
@@ -170,6 +172,12 @@ func TestCancelEventOverHTTP(t *testing.T) {
 	}
 	if r := s.send("", "", "GET", "/v1/storefront/acme/gala", ""); r.StatusCode != 404 {
 		t.Fatalf("storefront after cancelling: %d, want 404", r.StatusCode)
+	}
+	// A buyer still at the checkout is told why, not shown a missing page.
+	for _, r := range []*http.Response{s.send("", "", "GET", "/v1/checkouts/"+open, ""), s.pay(open)} {
+		if r.StatusCode != 409 || s.errorCode(r) != "event_cancelled" {
+			t.Fatalf("%s %s after cancelling: %d %q, want 409 event_cancelled", r.Request.Method, r.Request.URL.Path, r.StatusCode, s.errorCode(r))
+		}
 	}
 	if r := s.do(s.owner, "POST", path, `{"confirm_name":"Gala"}`); r.StatusCode != 409 || s.errorCode(r) != "event_not_live" {
 		t.Fatalf("again: %d %q, want 409 event_not_live", r.StatusCode, s.errorCode(r))
