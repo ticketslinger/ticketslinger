@@ -857,3 +857,22 @@ func TestWebhooksFindTheLiveOrganizer(t *testing.T) {
 		t.Fatalf("account.updated went to the wrong organizer: acme charges %v, beta charges %v", acme, betaOn)
 	}
 }
+
+// Each ticket keeps what its buyer paid for it, so a refund can give exactly that back.
+func TestTicketsKeepWhatTheBuyerPaid(t *testing.T) {
+	for name, inclusive := range map[string]bool{"tax on top": false, "tax included": true} {
+		t.Run(name, func(t *testing.T) {
+			s, fake := newPaidService(t)
+			f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500, taxBP: 800})
+			f.exec(t, `update events set prices_include_tax = $2 where id = $1`, f.event, inclusive)
+			c, pi := paying(t, s, f, fake, sales.Details{}, sales.Item{TicketTypeID: f.general, Quantity: 2})
+			f.must(t, s.HandleStripeEvent(context.Background(), succeeded(pi.ID, "acct_fake1", c.Quote.TotalCents, 1)))
+			order, _, _ := f.orderOf(t, c.ID)
+			var charges, fees int64
+			f.must(t, f.owner.QueryRow(context.Background(), `select sum(charge_cents), sum(fee_cents) from tickets where order_id = $1`, order).Scan(&charges, &fees))
+			if charges+fees != c.Quote.TotalCents { // pass mode: the fee rides on top
+				t.Fatalf("charges %d + fees %d != total %d", charges, fees, c.Quote.TotalCents)
+			}
+		})
+	}
+}

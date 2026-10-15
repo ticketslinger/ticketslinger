@@ -851,6 +851,8 @@ export interface components {
              * @description What the buyer pays for this ticket, before a passed-on fee.
              */
             charge_cents: number;
+            /** @description Whether tax_cents is already inside the price. When false it's added on top. */
+            tax_included: boolean;
         };
         Quote: {
             tickets: components["schemas"]["QuoteTicket"][];
@@ -867,6 +869,11 @@ export interface components {
             fee_cents: number;
             /** Format: int64 */
             total_cents: number;
+            /**
+             * Format: int64
+             * @description Tax already inside the prices, for an "Includes $X tax" note.
+             */
+            included_tax_cents: number;
             /** @enum {string} */
             fee_mode: "absorb" | "pass";
         };

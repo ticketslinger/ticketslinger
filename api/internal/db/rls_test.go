@@ -599,8 +599,8 @@ func seedSale(t *testing.T, app *pgxpool.Pool, org uuid.UUID) {
 		o as (insert into orders(organizer_id, event_id, code, email, status, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents,
 				fee_mode, quote, details)
 			select $1, id, 'TS-ABCDE', 'b@example.com', 'paid', 2500, 0, 0, 100, 2600, 'pass', '{}', '{}' from e returning id, event_id),
-		k as (insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, secret)
-			select $1, o.event_id, o.id, tt.id, 2500, 0, 0, 100, decode(md5(random()::text), 'hex') from o, tt returning id),
+		k as (insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, charge_cents, secret)
+			select $1, o.event_id, o.id, tt.id, 2500, 0, 0, 100, 2500, decode(md5(random()::text), 'hex') from o, tt returning id),
 		a as (insert into answers(organizer_id, event_id, order_id, question_id, value) select $1, o.event_id, o.id, q.id, 'None' from o, q),
 		p as (insert into payments(organizer_id, order_id, provider, stripe_account_id, payment_intent_id, client_secret, amount_cents, application_fee_cents)
 			select $1, id, 'test', 'acct_1', 'pi_1', 'pi_1_secret', 2600, 100 from o returning id)
@@ -622,8 +622,8 @@ func TestRLSAppCannotWriteSales(t *testing.T) {
 		if err := tx.QueryRow(ctx, `select count(*) from tickets`).Scan(&n); err != nil || n != 1 {
 			t.Errorf("own tickets: %d %v, want 1", n, err)
 		}
-		_, err := tx.Exec(ctx, `insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, secret)
-			select organizer_id, event_id, order_id, ticket_type_id, 0, 0, 0, 0, decode(md5(random()::text), 'hex') from tickets`)
+		_, err := tx.Exec(ctx, `insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, charge_cents, secret)
+			select organizer_id, event_id, order_id, ticket_type_id, 0, 0, 0, 0, 0, decode(md5(random()::text), 'hex') from tickets`)
 		return err
 	})
 	var pg *pgconn.PgError
@@ -652,8 +652,8 @@ func TestSalesRowsStayInTheirEvent(t *testing.T) {
 	}
 	other := `(select id from events where slug = 'other-show')`
 	for name, q := range map[string]string{
-		"ticket on another event's order": `insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, secret)
-			select $1, ` + other + `, (select id from orders), (select id from ticket_types where name = 'Other'), 0, 0, 0, 0, decode(md5(random()::text), 'hex')`,
+		"ticket on another event's order": `insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, charge_cents, secret)
+			select $1, ` + other + `, (select id from orders), (select id from ticket_types where name = 'Other'), 0, 0, 0, 0, 0, decode(md5(random()::text), 'hex')`,
 		"answer on another event's order": `insert into answers(organizer_id, event_id, order_id, question_id, value)
 			select $1, ` + other + `, (select id from orders), (select id from questions where label = 'Other'), 'x'`,
 		"order with another event's code": `insert into orders(organizer_id, event_id, code, email, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents,

@@ -46,13 +46,8 @@ function Quote({ c, e }: { c: Checkout; e: CheckoutEvent }) {
     return [`${it.quantity} × ${names.get(it.ticket_type_id) ?? "Ticket"}`, formatCents(cents)];
   });
   if (q.discount_cents > 0) lines.push(["Discount", `−${formatCents(q.discount_cents)}`]);
-  let added = 0;
-  let included = 0;
-  for (const t of q.tickets) {
-    const net = t.price_cents - t.discount_cents;
-    if (t.charge_cents === net) included += t.tax_cents;
-    else added += t.charge_cents - net;
-  }
+  const added = q.tickets.reduce((sum, t) => sum + (t.tax_included ? 0 : t.tax_cents), 0);
+  const included = q.included_tax_cents;
   if (added > 0) lines.push(["Tax", formatCents(added)]);
   if (q.fee_mode === "pass" && q.fee_cents > 0)
     lines.push(["Service fee", formatCents(q.fee_cents)]);
