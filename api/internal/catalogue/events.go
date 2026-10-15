@@ -196,7 +196,7 @@ func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 			}
 			e.Status = "live"
 		default:
-			return Event{}, invalid("status_not_allowed", "status", "Events can move between draft and live for now. Ending or cancelling one isn't available yet.")
+			return Event{}, invalid("status_not_allowed", "status", "An event moves between draft and live here. Cancelling has a step of its own, since it refunds everyone, and ending one isn't available yet.")
 		}
 	}
 	if sameEvent(e, before) {

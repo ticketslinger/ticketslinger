@@ -437,7 +437,7 @@ export interface paths {
         delete: operations["deleteEvent"];
         options?: never;
         head?: never;
-        /** @description Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed). Going live is refused with 422 event_over once ends_at has passed (an event that has started but not ended can go live), 422 no_ticket_types without a ticket type, 422 unquotaed_ticket_type while a ticket type has no quota, and 422 payments_not_ready when any ticket type costs money and the organizer's Stripe account can't take payments yet (see /organizers/{organizer}/payments). A live event's ends_at can still change. The slug changes only on a draft (409 slug_locked). Once tickets are sold or held in an open checkout, tax_rate_bp, prices_include_tax, fee_mode and timezone can't change and the event can't go back to draft (409 has_sales; any order counts, even one without tickets); field names the property refused. */
+        /** @description Owners and admins, or a write API key. Send only what changes. status moves between draft and live (422 status_not_allowed otherwise): cancelling has its own operation, cancelEvent, because it refunds everyone, and ending isn't available yet. Going live is refused with 422 event_over once ends_at has passed (an event that has started but not ended can go live), 422 no_ticket_types without a ticket type, 422 unquotaed_ticket_type while a ticket type has no quota, and 422 payments_not_ready when any ticket type costs money and the organizer's Stripe account can't take payments yet (see /organizers/{organizer}/payments). A live event's ends_at can still change. The slug changes only on a draft (409 slug_locked). Once tickets are sold or held in an open checkout, tax_rate_bp, prices_include_tax, fee_mode and timezone can't change and the event can't go back to draft (409 has_sales; any order counts, even one without tickets); field names the property refused. */
         patch: operations["updateEvent"];
         trace?: never;
     };
@@ -594,6 +594,23 @@ export interface paths {
         put?: never;
         /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Sends a failed refund again: the same refund, for the same money, back to requested. Before it asks Stripe again, we check whether Stripe made the first one after all; if it did, we use that one instead of sending a second. Its tickets keep their seats until it goes through. 409 not_failed unless the refund failed. 404 for a refund that isn't this order's. */
         post: operations["retryRefund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Takes a live event off sale for good and refunds every paid order in full, our fee included, whoever paid it. Every ticket stops scanning straight away. A payment that's still going through is stopped at Stripe, and one that lands anyway is refunded in full. There's no undo, so confirm_name must be the event's name exactly as it's shown (spaces around it don't matter): 422 confirm_mismatch (field confirm_name) otherwise. 409 event_not_live unless the event is on sale. orders, amount_cents and fee_cents add up the refunds this asked Stripe for; each one goes through on its own, as with refundOrder. */
+        post: operations["cancelEvent"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1158,6 +1175,25 @@ export interface components {
             fee_cents: number;
             /** @enum {string} */
             order_status: "paid" | "cancelled" | "refunded" | "partially_refunded";
+        };
+        CancelEventRequest: {
+            /** @description The event's name, typed out, to confirm. */
+            confirm_name: string;
+        };
+        CancelEventResult: {
+            event: components["schemas"]["Event"];
+            /** @description Paid orders refunded. */
+            orders: number;
+            /**
+             * Format: int64
+             * @description Asked back from Stripe for buyers, in all.
+             */
+            amount_cents: number;
+            /**
+             * Format: int64
+             * @description Our fee going back, in all.
+             */
+            fee_cents: number;
         };
         /** @enum {string} */
         LinkMethod: "created" | "linked";
@@ -2971,6 +3007,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Refund"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    cancelEvent: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelEventRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelEventResult"];
                 };
             };
             400: components["responses"]["Error"];

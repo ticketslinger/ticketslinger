@@ -14,3 +14,7 @@ var RequestRefundForTest = requestRefund
 func FinishRefundForTest(s *Service, ctx context.Context, tx pgx.Tx, org, refund uuid.UUID, status string) error {
 	return s.finishRefund(ctx, tx, org, refund, status, "")
 }
+
+func FailRefundForTest(s *Service, ctx context.Context, tx pgx.Tx, org, refund uuid.UUID, failure string) error {
+	return s.failRefund(ctx, tx, org, refund, failure, "")
+}

@@ -123,6 +123,7 @@ func newWorker(pool *pgxpool.Pool, m mailer.Mailer, cfg config.Config, pay plugi
 		"send_email":               jobs.SendEmail(m),
 		sales.OrderConfirmationJob: shop.OrderConfirmation(m),
 		sales.RefundJob:            sales.Refund(shop),
+		sales.CancelPaymentJob:     sales.CancelPayment(shop),
 	}, Parked: map[string]func(context.Context, []byte, string){sales.RefundJob: sales.RefundParked(shop)}}
 }
 

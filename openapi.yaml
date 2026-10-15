@@ -367,7 +367,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
     patch:
       operationId: updateEvent
-      description: "Owners and admins, or a write API key. Send only what changes. status moves between draft and live; ended and cancelled aren't available yet (422 status_not_allowed). Going live is refused with 422 event_over once ends_at has passed (an event that has started but not ended can go live), 422 no_ticket_types without a ticket type, 422 unquotaed_ticket_type while a ticket type has no quota, and 422 payments_not_ready when any ticket type costs money and the organizer's Stripe account can't take payments yet (see /organizers/{organizer}/payments). A live event's ends_at can still change. The slug changes only on a draft (409 slug_locked). Once tickets are sold or held in an open checkout, tax_rate_bp, prices_include_tax, fee_mode and timezone can't change and the event can't go back to draft (409 has_sales; any order counts, even one without tickets); field names the property refused."
+      description: "Owners and admins, or a write API key. Send only what changes. status moves between draft and live (422 status_not_allowed otherwise): cancelling has its own operation, cancelEvent, because it refunds everyone, and ending isn't available yet. Going live is refused with 422 event_over once ends_at has passed (an event that has started but not ended can go live), 422 no_ticket_types without a ticket type, 422 unquotaed_ticket_type while a ticket type has no quota, and 422 payments_not_ready when any ticket type costs money and the organizer's Stripe account can't take payments yet (see /organizers/{organizer}/payments). A live event's ends_at can still change. The slug changes only on a draft (409 slug_locked). Once tickets are sold or held in an open checkout, tax_rate_bp, prices_include_tax, fee_mode and timezone can't change and the event can't go back to draft (409 has_sales; any order counts, even one without tickets); field names the property refused."
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
@@ -610,6 +610,23 @@ paths:
         - { $ref: "#/components/parameters/IdempotencyKey" }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Refund" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/cancel:
+    post:
+      operationId: cancelEvent
+      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Takes a live event off sale for good and refunds every paid order in full, our fee included, whoever paid it. Every ticket stops scanning straight away. A payment that's still going through is stopped at Stripe, and one that lands anyway is refunded in full. There's no undo, so confirm_name must be the event's name exactly as it's shown (spaces around it don't matter): 422 confirm_mismatch (field confirm_name) otherwise. 409 event_not_live unless the event is on sale. orders, amount_cents and fee_cents add up the refunds this asked Stripe for; each one goes through on its own, as with refundOrder."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CancelEventRequest" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CancelEventResult" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
@@ -1140,6 +1157,19 @@ components:
         amount_cents: { type: integer, format: int64 }
         fee_cents: { type: integer, format: int64 }
         order_status: { type: string, enum: [paid, cancelled, refunded, partially_refunded] }
+    CancelEventRequest:
+      type: object
+      required: [confirm_name]
+      properties:
+        confirm_name: { type: string, maxLength: 200, description: "The event's name, typed out, to confirm." }
+    CancelEventResult:
+      type: object
+      required: [event, orders, amount_cents, fee_cents]
+      properties:
+        event: { $ref: "#/components/schemas/Event" }
+        orders: { type: integer, description: "Paid orders refunded." }
+        amount_cents: { type: integer, format: int64, description: "Asked back from Stripe for buyers, in all." }
+        fee_cents: { type: integer, format: int64, description: "Our fee going back, in all." }
     LinkMethod: { type: string, enum: [created, linked] }
     StripeLinkStart:
       type: object

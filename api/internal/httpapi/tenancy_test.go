@@ -49,6 +49,7 @@ var sessionOnly = map[string]string{
 	"disconnectPayments": "switching payments off is a person's call",
 	"refundOrder":        "a refund moves the organizer's money; a person decides",
 	"retryRefund":        "sending a refund again is a person's call too",
+	"cancelEvent":        "cancelling an event refunds everyone; a person decides",
 }
 
 // Every secured operation not in userScoped, called by a signed-in mfa user

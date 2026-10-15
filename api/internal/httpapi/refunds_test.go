@@ -144,3 +144,37 @@ func TestRetryRefundOverHTTP(t *testing.T) {
 		t.Fatalf("again: %d %q, want 409 not_failed", res.StatusCode, s.errorCode(res))
 	}
 }
+
+func TestCancelEventOverHTTP(t *testing.T) {
+	s := newShop(t, nil)
+	s.buyPaid(1, "one@example.com", "evt_cancel_one")
+	s.buyPaid(2, "two@example.com", "evt_cancel_two")
+	path := "/v1/organizers/acme/events/" + s.f["event"] + "/cancel"
+	_, writeKey := s.createKey(s.owner, "acme", "write")
+	if res := s.do(writeKey, "POST", path, `{"confirm_name":"Gala"}`); res.StatusCode != 403 || s.errorCode(res) != "session_required" {
+		t.Fatalf("write key: %d %q, want 403 session_required", res.StatusCode, s.errorCode(res))
+	}
+	for _, body := range []string{`{"confirm_name":"gala"}`, `{"confirm_name":"` + strings.Repeat("G", 201) + `"}`} {
+		res := s.do(s.owner, "POST", path, body)
+		if b := s.json(res); res.StatusCode != 422 || (b["error"].(map[string]any)["code"] != "confirm_mismatch" || errorField(b) != "confirm_name") {
+			t.Fatalf("%.40s: %d %v, want 422 confirm_mismatch", body, res.StatusCode, b)
+		}
+	}
+	if n := s.count(`select count(*) from refunds where reason = 'event_cancelled'`); n != 0 {
+		t.Fatal("a refused cancel refunded")
+	}
+	res := s.must(s.do(s.owner, "POST", path, `{"confirm_name":" Gala "}`), 200)
+	ev, _ := res["event"].(map[string]any)
+	if res["orders"] != float64(2) || res["amount_cents"] != float64(3*2600) || res["fee_cents"] != float64(300) || ev["status"] != "cancelled" {
+		t.Fatalf("cancelled %v", res)
+	}
+	if r := s.send("", "", "GET", "/v1/storefront/acme/gala", ""); r.StatusCode != 404 {
+		t.Fatalf("storefront after cancelling: %d, want 404", r.StatusCode)
+	}
+	if r := s.do(s.owner, "POST", path, `{"confirm_name":"Gala"}`); r.StatusCode != 409 || s.errorCode(r) != "event_not_live" {
+		t.Fatalf("again: %d %q, want 409 event_not_live", r.StatusCode, s.errorCode(r))
+	}
+	if r := s.do(s.owner, "PATCH", "/v1/organizers/acme/events/"+s.f["event"], `{"status":"live"}`); r.StatusCode != 422 || s.errorCode(r) != "status_not_allowed" {
+		t.Fatalf("back to live: %d %q, want 422 status_not_allowed", r.StatusCode, s.errorCode(r))
+	}
+}

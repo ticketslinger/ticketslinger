@@ -3,6 +3,7 @@ package sales_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
+	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
 	"github.com/ticketslinger/ticketslinger/api/internal/db"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
@@ -565,5 +567,240 @@ func TestListOrdersCountsWhatsLeft(t *testing.T) {
 		d.Tickets[0].Status != "void" || d.Tickets[0].RefundID == nil || *d.Tickets[0].RefundID != d.Refunds[0].ID ||
 		d.Tickets[1].Status != "valid" || d.Tickets[1].ChargeCents != 2500 || d.Tickets[1].FeeCents != 100 {
 		t.Fatalf("detail %+v", d)
+	}
+}
+
+// lockOrderOf holds the checkout's order FOR UPDATE in an owner-pool
+// transaction until release.
+type heldLock struct{ tx pgx.Tx }
+
+func (h heldLock) release() { _ = h.tx.Rollback(context.Background()) }
+
+func (f fixture) lockOrderOf(t *testing.T, checkout uuid.UUID) heldLock {
+	t.Helper()
+	tx, err := f.owner.Begin(context.Background())
+	f.must(t, err)
+	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+	_, err = tx.Exec(context.Background(), `select 1 from orders where checkout_id = $1 for update`, checkout)
+	f.must(t, err)
+	return heldLock{tx}
+}
+
+func (f fixture) cancel(s *sales.Service, name string) (res sales.CancelResult, err error) {
+	err = db.WithOrganizer(context.Background(), s.Pool, f.user, f.org, func(tx pgx.Tx, _ string) (err error) {
+		res, err = sales.CancelEvent(context.Background(), tx, f.org, f.event, name, audit.Actor{User: f.user})
+		return
+	})
+	return res, err
+}
+
+func TestCancelEventRefundsEveryone(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	_, piA, _ := f.paidOrder(t, s, fake, 2, 1)
+	b, piB, bTickets := f.paidOrder(t, s, fake, 2, 2)
+	asOwner(t, s, f, func(tx pgx.Tx) error { // B already had one ticket refunded, fee kept
+		_, err := sales.RefundTickets(ctx, tx, f.org, f.event, b, sales.RefundRequest{TicketIDs: bTickets[:1]}, "organizer", audit.Actor{User: f.user})
+		return err
+	})
+	res, err := f.cancel(s, "  Gala ")
+	f.must(t, err)
+	if res.Orders != 2 || res.AmountCents != 5200+2600 || res.FeeCents != 200+100 {
+		t.Fatalf("result %+v", res)
+	}
+	drain(t, s, &mailer.Memory{})
+	if amount, fee := fake.Refunded(piA); amount != 5200 || fee != 200 {
+		t.Fatalf("A: %d %d", amount, fee)
+	}
+	if amount, fee := fake.Refunded(piB); amount != 2500+2600 || fee != 100 {
+		t.Fatalf("B: %d %d", amount, fee)
+	}
+	if n := f.count(t, `select count(*) from tickets where status = 'valid'`); n != 0 {
+		t.Fatalf("%d valid tickets on a cancelled event", n)
+	}
+	if n := f.count(t, `select count(*) from events where id = $1 and status = 'cancelled'`, f.event); n != 1 {
+		t.Fatal("event not cancelled")
+	}
+	if n := f.count(t, `select count(*) from refunds where reason = 'event_cancelled' and fee_refunded`); n != 2 {
+		t.Fatalf("%d event_cancelled refunds with the fee back, want 2", n)
+	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'event.cancelled'`); n != 1 {
+		t.Fatal("no event.cancelled audit row")
+	}
+}
+
+func TestCancelEventNeedsItsNameAndALiveEvent(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	f.paidOrder(t, s, fake, 1, 1)
+	for _, name := range []string{"gala", "Gal", "", strings.Repeat("G", 201)} {
+		if _, err := f.cancel(s, name); invalidCode(err) != "confirm_mismatch" || fieldOf(err) != "confirm_name" {
+			t.Fatalf("%q: %v, want confirm_mismatch on confirm_name", name, err)
+		}
+	}
+	if n := f.count(t, `select (select count(*) from events where status = 'live') + (select count(*) from refunds) + (select count(*) from audit_log where action = 'event.cancelled')`); n != 1 {
+		t.Fatal("a mismatched name changed something")
+	}
+	_, err := f.cancel(s, "Gala")
+	f.must(t, err)
+	if _, err := f.cancel(s, "Gala"); conflictCode(err) != "event_not_live" {
+		t.Fatalf("cancelling twice: %v, want event_not_live", err)
+	}
+	f.exec(t, `update events set status = 'draft' where id = $1`, f.event)
+	if _, err := f.cancel(s, "Gala"); conflictCode(err) != "event_not_live" {
+		t.Fatalf("cancelling a draft: %v, want event_not_live", err)
+	}
+	if n := f.count(t, `select count(*) from refunds`); n != 1 {
+		t.Fatalf("%d refunds, want the first cancel's one", n)
+	}
+}
+
+// Whichever wins, a payment being confirmed while the event is cancelled
+// ends refunded in full, and no valid ticket is left on a cancelled event.
+func TestCancelRacingAConfirmationRefundsIt(t *testing.T) {
+	for _, cancelFirst := range []bool{true, false} {
+		t.Run(fmt.Sprint("cancel first ", cancelFirst), func(t *testing.T) {
+			s, fake := newPaidService(t)
+			f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+			ctx := context.Background()
+			c, pi := paying(t, s, f, fake, sales.Details{}, sales.Item{TicketTypeID: f.general, Quantity: 1})
+			// Hold the first one's transaction open on its lock, then start the other.
+			first, second := "cancel", "confirm"
+			if !cancelFirst {
+				first, second = second, first
+			}
+			run := map[string]func() error{
+				"cancel": func() error { _, err := f.cancel(s, "Gala"); return err },
+				"confirm": func() error {
+					return s.HandleStripeEvent(ctx, succeeded(pi.ID, "acct_fake1", c.Quote.TotalCents, 1))
+				},
+			}
+			blocker := f.lockOrderOf(t, c.ID)
+			var wg sync.WaitGroup
+			errs := map[string]error{}
+			var mu sync.Mutex
+			for _, name := range []string{first, second} {
+				wg.Go(func() {
+					err := run[name]()
+					mu.Lock()
+					errs[name] = err
+					mu.Unlock()
+				})
+				waitForLockWaiters(t, f.owner, map[string]int{first: 1, second: 2}[name])
+			}
+			blocker.release()
+			wg.Wait()
+			if errs["cancel"] != nil || errs["confirm"] != nil {
+				t.Fatalf("%v", errs)
+			}
+			drain(t, s, &mailer.Memory{})
+			if n := f.count(t, `select count(*) from tickets where status = 'valid'`); n != 0 {
+				t.Fatalf("%d valid tickets on a cancelled event", n)
+			}
+			if amount, fee := fake.Refunded(pi.ID); amount != c.Quote.TotalCents || fee != c.Quote.FeeCents {
+				t.Fatalf("refunded %d and fee %d of %d/%d", amount, fee, c.Quote.TotalCents, c.Quote.FeeCents)
+			}
+		})
+	}
+}
+
+// Nobody can buy once the event is cancelled: an intent nobody has paid yet
+// is cancelled at Stripe and its order with it, and a checkout still open
+// can't start paying.
+func TestCancelEventStopsPaymentsInFlight(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	c, pi := paying(t, s, f, fake, sales.Details{}, sales.Item{TicketTypeID: f.general, Quantity: 1})
+	open := f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
+	res, err := f.cancel(s, "Gala")
+	f.must(t, err)
+	if res.Orders != 0 {
+		t.Fatalf("result %+v: a pending order isn't a refund", res)
+	}
+	drain(t, s, &mailer.Memory{})
+	if !fake.Cancelled(pi.ID) {
+		t.Fatal("the unpaid intent wasn't cancelled at Stripe")
+	}
+	if _, _, st := f.orderOf(t, c.ID); st != "cancelled" {
+		t.Fatalf("pending order %s, want cancelled", st)
+	}
+	for _, token := range []string{open.Token, c.Token} {
+		if _, err := s.Pay(ctx, token, sales.Details{Email: "late@example.com"}); !errors.Is(err, catalogue.ErrNotFound) {
+			t.Fatalf("paying on a cancelled event: %v, want not found", err)
+		}
+	}
+	if n := f.count(t, `select count(*) from jobs`); n != 0 {
+		t.Fatalf("%d jobs left", n)
+	}
+}
+
+// Stripe refuses to cancel an intent that moved on. We read where it went:
+// cancelled already is done; paid after all is a late payment, refunded in
+// full; still processing is asked about again later.
+func TestStoppingAPaymentThatMovedOn(t *testing.T) {
+	movedOn := &plugin.ProviderError{Op: "cancel payment intent", Refused: true, Status: 400, Code: "payment_intent_unexpected_state"}
+	for _, tc := range []struct{ intent, order string }{
+		{"canceled", "cancelled"},
+		{"succeeded", "refunded"},
+		{"processing", "pending"},
+	} {
+		t.Run(tc.intent, func(t *testing.T) {
+			s, fake := newPaidService(t)
+			f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+			c, pi := paying(t, s, f, fake, sales.Details{}, sales.Item{TicketTypeID: f.general, Quantity: 1})
+			_, err := f.cancel(s, "Gala")
+			f.must(t, err)
+			fake.SetIntentStatus(pi.ID, tc.intent)
+			fake.FailCall("CancelPaymentIntent", movedOn)
+			drain(t, s, &mailer.Memory{})
+			if _, _, st := f.orderOf(t, c.ID); st != tc.order {
+				t.Fatalf("order %s, want %s", st, tc.order)
+			}
+			wantRefund, wantJobs := int64(0), 0
+			switch tc.intent {
+			case "succeeded":
+				wantRefund = c.Quote.TotalCents
+			case "processing":
+				wantJobs = 1 // backing off, to ask again
+			}
+			if amount, fee := fake.Refunded(pi.ID); amount != wantRefund || (wantRefund > 0 && fee != c.Quote.FeeCents) {
+				t.Fatalf("refunded %d and fee %d, want %d", amount, fee, wantRefund)
+			}
+			if n := f.count(t, `select count(*) from refunds where reason = 'late_payment' and status = 'succeeded'`); (n == 1) != (wantRefund > 0) {
+				t.Fatalf("%d late-payment refunds", n)
+			}
+			if n := f.count(t, `select count(*) from jobs`); n != wantJobs {
+				t.Fatalf("%d jobs left, want %d", n, wantJobs)
+			}
+		})
+	}
+}
+
+// Only Stripe's own word fails a refund that succeeded: giving up, or losing
+// the account, after it went through changes nothing (and so never sends the
+// buyer a second email on a retry).
+func TestASucceededRefundOnlyFailsOnStripesWord(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	order, _, _ := f.paidOrder(t, s, fake, 1, 1)
+	id := *f.refund(t, s, order, sales.RefundRequest{}).RefundID
+	drain(t, s, &mailer.Memory{})
+	fail := func(failure string) {
+		f.must(t, system.Run(ctx, s.Pool, f.org, func(tx pgx.Tx) error { return sales.FailRefundForTest(s, ctx, tx, f.org, id, failure) }))
+	}
+	fail("gave_up")
+	fail("no_access")
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'succeeded' and failure is null`, id); n != 1 {
+		t.Fatal("a succeeded refund was failed by something other than Stripe")
+	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'refund.failed'`); n != 0 {
+		t.Fatalf("%d refund.failed rows", n)
+	}
+	fail("stripe_failed")
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'failed' and failure = 'stripe_failed'`, id); n != 1 {
+		t.Fatal("Stripe's own failure didn't fail it")
 	}
 }

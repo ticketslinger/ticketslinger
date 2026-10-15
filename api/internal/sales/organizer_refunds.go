@@ -3,9 +3,13 @@ package sales
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -13,7 +17,9 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
 	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
+	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 	"github.com/ticketslinger/ticketslinger/api/internal/pricing"
+	"github.com/ticketslinger/ticketslinger/api/internal/system"
 )
 
 // RefundRequest is an organizer's refund of an order.
@@ -232,4 +238,152 @@ func OrderDetail(ctx context.Context, tx pgx.Tx, event, order uuid.UUID) (OrderD
 		where p.order_id = $1 order by r.created_at desc, r.id desc`, order)
 	out.Refunds, err = pgx.CollectRows(rows, scanRefund)
 	return out, err
+}
+
+type CancelResult struct {
+	Orders                int   // paid orders refunded
+	AmountCents, FeeCents int64 // asked back from Stripe in all
+}
+
+var (
+	errConfirmMismatch = catalogue.ErrInvalid{Code: "confirm_mismatch", Field: "confirm_name",
+		Message: "Type the event's name exactly as it's shown, then cancel."}
+	errEventNotLive = catalogue.ErrConflict{Code: "event_not_live",
+		Message: "Only an event that's on sale can be cancelled. A draft can simply be deleted."}
+)
+
+// CancelEvent takes a live event off sale for good and refunds every paid
+// order in full, our fee included. confirmName must be the event's name
+// exactly (spaces around it ignored): it's a typed confirmation, checked
+// here as well as in the dashboard. Locks the event (FOR NO KEY UPDATE),
+// then every open order in id order. A confirmation already holding an
+// order finishes first and its tickets are refunded here; one that comes
+// after sees the event cancelled and refunds itself as a late payment.
+// Each pending order gets a CancelPaymentJob, so an intent nobody has paid
+// yet is stopped at Stripe; Pay already refuses a cancelled event.
+func CancelEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, confirmName string, actor audit.Actor) (CancelResult, error) {
+	var res CancelResult
+	if utf8.RuneCountInString(confirmName) > 200 {
+		return res, errConfirmMismatch
+	}
+	var name, status string
+	err := tx.QueryRow(ctx, `select name, status from events where id = $1 for no key update`, event).Scan(&name, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return res, catalogue.ErrNotFound
+	}
+	if err != nil {
+		return res, err
+	}
+	if strings.TrimSpace(confirmName) != name {
+		return res, errConfirmMismatch
+	}
+	if status != "live" {
+		return res, errEventNotLive
+	}
+	if _, err := tx.Exec(ctx, `update events set status = 'cancelled', updated_at = clock_timestamp() where id = $1`, event); err != nil {
+		return res, err
+	}
+	// Pending orders are locked too, so a confirmation waits and then sees
+	// the event cancelled; only paid ones are refunded here.
+	rows, _ := tx.Query(ctx, `select id, status from orders where event_id = $1
+		and status in ('pending', 'paid', 'partially_refunded') order by id for update`, event)
+	var paid, pending []uuid.UUID
+	var id uuid.UUID
+	var st string
+	if _, err := pgx.ForEachRow(rows, []any{&id, &st}, func() error {
+		if st == "pending" {
+			pending = append(pending, id)
+		} else {
+			paid = append(paid, id)
+		}
+		return nil
+	}); err != nil {
+		return res, err
+	}
+	for _, o := range pending {
+		if err := jobs.Enqueue(ctx, tx, CancelPaymentJob, cancelPaymentJob{Organizer: org, Order: o}); err != nil {
+			return res, err
+		}
+	}
+	for _, o := range paid {
+		r, err := RefundTickets(ctx, tx, org, event, o, RefundRequest{FeeBack: true}, "event_cancelled", actor)
+		if errors.Is(err, errNotRefundable) {
+			continue
+		}
+		if err != nil {
+			return res, err
+		}
+		res.Orders++
+		res.AmountCents += r.AmountCents
+		res.FeeCents += r.FeeCents
+	}
+	return res, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "event.cancelled", EntityType: "event", EntityID: event,
+		Before: map[string]string{"status": status}, After: map[string]any{"status": "cancelled", "orders": res.Orders,
+			"amount_cents": res.AmountCents, "fee_cents": res.FeeCents, "pending_orders": len(pending)}})
+}
+
+// CancelPaymentJob stops the intent of an order still pending on a
+// cancelled event, so nobody is charged for it.
+const CancelPaymentJob = "cancel_payment"
+
+type cancelPaymentJob struct {
+	Organizer uuid.UUID `json:"organizer_id"`
+	Order     uuid.UUID `json:"order_id"`
+}
+
+// CancelPayment handles CancelPaymentJob. The intent is cancelled at Stripe
+// (key cancel-<order>), outside any transaction, and then the order. When
+// Stripe says the intent moved on, its status is read: cancelled already is
+// done; paid after all confirms the order as the webhook would, which on a
+// cancelled event refunds it in full as a late payment; anything else is
+// asked about again later. An order not pending any more, or with no intent,
+// is left alone: nothing can be charged without one, and Pay refuses a
+// cancelled event. ponytail: an intent Pay is still making as this runs
+// isn't cancelled; if it's paid, the late path refunds it.
+func CancelPayment(s *Service) jobs.Handler {
+	return func(ctx context.Context, payload []byte) error {
+		var j cancelPaymentJob
+		if err := json.Unmarshal(payload, &j); err != nil {
+			return err
+		}
+		var status string
+		var intent, account *string
+		err := system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `select o.status, p.payment_intent_id, p.stripe_account_id
+				from orders o left join payments p on p.order_id = o.id where o.id = $1`, j.Order).Scan(&status, &intent, &account)
+		})
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && (status != "pending" || intent == nil) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if s.Payments == nil {
+			return errors.New("sales: a payment needs stopping but there's no payment provider")
+		}
+		err = s.Payments.CancelPaymentIntent(ctx, *account, *intent, "cancel-"+j.Order.String())
+		if pe := (*plugin.ProviderError)(nil); errors.As(err, &pe) && pe.Code == "payment_intent_unexpected_state" {
+			st, serr := s.Payments.PaymentIntentStatus(ctx, *account, *intent)
+			switch {
+			case serr != nil:
+				return serr
+			case st == "succeeded":
+				return system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) error { return s.markPaid(ctx, tx, j.Organizer, j.Order) })
+			case st != "canceled":
+				return fmt.Errorf("sales: payment %s, asking again later: %w", st, err)
+			}
+			err = nil
+		}
+		if err != nil {
+			return err
+		}
+		return system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) error {
+			// The checkout first, then the order, as Pay and confirmOrder take them.
+			if _, err := tx.Exec(ctx, `select 1 from checkouts where id = (select checkout_id from orders where id = $1) for update`, j.Order); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `update orders set status = 'cancelled' where id = $1 and status = 'pending'`, j.Order)
+			return err
+		})
+	}
 }

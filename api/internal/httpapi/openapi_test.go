@@ -190,6 +190,8 @@ func sample(t *testing.T, name string, parts []*openapi3.Schema) any {
 		return 2500 // a paid ticket costs at least 50
 	case "email":
 		return "walk@example.com"
+	case "confirm_name":
+		return "Gala" // the fixture event's name
 	case "items":
 		return []any{map[string]any{"ticket_type_id": "0190a0a0-0000-7000-8000-000000000001", "quantity": 1}} // a checkout needs one
 	}
