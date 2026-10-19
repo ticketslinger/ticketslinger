@@ -140,6 +140,15 @@ func ListEvents(ctx context.Context, tx pgx.Tx) ([]Event, error) {
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Event, error) { return scan(r) })
 }
 
+// PaymentsMode is how the server takes card payments: on each organizer's
+// connected Stripe account, or directly on its own (self-hosting).
+type PaymentsMode int
+
+const (
+	PaymentsConnect PaymentsMode = iota
+	PaymentsDirect
+)
+
 // UpdateEvent applies patch, records event.updated with the row before and
 // after, and returns the result. Status moves between draft and live only.
 //
@@ -147,7 +156,7 @@ func ListEvents(ctx context.Context, tx pgx.Tx) ([]Event, error) {
 // quotas inserts rows whose foreign keys take FOR KEY SHARE on it, and the
 // sales guard below then waits on those quotas, so FOR UPDATE would deadlock.
 // Changing the slug (draft only) upgrades the lock when the row is written.
-func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.Actor, patch EventPatch) (Event, error) {
+func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.Actor, patch EventPatch, mode PaymentsMode) (Event, error) {
 	before, err := lockEvent(ctx, tx, id)
 	if err != nil {
 		return Event{}, err
@@ -191,7 +200,7 @@ func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 		case "draft":
 			e.Status = "draft"
 		case "live":
-			if err := goLive(ctx, tx, e); err != nil {
+			if err := goLive(ctx, tx, e, mode); err != nil {
 				return Event{}, err
 			}
 			e.Status = "live"
@@ -248,9 +257,10 @@ func sameEvent(a, b Event) bool {
 // goLive decides whether a draft may go on sale: it must not have ended yet
 // (one that has started is fine), it needs at least one ticket type, every
 // ticket type needs a quota, and paid tickets need a Stripe account that can
-// charge. It runs in the transaction that holds the event's row lock, so a
-// ticket type or quota can't change between the check and the status change.
-func goLive(ctx context.Context, tx pgx.Tx, e Event) error {
+// charge (in direct mode, the server's own always can). It runs in the
+// transaction that holds the event's row lock, so a ticket type or quota
+// can't change between the check and the status change.
+func goLive(ctx context.Context, tx pgx.Tx, e Event, mode PaymentsMode) error {
 	if !e.EndsAt.After(time.Now()) {
 		return invalid("event_over", "status", "This event has already ended, so it can't go on sale.")
 	}
@@ -269,6 +279,9 @@ func goLive(ctx context.Context, tx pgx.Tx, e Event) error {
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return err
+	}
+	if mode == PaymentsDirect {
+		return nil // the server's own Stripe account takes every payment
 	}
 	var unpaid bool
 	if err := tx.QueryRow(ctx, `select exists (select 1 from ticket_types where event_id = $1 and price_cents > 0)

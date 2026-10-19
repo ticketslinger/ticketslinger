@@ -87,7 +87,7 @@ func TestEventLifecycle(t *testing.T) {
 	name := "Autumn Gala"
 	var up catalogue.Event
 	if err := as(t, pool, user, a, func(tx pgx.Tx) (err error) {
-		up, err = catalogue.UpdateEvent(ctx, tx, a, ev.ID, actor, catalogue.EventPatch{Name: &name})
+		up, err = catalogue.UpdateEvent(ctx, tx, a, ev.ID, actor, catalogue.EventPatch{Name: &name}, catalogue.PaymentsConnect)
 		return
 	}); err != nil {
 		t.Fatal(err)
@@ -202,7 +202,7 @@ func TestEventValidation(t *testing.T) {
 	}
 	later := ev.EndsAt.Add(time.Hour)
 	err := as(t, pool, user, a, func(tx pgx.Tx) error {
-		_, err := catalogue.UpdateEvent(ctx, tx, a, ev.ID, audit.Actor{User: user}, catalogue.EventPatch{StartsAt: &later})
+		_, err := catalogue.UpdateEvent(ctx, tx, a, ev.ID, audit.Actor{User: user}, catalogue.EventPatch{StartsAt: &later}, catalogue.PaymentsConnect)
 		return err
 	})
 	if want := (catalogue.ErrInvalid{}); !errors.As(err, &want) || want.Code != "bad_times" {
@@ -211,7 +211,7 @@ func TestEventValidation(t *testing.T) {
 	// Going live waits on Task 5's ticket types; ended and cancelled aren't open yet.
 	for status, code := range map[string]string{"live": "no_ticket_types", "ended": "status_not_allowed", "cancelled": "status_not_allowed", "bogus": "status_not_allowed"} {
 		err := as(t, pool, user, a, func(tx pgx.Tx) error {
-			_, err := catalogue.UpdateEvent(ctx, tx, a, ev.ID, audit.Actor{User: user}, catalogue.EventPatch{Status: &status})
+			_, err := catalogue.UpdateEvent(ctx, tx, a, ev.ID, audit.Actor{User: user}, catalogue.EventPatch{Status: &status}, catalogue.PaymentsConnect)
 			return err
 		})
 		if want := (catalogue.ErrInvalid{}); !errors.As(err, &want) || want.Code != code {
@@ -237,7 +237,10 @@ func TestSlugEditsAndStatusRules(t *testing.T) {
 		return
 	}
 	patch := func(id uuid.UUID, p catalogue.EventPatch) (ev catalogue.Event, err error) {
-		err = as(t, pool, user, a, func(tx pgx.Tx) (e error) { ev, e = catalogue.UpdateEvent(ctx, tx, a, id, actor, p); return })
+		err = as(t, pool, user, a, func(tx pgx.Tx) (e error) {
+			ev, e = catalogue.UpdateEvent(ctx, tx, a, id, actor, p, catalogue.PaymentsConnect)
+			return
+		})
 		return
 	}
 	str := func(s string) *string { return &s }
@@ -359,9 +362,10 @@ func TestGoLiveNeedsPaymentsForPaidTickets(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	mode := catalogue.PaymentsConnect
 	status := func(s *string) error {
 		return as(t, pool, user, org, func(tx pgx.Tx) error {
-			_, err := catalogue.UpdateEvent(ctx, tx, org, ev.ID, actor, catalogue.EventPatch{Status: s})
+			_, err := catalogue.UpdateEvent(ctx, tx, org, ev.ID, actor, catalogue.EventPatch{Status: s}, mode)
 			return err
 		})
 	}
@@ -385,6 +389,14 @@ func TestGoLiveNeedsPaymentsForPaidTickets(t *testing.T) {
 	if err := status(&live); !errors.As(err, &inv) || inv.Code != "payments_not_ready" || inv.Field != "status" {
 		t.Fatalf("paid ticket without Stripe: %v", err)
 	}
+	mode = catalogue.PaymentsDirect // the server's own Stripe account: nothing to connect
+	if err := status(&live); err != nil {
+		t.Fatalf("paid ticket without Stripe, direct mode: %v", err)
+	}
+	if err := status(&draft); err != nil {
+		t.Fatal(err)
+	}
+	mode = catalogue.PaymentsConnect
 	stripe(true)
 	if err := status(&live); err != nil {
 		t.Fatalf("paid ticket with Stripe: %v", err)

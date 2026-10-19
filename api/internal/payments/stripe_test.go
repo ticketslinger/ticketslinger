@@ -22,6 +22,7 @@ const secretKey = "sk_test_DoNotLeakThisKey123"
 
 type request struct {
 	method, path, account, idem, auth string
+	hasAccount                        bool // a Stripe-Account header at all, even an empty one
 	form                              url.Values
 }
 
@@ -40,7 +41,8 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	rec.reqs = append(rec.reqs, request{r.Method, r.URL.Path, r.Header.Get("Stripe-Account"), r.Header.Get("Idempotency-Key"), r.Header.Get("Authorization"), r.Form})
+	_, has := r.Header["Stripe-Account"]
+	rec.reqs = append(rec.reqs, request{r.Method, r.URL.Path, r.Header.Get("Stripe-Account"), r.Header.Get("Idempotency-Key"), r.Header.Get("Authorization"), has, r.Form})
 	w.Header().Set("Content-Type", "application/json")
 	if rec.fail != "" && (rec.only == "" || rec.only == r.URL.Path) {
 		w.WriteHeader(rec.status)
@@ -484,5 +486,70 @@ func TestListRefundsReadsTheIntentsRefunds(t *testing.T) {
 	rec.status, rec.fail = 403, `{"error":{"type":"invalid_request_error","code":"account_invalid"}}`
 	if _, err := s.ListRefunds(context.Background(), "acct_test1", "pi_test1"); !errors.Is(err, plugin.ErrNoAccess) {
 		t.Fatalf("lost account: %v, want ErrNoAccess", err)
+	}
+}
+
+// Direct mode: the server's own account takes every charge, so no call
+// carries a Stripe-Account header and no charge carries our fee.
+func TestDirectChargesTheServersOwnAccount(t *testing.T) {
+	rec := &recorder{}
+	srv := httptest.NewServer(rec)
+	t.Cleanup(srv.Close)
+	b := stripe.NewBackendsWithConfig(&stripe.BackendConfig{URL: stripe.String(srv.URL), MaxNetworkRetries: stripe.Int64(0),
+		LeveledLogger: &stripe.LeveledLogger{Level: stripe.LevelNull}})
+	s := payments.NewDirectStripe(secretKey, "pk_test_x", b)
+	ctx := context.Background()
+	for _, fee := range []int64{0, 200} {
+		pi, err := s.CreatePaymentIntent(ctx, plugin.PaymentIntentInput{AmountCents: 5612, ApplicationFeeCents: fee, IdempotencyKey: "pi-d"})
+		if err != nil || pi.Account != "" {
+			t.Fatalf("fee %d: pi %+v err %v", fee, pi, err)
+		}
+		if r := rec.last(); r.hasAccount || r.form.Has("application_fee_amount") || r.path != "/v1/payment_intents" {
+			t.Fatalf("fee %d: %s account header %v %q, form %v", fee, r.path, r.hasAccount, r.account, r.form)
+		}
+	}
+	if _, err := s.Refund(ctx, plugin.RefundInput{PaymentIntentID: "pi_test1", AmountCents: 100, IdempotencyKey: "refund-d-0"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PaymentIntentStatus(ctx, "", "pi_test1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CancelPaymentIntent(ctx, "", "pi_test1", "cancel-d"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ListRefunds(ctx, "", "pi_test1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rec.reqs {
+		if r.hasAccount {
+			t.Fatalf("%s %s sent Stripe-Account %q", r.method, r.path, r.account)
+		}
+	}
+	calls := len(rec.reqs)
+	_, err := s.CreateAccount(ctx, "acct-1")
+	if !errors.Is(err, plugin.ErrDirectPayments) {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	if _, err := s.OnboardingLink(ctx, "acct_test1", "r", "r"); !errors.Is(err, plugin.ErrDirectPayments) {
+		t.Fatalf("OnboardingLink: %v", err)
+	}
+	if _, err := s.LinkURL("state", "https://x", ""); !errors.Is(err, plugin.ErrDirectPayments) {
+		t.Fatalf("LinkURL: %v", err)
+	}
+	if _, err := s.CompleteLink(ctx, "code"); !errors.Is(err, plugin.ErrDirectPayments) {
+		t.Fatalf("CompleteLink: %v", err)
+	}
+	if err := s.Unlink(ctx, "acct_test1"); !errors.Is(err, plugin.ErrDirectPayments) {
+		t.Fatalf("Unlink: %v", err)
+	}
+	if _, err := s.RefundApplicationFee(ctx, plugin.FeeRefundInput{PaymentIntentID: "pi_test1", AmountCents: 100, IdempotencyKey: "appfee-d"}); !errors.Is(err, plugin.ErrDirectPayments) {
+		t.Fatalf("RefundApplicationFee: %v", err)
+	}
+	if len(rec.reqs) != calls {
+		t.Fatalf("%d Stripe calls for things direct mode doesn't do", len(rec.reqs)-calls)
+	}
+	// A fee taken on a connected account before the switch still goes back.
+	if id, err := s.RefundApplicationFee(ctx, plugin.FeeRefundInput{Account: "acct_test1", PaymentIntentID: "pi_test1", AmountCents: 100, IdempotencyKey: "appfee-c"}); err != nil || id == "" {
+		t.Fatalf("fee from before the switch: %q %v", id, err)
 	}
 }

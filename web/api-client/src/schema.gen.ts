@@ -328,7 +328,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Owners and admins only, from a signed-in session. Creates the organizer's Stripe account the first time (a Standard account: the organizer gets the full Stripe dashboard and deals with Stripe directly), then returns a one-time Stripe onboarding link. Send the person there; Stripe brings them back to /o/{organizer}/payments?return=1 when they finish, or ?refresh=1 when the link has expired. Calling it again reuses the same account, and so does calling it after disconnecting an account created here: that only switches it back on. After disconnecting a linked account, it creates a new one. Its response carries a one-time onboarding link, so we never keep it: a retry with the same key runs again, and a duplicate sent while the first is running gets 409 idempotency_in_progress. 409 already_connected while a linked account is connected (disconnect it first); 409 account_in_use when the account it would switch back on is now taking payments for another organizer. 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached or had a problem of its own (try again); 503 payments_refused when Stripe answered and turned the request down (trying again won't help; the details are in the server log). */
+        /** @description Owners and admins only, from a signed-in session. Creates the organizer's Stripe account the first time (a Standard account: the organizer gets the full Stripe dashboard and deals with Stripe directly), then returns a one-time Stripe onboarding link. Send the person there; Stripe brings them back to /o/{organizer}/payments?return=1 when they finish, or ?refresh=1 when the link has expired. Calling it again reuses the same account, and so does calling it after disconnecting an account created here: that only switches it back on. After disconnecting a linked account, it creates a new one. Its response carries a one-time onboarding link, so we never keep it: a retry with the same key runs again, and a duplicate sent while the first is running gets 409 idempotency_in_progress. 409 already_connected while a linked account is connected (disconnect it first); 409 account_in_use when the account it would switch back on is now taking payments for another organizer. 409 direct_payments when the server takes payments through its own Stripe account (mode direct). 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached or had a problem of its own (try again); 503 payments_refused when Stripe answered and turned the request down (trying again won't help; the details are in the server log). */
         post: operations["connectPayments"];
         delete?: never;
         options?: never;
@@ -345,7 +345,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Owners and admins, or a write API key. Asks Stripe for the account's current state and saves it; call it when someone comes back from onboarding. 409 not_connected before the first connect and while disconnected; 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached or had a problem of its own; 503 payments_refused when Stripe turned the request down. */
+        /** @description Owners and admins, or a write API key. Asks Stripe for the account's current state and saves it; call it when someone comes back from onboarding. 409 not_connected before the first connect and while disconnected; 409 direct_payments when the server takes payments through its own Stripe account (mode direct); 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached or had a problem of its own; 503 payments_refused when Stripe turned the request down. */
         post: operations["refreshPayments"];
         delete?: never;
         options?: never;
@@ -362,7 +362,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Owners and admins only, from a signed-in session. Starts linking a Stripe account the organizer already has, through Stripe Connect OAuth: send the person to url, and Stripe sends them back to the dashboard's /stripe/oauth/callback with code and state, which go to /stripe/link/complete. The state works once, for ten minutes, from this session only. Its response carries that state, so we never keep it: a retry with the same key runs again, and a duplicate sent while the first is running gets 409 idempotency_in_progress. 409 already_connected while the organizer has a connected account (disconnect it first); 503 oauth_not_configured when this server can't link existing accounts (can_link_existing is false); 503 payments_not_configured when the server has no payment provider. */
+        /** @description Owners and admins only, from a signed-in session. Starts linking a Stripe account the organizer already has, through Stripe Connect OAuth: send the person to url, and Stripe sends them back to the dashboard's /stripe/oauth/callback with code and state, which go to /stripe/link/complete. The state works once, for ten minutes, from this session only. Its response carries that state, so we never keep it: a retry with the same key runs again, and a duplicate sent while the first is running gets 409 idempotency_in_progress. 409 already_connected while the organizer has a connected account (disconnect it first); 409 direct_payments when the server takes payments through its own Stripe account (mode direct); 503 oauth_not_configured when this server can't link existing accounts (can_link_existing is false); 503 payments_not_configured when the server has no payment provider. */
         post: operations["startStripeLink"];
         delete?: never;
         options?: never;
@@ -379,7 +379,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Owners and admins only, from a signed-in session. Stops taking card payments through the organizer's Stripe account. A linked account has our access removed at Stripe first (503 payments_unavailable or payments_refused if Stripe can't do that, and nothing changes); an account created here stays the organizer's, and we just stop selling through it. Orders already taken stay as they are, and paid tickets go off sale until the organizer connects again. 409 not_connected when there's no connected account; 409 payments_in_progress while a buyer is in the middle of paying (try again in a few minutes). */
+        /** @description Owners and admins only, from a signed-in session. Stops taking card payments through the organizer's Stripe account. A linked account has our access removed at Stripe first (503 payments_unavailable or payments_refused if Stripe can't do that, and nothing changes); an account created here stays the organizer's, and we just stop selling through it. Orders already taken stay as they are, and paid tickets go off sale until the organizer connects again. 409 not_connected when there's no connected account; 409 payments_in_progress while a buyer is in the middle of paying (try again in a few minutes); 409 direct_payments when the server takes payments through its own Stripe account (mode direct). */
         post: operations["disconnectPayments"];
         delete?: never;
         options?: never;
@@ -1086,7 +1086,7 @@ export interface components {
             /** @description For stripe and test: confirm the payment with it. */
             client_secret?: string;
             publishable_key?: string;
-            /** @description The organizer's Stripe account, for Stripe.js's stripeAccount option. */
+            /** @description The organizer's Stripe account, for Stripe.js's stripeAccount option. Left out when the server takes payments through its own Stripe account (direct mode): load Stripe.js without stripeAccount then. */
             account?: string;
             /** Format: int64 */
             amount_cents: number;
@@ -1099,6 +1099,11 @@ export interface components {
             status: string;
         };
         PaymentsStatus: {
+            /**
+             * @description connect: each organizer takes payments on its own connected Stripe account. direct: this server takes every payment through its own Stripe account (self-hosting), so there's nothing to connect, connected stays false, and paid tickets can go on sale without it.
+             * @enum {string}
+             */
+            mode: "connect" | "direct";
             /**
              * @description stripe in production, test for the built-in fake, none when the server takes no payments.
              * @enum {string}

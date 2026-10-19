@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,14 +14,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stripe/stripe-go/v87"
 	"github.com/stripe/stripe-go/v87/webhook"
 
+	"github.com/ticketslinger/ticketslinger/api/internal/apikeys"
 	"github.com/ticketslinger/ticketslinger/api/internal/config"
+	"github.com/ticketslinger/ticketslinger/api/internal/db"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/payments"
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 	"github.com/ticketslinger/ticketslinger/api/internal/sales"
+	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
 )
 
 func TestVersionIsSet(t *testing.T) {
@@ -334,5 +340,51 @@ func TestPaymentProvider(t *testing.T) {
 		if p := paymentProvider(c, true); p == nil || p.Name() != "test" {
 			t.Fatalf("test mode: %v, want the fake", p)
 		}
+	}
+}
+
+// TS_PAYMENTS=direct outside test mode sells through the server's own Stripe
+// account: the API says so, and the provider has nothing to connect.
+func TestDirectModeServesTheServersOwnStripe(t *testing.T) {
+	cfg := config.Config{HTTPAddr: "127.0.0.1:3000", TurnstileSecret: "s", PaymentsMode: "direct",
+		StripeSecretKey: "sk_test_abc", StripePublishableKey: "pk_test_abc", StripeWebhookSecret: "whsec_abc"}
+	p := paymentProvider(cfg, false)
+	if p == nil || p.Name() != "stripe" || p.PublishableKey() != "pk_test_abc" {
+		t.Fatalf("provider %v", p)
+	}
+	if _, err := p.LinkURL("state", "https://x", ""); !errors.Is(err, plugin.ErrDirectPayments) {
+		t.Fatalf("LinkURL: %v, want the direct provider's refusal", err)
+	}
+	pool := testdb.New(t)
+	ctx := context.Background()
+	owner := testdb.Owner(t, pool)
+	var user, org uuid.UUID
+	if err := owner.QueryRow(ctx, `insert into users(email, name) values ('a@example.com', 'A') returning id`).Scan(&user); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.QueryRow(ctx, `insert into organizers(name, slug) values ('Acme', 'acme') returning id`).Scan(&org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Exec(ctx, `insert into memberships(organizer_id, user_id, role) values ($1, $2, 'owner')`, org, user); err != nil {
+		t.Fatal(err)
+	}
+	var key string
+	if err := db.WithOrganizer(ctx, pool, user, org, func(tx pgx.Tx, _ string) (err error) {
+		_, key, err = apikeys.New(pool).Create(ctx, tx, org, user, "status", "read")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h, w, err := newHandler(cfg, pool, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, body := get(t, h, "/v1/organizers/acme/payments", "Authorization", "Bearer "+key)
+	var st struct{ Mode, Provider string }
+	if err := json.Unmarshal([]byte(body), &st); err != nil || code != 200 || st.Mode != "direct" || st.Provider != "stripe" {
+		t.Fatalf("payments status: %d %s", code, body)
+	}
+	if w.Handlers[sales.RefundJob] == nil {
+		t.Fatal("no refund handler")
 	}
 }

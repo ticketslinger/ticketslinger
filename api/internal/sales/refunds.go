@@ -47,6 +47,7 @@ type refundRow struct {
 	stripeID        *string
 	sent            bool // asked Stripe before (sent_at)
 	feeDone         bool
+	feeTaken        bool // the payment carried our fee; a direct-mode one never does
 	attempt         int
 	intent, account string
 }
@@ -54,9 +55,9 @@ type refundRow struct {
 func loadRefund(ctx context.Context, tx pgx.Tx, id uuid.UUID) (refundRow, error) {
 	r := refundRow{id: id}
 	err := tx.QueryRow(ctx, `select p.order_id, r.status, r.amount_cents, r.fee_cents, r.stripe_refund_id, r.sent_at is not null,
-			r.fee_refunded_at is not null, r.attempt, p.payment_intent_id, p.stripe_account_id
+			r.fee_refunded_at is not null, r.attempt, p.payment_intent_id, p.stripe_account_id, p.application_fee_cents > 0
 		from refunds r join payments p on p.id = r.payment_id where r.id = $1`, id).
-		Scan(&r.order, &r.status, &r.amount, &r.fee, &r.stripeID, &r.sent, &r.feeDone, &r.attempt, &r.intent, &r.account)
+		Scan(&r.order, &r.status, &r.amount, &r.fee, &r.stripeID, &r.sent, &r.feeDone, &r.attempt, &r.intent, &r.account, &r.feeTaken)
 	return r, err
 }
 
@@ -83,10 +84,10 @@ func Refund(s *Service) jobs.Handler {
 		switch {
 		case r.status == "requested" && r.stripeID == nil:
 			return s.sendRefund(ctx, j.Organizer, r)
-		case r.status == "succeeded" && r.fee > 0 && !r.feeDone:
+		case r.status == "succeeded" && r.fee > 0 && r.feeTaken && !r.feeDone:
 			return s.sendFeeRefund(ctx, j.Organizer, r)
 		}
-		return nil // waiting for Stripe's word, failed, or done
+		return nil // waiting for Stripe's word, failed, done, or no fee was taken to give back
 	}
 }
 
@@ -253,7 +254,10 @@ func (s *Service) finishRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID
 	var failure *string
 	var amount, fee int64
 	var feeDone bool
-	if err := tx.QueryRow(ctx, `select status, failure, reason, amount_cents, fee_cents, fee_refunded_at is not null from refunds where id = $1 for update`, id).
+	// fee is 0 when the payment took none (direct mode): nothing to give back.
+	if err := tx.QueryRow(ctx, `select status, failure, reason, amount_cents,
+			case when (select application_fee_cents from payments where id = refunds.payment_id) > 0 then fee_cents else 0 end,
+			fee_refunded_at is not null from refunds where id = $1 for update`, id).
 		Scan(&status, &failure, &reason, &amount, &fee, &feeDone); err != nil {
 		return err
 	}
@@ -371,7 +375,7 @@ func RefundParked(s *Service) func(ctx context.Context, payload []byte, cause st
 			case r.status == "requested" && r.stripeID == nil:
 				marked = "gave up"
 				return s.failRefund(ctx, tx, j.Organizer, j.Refund, "gave_up", "")
-			case r.status == "succeeded" && r.fee > 0 && !r.feeDone:
+			case r.status == "succeeded" && r.fee > 0 && r.feeTaken && !r.feeDone:
 				marked = "fee stuck"
 				return feeStuck(ctx, tx, j.Organizer, r)
 			}

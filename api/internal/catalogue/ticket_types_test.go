@@ -225,7 +225,7 @@ func TestEventCannotGoLiveIncomplete(t *testing.T) {
 	live := "live"
 	goLive := func() (e catalogue.Event, err error) {
 		err = as(t, pool, user, a, func(tx pgx.Tx) (x error) {
-			e, x = catalogue.UpdateEvent(ctx, tx, a, ev.ID, actor, catalogue.EventPatch{Status: &live})
+			e, x = catalogue.UpdateEvent(ctx, tx, a, ev.ID, actor, catalogue.EventPatch{Status: &live}, catalogue.PaymentsConnect)
 			return
 		})
 		return
@@ -281,7 +281,7 @@ func TestEventCannotGoLiveIncomplete(t *testing.T) {
 	// Back to draft, and the last one can go.
 	draft := "draft"
 	if err := as(t, pool, user, a, func(tx pgx.Tx) error {
-		_, err := catalogue.UpdateEvent(ctx, tx, a, ev.ID, actor, catalogue.EventPatch{Status: &draft})
+		_, err := catalogue.UpdateEvent(ctx, tx, a, ev.ID, actor, catalogue.EventPatch{Status: &draft}, catalogue.PaymentsConnect)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -385,7 +385,7 @@ func TestLiveEventNeverEndsWithoutTicketTypes(t *testing.T) {
 		// and race delete against live -> draft -> live.
 		if round%2 == 1 {
 			if err := as(t, pool, user, a, func(tx pgx.Tx) error {
-				_, err := catalogue.UpdateEvent(ctx, tx, a, ev.ID, actor, catalogue.EventPatch{Status: &live})
+				_, err := catalogue.UpdateEvent(ctx, tx, a, ev.ID, actor, catalogue.EventPatch{Status: &live}, catalogue.PaymentsConnect)
 				return err
 			}); err != nil {
 				t.Fatal(err)
@@ -405,7 +405,7 @@ func TestLiveEventNeverEndsWithoutTicketTypes(t *testing.T) {
 			}
 			for _, st := range steps {
 				_ = as(t, pool, user, a, func(tx pgx.Tx) error {
-					_, err := catalogue.UpdateEvent(ctx, tx, a, ev.ID, actor, catalogue.EventPatch{Status: st})
+					_, err := catalogue.UpdateEvent(ctx, tx, a, ev.ID, actor, catalogue.EventPatch{Status: st}, catalogue.PaymentsConnect)
 					return err
 				})
 			}

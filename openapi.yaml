@@ -264,7 +264,7 @@ paths:
     post:
       operationId: connectPayments
       x-idempotency-store: false
-      description: "Owners and admins only, from a signed-in session. Creates the organizer's Stripe account the first time (a Standard account: the organizer gets the full Stripe dashboard and deals with Stripe directly), then returns a one-time Stripe onboarding link. Send the person there; Stripe brings them back to /o/{organizer}/payments?return=1 when they finish, or ?refresh=1 when the link has expired. Calling it again reuses the same account, and so does calling it after disconnecting an account created here: that only switches it back on. After disconnecting a linked account, it creates a new one. Its response carries a one-time onboarding link, so we never keep it: a retry with the same key runs again, and a duplicate sent while the first is running gets 409 idempotency_in_progress. 409 already_connected while a linked account is connected (disconnect it first); 409 account_in_use when the account it would switch back on is now taking payments for another organizer. 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached or had a problem of its own (try again); 503 payments_refused when Stripe answered and turned the request down (trying again won't help; the details are in the server log)."
+      description: "Owners and admins only, from a signed-in session. Creates the organizer's Stripe account the first time (a Standard account: the organizer gets the full Stripe dashboard and deals with Stripe directly), then returns a one-time Stripe onboarding link. Send the person there; Stripe brings them back to /o/{organizer}/payments?return=1 when they finish, or ?refresh=1 when the link has expired. Calling it again reuses the same account, and so does calling it after disconnecting an account created here: that only switches it back on. After disconnecting a linked account, it creates a new one. Its response carries a one-time onboarding link, so we never keep it: a retry with the same key runs again, and a duplicate sent while the first is running gets 409 idempotency_in_progress. 409 already_connected while a linked account is connected (disconnect it first); 409 account_in_use when the account it would switch back on is now taking payments for another organizer. 409 direct_payments when the server takes payments through its own Stripe account (mode direct). 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached or had a problem of its own (try again); 503 payments_refused when Stripe answered and turned the request down (trying again won't help; the details are in the server log)."
       parameters: [{ $ref: "#/components/parameters/OrganizerPath" }, { $ref: "#/components/parameters/IdempotencyKey" } ]
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OnboardingLink" } } } }
@@ -278,7 +278,7 @@ paths:
   /organizers/{organizer}/payments/refresh:
     post:
       operationId: refreshPayments
-      description: "Owners and admins, or a write API key. Asks Stripe for the account's current state and saves it; call it when someone comes back from onboarding. 409 not_connected before the first connect and while disconnected; 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached or had a problem of its own; 503 payments_refused when Stripe turned the request down."
+      description: "Owners and admins, or a write API key. Asks Stripe for the account's current state and saves it; call it when someone comes back from onboarding. 409 not_connected before the first connect and while disconnected; 409 direct_payments when the server takes payments through its own Stripe account (mode direct); 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached or had a problem of its own; 503 payments_refused when Stripe turned the request down."
       parameters: [{ $ref: "#/components/parameters/OrganizerPath" }, { $ref: "#/components/parameters/IdempotencyKey" } ]
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PaymentsStatus" } } } }
@@ -293,7 +293,7 @@ paths:
     post:
       operationId: startStripeLink
       x-idempotency-store: false
-      description: "Owners and admins only, from a signed-in session. Starts linking a Stripe account the organizer already has, through Stripe Connect OAuth: send the person to url, and Stripe sends them back to the dashboard's /stripe/oauth/callback with code and state, which go to /stripe/link/complete. The state works once, for ten minutes, from this session only. Its response carries that state, so we never keep it: a retry with the same key runs again, and a duplicate sent while the first is running gets 409 idempotency_in_progress. 409 already_connected while the organizer has a connected account (disconnect it first); 503 oauth_not_configured when this server can't link existing accounts (can_link_existing is false); 503 payments_not_configured when the server has no payment provider."
+      description: "Owners and admins only, from a signed-in session. Starts linking a Stripe account the organizer already has, through Stripe Connect OAuth: send the person to url, and Stripe sends them back to the dashboard's /stripe/oauth/callback with code and state, which go to /stripe/link/complete. The state works once, for ten minutes, from this session only. Its response carries that state, so we never keep it: a retry with the same key runs again, and a duplicate sent while the first is running gets 409 idempotency_in_progress. 409 already_connected while the organizer has a connected account (disconnect it first); 409 direct_payments when the server takes payments through its own Stripe account (mode direct); 503 oauth_not_configured when this server can't link existing accounts (can_link_existing is false); 503 payments_not_configured when the server has no payment provider."
       parameters: [{ $ref: "#/components/parameters/OrganizerPath" }, { $ref: "#/components/parameters/IdempotencyKey" } ]
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StripeLinkStart" } } } }
@@ -307,7 +307,7 @@ paths:
   /organizers/{organizer}/payments/disconnect:
     post:
       operationId: disconnectPayments
-      description: "Owners and admins only, from a signed-in session. Stops taking card payments through the organizer's Stripe account. A linked account has our access removed at Stripe first (503 payments_unavailable or payments_refused if Stripe can't do that, and nothing changes); an account created here stays the organizer's, and we just stop selling through it. Orders already taken stay as they are, and paid tickets go off sale until the organizer connects again. 409 not_connected when there's no connected account; 409 payments_in_progress while a buyer is in the middle of paying (try again in a few minutes)."
+      description: "Owners and admins only, from a signed-in session. Stops taking card payments through the organizer's Stripe account. A linked account has our access removed at Stripe first (503 payments_unavailable or payments_refused if Stripe can't do that, and nothing changes); an account created here stays the organizer's, and we just stop selling through it. Orders already taken stay as they are, and paid tickets go off sale until the organizer connects again. 409 not_connected when there's no connected account; 409 payments_in_progress while a buyer is in the middle of paying (try again in a few minutes); 409 direct_payments when the server takes payments through its own Stripe account (mode direct)."
       parameters: [{ $ref: "#/components/parameters/OrganizerPath" }, { $ref: "#/components/parameters/IdempotencyKey" } ]
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PaymentsStatus" } } } }
@@ -1106,15 +1106,16 @@ components:
         kind: { type: string, enum: [stripe, test, free], description: "test is the built-in fake provider, for development." }
         client_secret: { type: string, description: "For stripe and test: confirm the payment with it." }
         publishable_key: { type: string }
-        account: { type: string, description: "The organizer's Stripe account, for Stripe.js's stripeAccount option." }
+        account: { type: string, description: "The organizer's Stripe account, for Stripe.js's stripeAccount option. Left out when the server takes payments through its own Stripe account (direct mode): load Stripe.js without stripeAccount then." }
         amount_cents: { type: integer, format: int64 }
         order_code: { type: string, description: "For free: the order, already paid." }
         order_url: { type: string, description: "For free: the buyer's link to their tickets." }
     Health: { type: object, required: [status], properties: { status: { type: string } } }
     PaymentsStatus:
       type: object
-      required: [provider, connected, charges_enabled, details_submitted, disconnected, link_method, can_link_existing]
+      required: [provider, mode, connected, charges_enabled, details_submitted, disconnected, link_method, can_link_existing]
       properties:
+        mode: { type: string, enum: [connect, direct], x-enum-varnames: [PaymentsModeConnect, PaymentsModeDirect], description: "connect: each organizer takes payments on its own connected Stripe account. direct: this server takes every payment through its own Stripe account (self-hosting), so there's nothing to connect, connected stays false, and paid tickets can go on sale without it." }
         provider: { type: string, enum: [stripe, test, none], description: "stripe in production, test for the built-in fake, none when the server takes no payments." }
         connected: { type: boolean, description: "Whether the organizer has a Stripe account it hasn't disconnected." }
         disconnected: { type: boolean, description: "Whether the organizer disconnected its Stripe account (or Stripe told us it was unlinked). Paid tickets are off sale until it connects again." }

@@ -197,10 +197,14 @@ func (s *Service) start(o pendingOrder, p payment) PaymentStart {
 }
 
 // paymentsReady returns the organizer's Stripe account if it can take cards:
-// connected, not disconnected, and Stripe has charges on.
+// connected, not disconnected, and Stripe has charges on. In direct mode
+// every charge is the server's own: "" (no Stripe-Account), and always ready.
 func (s *Service) paymentsReady(ctx context.Context, tx pgx.Tx, org uuid.UUID) (string, error) {
 	if s.Payments == nil {
 		return "", ErrPaymentsNotConfigured
+	}
+	if s.Direct {
+		return "", nil
 	}
 	var account *string
 	var enabled bool
@@ -286,7 +290,7 @@ func (s *Service) cart(ctx context.Context, tx pgx.Tx, checkout, event uuid.UUID
 	if err != nil {
 		return nil, pricing.Quote{}, err
 	}
-	return items, pricing.Compute(lines(tts, items, p), p.pricing(), feeMode, s.Fee), nil
+	return items, pricing.Compute(lines(tts, items, p), p.pricing(), feeMode, s.fee()), nil
 }
 
 type question struct {

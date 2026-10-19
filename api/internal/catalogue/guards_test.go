@@ -64,7 +64,7 @@ func seedLiveEvent(t *testing.T) fixture {
 			}
 			*x.id = q.ID
 		}
-		_, err = catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{Status: ptr("live")})
+		_, err = catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{Status: ptr("live")}, catalogue.PaymentsConnect)
 		return err
 	})
 	if err != nil {
@@ -148,19 +148,19 @@ var guarded = []struct {
 		return catalogue.DeleteQuota(ctx, tx, f.org, f.event, f.hall, f.actor)
 	}, "has_sales", ""},
 	{"event tax rate", func(ctx context.Context, tx pgx.Tx, f fixture) error {
-		_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{TaxRateBP: ptr(500)})
+		_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{TaxRateBP: ptr(500)}, catalogue.PaymentsConnect)
 		return err
 	}, "has_sales", "tax_rate_bp"},
 	{"event fee mode", func(ctx context.Context, tx pgx.Tx, f fixture) error {
-		_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{FeeMode: ptr("absorb")})
+		_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{FeeMode: ptr("absorb")}, catalogue.PaymentsConnect)
 		return err
 	}, "has_sales", "fee_mode"},
 	{"event timezone", func(ctx context.Context, tx pgx.Tx, f fixture) error {
-		_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{Timezone: ptr("America/Chicago")})
+		_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{Timezone: ptr("America/Chicago")}, catalogue.PaymentsConnect)
 		return err
 	}, "has_sales", "timezone"},
 	{"back to draft", func(ctx context.Context, tx pgx.Tx, f fixture) error {
-		_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{Status: ptr("draft")})
+		_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{Status: ptr("draft")}, catalogue.PaymentsConnect)
 		return err
 	}, "has_sales", "status"},
 }
@@ -204,7 +204,7 @@ func TestCosmeticEditsSurviveSales(t *testing.T) {
 		if _, err := catalogue.UpdateQuota(ctx, tx, f.org, f.event, f.hall, f.actor, catalogue.QuotaPatch{Name: ptr("Main hall")}); err != nil {
 			return err
 		}
-		_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{Name: ptr("Spring Ball")})
+		_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{Name: ptr("Spring Ball")}, catalogue.PaymentsConnect)
 		return err
 	})
 	if err != nil {
@@ -371,7 +371,7 @@ func TestOrdersCountAsSales(t *testing.T) {
 	}
 	order(f.event, "TS-CCCCC")
 	if err := f.inScope(t, func(ctx context.Context, tx pgx.Tx) error {
-		_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{Status: ptr("draft")})
+		_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{Status: ptr("draft")}, catalogue.PaymentsConnect)
 		return err
 	}); !hasCode(err, "has_sales") {
 		t.Fatalf("live -> draft with a cancelled order: %v, want has_sales", err)
@@ -551,7 +551,7 @@ func TestEventEditAndAHoldDontDeadlock(t *testing.T) {
 		})
 	}()
 	err := f.inScope(t, func(ctx context.Context, tx pgx.Tx) error {
-		if _, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{Name: ptr("Spring Ball")}); err != nil {
+		if _, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{Name: ptr("Spring Ball")}, catalogue.PaymentsConnect); err != nil {
 			return err
 		}
 		close(editing)
@@ -561,7 +561,7 @@ func TestEventEditAndAHoldDontDeadlock(t *testing.T) {
 			return fmt.Errorf("checkout ended early: %w", err)
 		}
 		time.Sleep(50 * time.Millisecond) // let the checkout reach its insert
-		_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{TaxRateBP: ptr(500)})
+		_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, f.actor, catalogue.EventPatch{TaxRateBP: ptr(500)}, catalogue.PaymentsConnect)
 		return err
 	})
 	if cerr := <-done; cerr != nil {

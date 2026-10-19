@@ -30,7 +30,10 @@ type Service struct {
 	Pool *pgxpool.Pool
 	Fee  pricing.Fee
 	// Payments takes card payments; nil means paid tickets can't be sold.
-	Payments      plugin.PaymentProvider
+	Payments plugin.PaymentProvider
+	// Direct: payments go to the server's own Stripe account
+	// (TS_PAYMENTS=direct), so organizers connect nothing and no fee is taken.
+	Direct        bool
 	StorefrontURL string // TS_STOREFRONT_URL: base for order links
 	SecretKey     []byte // TS_SECRET_KEY: order links are signed with a key derived from it
 }
@@ -86,6 +89,15 @@ const (
 )
 
 var errQuotasMoved = errors.New("sales: the quotas of these ticket types changed")
+
+// fee is the platform fee per ticket: none in direct mode, where the
+// server's own Stripe account takes the whole payment.
+func (s *Service) fee() pricing.Fee {
+	if s.Direct {
+		return pricing.Fee{}
+	}
+	return s.Fee
+}
 
 // HashToken is what we store for a buyer's token.
 func HashToken(token string) []byte {
@@ -191,7 +203,7 @@ func (s *Service) hold(ctx context.Context, org, event uuid.UUID, hash []byte, i
 		if !applies(p, in.Items, tts) {
 			return errPromoNotHere
 		}
-		out.Quote = pricing.Compute(lines(tts, in.Items, p), p.pricing(), ev.feeMode, s.Fee)
+		out.Quote = pricing.Compute(lines(tts, in.Items, p), p.pricing(), ev.feeMode, s.fee())
 		// Never hold seats nobody can pay for.
 		if out.Quote.TotalCents > 0 {
 			if _, err := s.paymentsReady(ctx, tx, org); err != nil {

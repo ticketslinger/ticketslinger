@@ -44,11 +44,16 @@ func accountInUse(err error) bool {
 }
 
 func (s *server) paymentsStatus(ctx context.Context, tx pgx.Tx, org organizers.Organizer) (PaymentsStatus, error) {
-	st := PaymentsStatus{Provider: PaymentsStatusProviderNone, LinkMethod: nullable.NewNullNullable[LinkMethod]()}
+	st := PaymentsStatus{Provider: PaymentsStatusProviderNone, Mode: PaymentsModeConnect, LinkMethod: nullable.NewNullNullable[LinkMethod]()}
 	if s.Payments != nil {
 		st.Provider = PaymentsStatusProvider(s.Payments.Name())
 		// The test provider always links; Stripe needs the platform's OAuth client id.
 		st.CanLinkExisting = st.Provider == PaymentsStatusProviderTest || s.Config.StripeClientID != ""
+	}
+	if s.direct() {
+		// Nothing to connect or link, whatever the organizer had before.
+		st.Mode, st.CanLinkExisting = PaymentsModeDirect, false
+		return st, nil
 	}
 	var method *string
 	err := tx.QueryRow(ctx, `select stripe_account_id is not null and stripe_disconnected_at is null, stripe_disconnected_at is not null,
@@ -72,6 +77,10 @@ func (s *server) GetPayments(ctx context.Context, req GetPaymentsRequestObject) 
 	return GetPayments200JSONResponse(out), nil
 }
 
+// direct: the server takes every payment through its own Stripe account
+// (TS_PAYMENTS=direct), so organizers have nothing to connect.
+func (s *server) direct() bool { return s.Config.PaymentsMode == "direct" }
+
 // paymentsWrite is who may change how an organizer takes payments: an owner
 // or admin, in person.
 var paymentsWrite = Access{Roles: ownerAdmin, Write: true, SessionOnly: true}
@@ -94,6 +103,9 @@ func (s *server) ConnectPayments(ctx context.Context, req ConnectPaymentsRequest
 	var link string
 	var linkErr, createErr error
 	err := s.inOrganizer(ctx, req.Organizer, paymentsWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		if s.direct() {
+			return errDirectPayments
+		}
 		if s.Payments == nil {
 			return errPaymentsNotConfigured
 		}
@@ -156,6 +168,9 @@ func (s *server) ConnectPayments(ctx context.Context, req ConnectPaymentsRequest
 func (s *server) RefreshPayments(ctx context.Context, req RefreshPaymentsRequestObject) (RefreshPaymentsResponseObject, error) {
 	var out PaymentsStatus
 	err := s.inOrganizer(ctx, req.Organizer, Access{Roles: ownerAdmin, Write: true}, func(org organizers.Organizer, tx pgx.Tx) error {
+		if s.direct() {
+			return errDirectPayments
+		}
 		if s.Payments == nil {
 			return errPaymentsNotConfigured
 		}
@@ -199,6 +214,9 @@ func (s *server) StartStripeLink(ctx context.Context, req StartStripeLinkRequest
 	}
 	var url string
 	err = s.inOrganizer(ctx, req.Organizer, paymentsWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		if s.direct() {
+			return errDirectPayments
+		}
 		if s.Payments == nil {
 			return errPaymentsNotConfigured
 		}
@@ -380,6 +398,9 @@ func (s *server) unlink(ctx context.Context, account string) (gone bool, err err
 func (s *server) DisconnectPayments(ctx context.Context, req DisconnectPaymentsRequestObject) (DisconnectPaymentsResponseObject, error) {
 	var out PaymentsStatus
 	err := s.inOrganizer(ctx, req.Organizer, paymentsWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		if s.direct() {
+			return errDirectPayments
+		}
 		var account, method *string
 		var disconnected bool
 		if err := tx.QueryRow(ctx, `select stripe_account_id, stripe_link_method, stripe_disconnected_at is not null
@@ -620,7 +641,10 @@ func (s *server) PayCheckout(ctx context.Context, req PayCheckoutRequestObject) 
 	if ps.Kind == "free" {
 		out.OrderCode, out.OrderUrl = &ps.OrderCode, &ps.OrderURL
 	} else {
-		out.ClientSecret, out.PublishableKey, out.Account = &ps.ClientSecret, &ps.PublishableKey, &ps.Account
+		out.ClientSecret, out.PublishableKey = &ps.ClientSecret, &ps.PublishableKey
+		if ps.Account != "" { // "" in direct mode: Stripe.js loads without stripeAccount
+			out.Account = &ps.Account
+		}
 	}
 	return out, nil
 }
