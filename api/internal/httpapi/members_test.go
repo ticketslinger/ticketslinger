@@ -144,3 +144,24 @@ func TestTeamChangesAreAudited(t *testing.T) {
 		}
 	}
 }
+
+// A key carries its own authority, so a removed member's keys go with them;
+// everyone else's keep working.
+func TestRemovingAMemberRevokesTheirKeys(t *testing.T) {
+	s := newShop(t, nil)
+	admin := s.member("admin@example.com", "admin")
+	adminKeyID, adminKey := s.createKey(admin, "acme", "write")
+	_, ownerKey := s.createKey(s.owner, "acme", "read")
+	s.must(s.do(adminKey, "GET", "/v1/organizers/acme", ""), 200)
+	if res := s.do(s.owner, "DELETE", membersPath+"/"+s.userID("admin@example.com"), ""); res.StatusCode != 204 {
+		t.Fatalf("remove: %d %q", res.StatusCode, s.errorCode(res))
+	}
+	if res := s.do(adminKey, "GET", "/v1/organizers/acme", ""); res.StatusCode != 401 {
+		t.Fatalf("removed admin's key: %d, want 401", res.StatusCode)
+	}
+	s.must(s.do(ownerKey, "GET", "/v1/organizers/acme", ""), 200)
+	if n := s.count(`select count(*) from audit_log where action = 'api_key.revoked' and entity_type = 'api_key' and entity_id = $1
+		and before->>'scope' = 'write' and actor_user_id is not null`, adminKeyID); n != 1 {
+		t.Fatalf("api_key.revoked rows: %d, want 1", n)
+	}
+}

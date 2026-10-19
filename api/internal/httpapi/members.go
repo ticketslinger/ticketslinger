@@ -100,6 +100,11 @@ func (s *server) AddMember(ctx context.Context, req AddMemberRequestObject) (Add
 	return AddMember201JSONResponse(out), nil
 }
 
+type revokedKey struct {
+	ID                  uuid.UUID
+	Name, Prefix, Scope string
+}
+
 func (s *server) RemoveMember(ctx context.Context, req RemoveMemberRequestObject) (RemoveMemberResponseObject, error) {
 	err := s.inOrganizer(ctx, req.Organizer, teamWrite, func(org organizers.Organizer, tx pgx.Tx) error {
 		// Read first: once removed, the directory no longer shows them.
@@ -107,6 +112,16 @@ func (s *server) RemoveMember(ctx context.Context, req RemoveMemberRequestObject
 		if errors.Is(err, pgx.ErrNoRows) {
 			return notFound()
 		}
+		if err != nil {
+			return err
+		}
+		// Their live keys, read before remove_member revokes them, for the audit log.
+		rows, err := tx.Query(ctx, `select id, name, prefix, scope from api_keys
+			where organizer_id = $1 and created_by = $2 and revoked_at is null`, org.ID, req.Member)
+		if err != nil {
+			return err
+		}
+		keys, err := pgx.CollectRows(rows, pgx.RowToStructByPos[revokedKey])
 		if err != nil {
 			return err
 		}
@@ -124,6 +139,12 @@ func (s *server) RemoveMember(ctx context.Context, req RemoveMemberRequestObject
 		case "removed":
 		default:
 			return errors.New("remove_member: unexpected result " + r)
+		}
+		for _, k := range keys {
+			if err := audit.Write(ctx, tx, audit.Entry{Organizer: org.ID, Actor: actorFrom(ctx), Action: "api_key.revoked",
+				EntityType: "api_key", EntityID: k.ID, Before: map[string]string{"name": k.Name, "prefix": k.Prefix, "scope": k.Scope}}); err != nil {
+				return err
+			}
 		}
 		return audit.Write(ctx, tx, audit.Entry{Organizer: org.ID, Actor: actorFrom(ctx), Action: "member.removed",
 			EntityType: "member", EntityID: uuid.UUID(req.Member), Before: map[string]string{"email": before.Email, "role": string(before.Role)}})

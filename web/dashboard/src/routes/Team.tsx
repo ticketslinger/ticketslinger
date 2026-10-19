@@ -22,8 +22,9 @@ export const TEAM_ERRORS: Record<string, string> = {
 };
 
 export function explain(e: unknown): unknown {
-  const copy = e instanceof ApiFailure ? TEAM_ERRORS[e.code] : undefined;
-  return copy && e instanceof ApiFailure ? new ApiFailure(e.code, copy, e.status, e.field) : e;
+  if (!(e instanceof ApiFailure)) return e;
+  const copy = TEAM_ERRORS[e.code];
+  return copy ? new ApiFailure(e.code, copy, e.status, e.field) : e;
 }
 
 export function Team({ org }: { org: Org }) {

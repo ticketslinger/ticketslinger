@@ -4,7 +4,8 @@
 -- act only when the scoped user owns the scoped organizer. Neither can make
 -- or remove an owner, and an owner can't remove themself, so the last owner
 -- always stays. 'no_account' covers an unknown email and an unverified one
--- alike, so the answer says no more than "not yet".
+-- alike, so the answer says no more than "not yet". Removing someone also
+-- revokes the API keys they created for the organizer.
 -- search_path ends in pg_temp so a temp table cannot shadow a real one.
 -- +goose StatementBegin
 CREATE FUNCTION add_member(p_email citext, p_role text) RETURNS text
@@ -48,6 +49,9 @@ BEGIN
     RETURN 'cannot_remove';
   END IF;
   DELETE FROM public.memberships WHERE organizer_id = org AND user_id = p_user;
+  -- A key carries its own authority, so the keys they made here go with them.
+  UPDATE public.api_keys SET revoked_at = now()
+   WHERE organizer_id = org AND created_by = p_user AND revoked_at IS NULL;
   RETURN 'removed';
 END $$;
 -- +goose StatementEnd
