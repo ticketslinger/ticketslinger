@@ -1,6 +1,6 @@
 -- +goose Up
--- The refund job looks its rows up by payload->>'refund_id'; without this
--- every lookup scans the whole jobs table.
+-- Lets ops and tests find a refund's job by refund id (payload->>'refund_id')
+-- without scanning the whole jobs table.
 CREATE INDEX jobs_refund_id_idx ON jobs ((payload->>'refund_id')) WHERE kind = 'refund';
 
 -- refunds_within_payment, as in 00034, now naming itself as the constraint,
