@@ -251,8 +251,13 @@ func checkMail(c *Config) error {
 	if a, err := url.Parse(c.ResendAPIURL); err != nil || a.Hostname() == "" || a.Scheme != "https" && (a.Scheme != "http" || !IsLocalHost(a.Hostname())) {
 		return errors.New("TS_RESEND_API_URL must be https:// unless it points at localhost")
 	}
-	if s := c.ResendWebhookSecret; s != "" && !strings.HasPrefix(s, "whsec_") {
-		return errors.New("TS_RESEND_WEBHOOK_SECRET must start with whsec_")
+	// Checked as the webhook reads it, so a bad paste fails here, not on
+	// every event. The error never repeats the value.
+	if s := c.ResendWebhookSecret; s != "" {
+		b64, ok := strings.CutPrefix(s, "whsec_")
+		if key, err := base64.StdEncoding.DecodeString(b64); !ok || err != nil || len(key) == 0 {
+			return errors.New("TS_RESEND_WEBHOOK_SECRET isn't a valid signing secret")
+		}
 	}
 	return nil
 }

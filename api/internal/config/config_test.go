@@ -242,8 +242,10 @@ func TestMailConfig(t *testing.T) {
 		{name: "loopback api", url: prod, mail: "resend", key: "re_abc", apiURL: "http://127.0.0.1:9999", want: "resend"},
 		{name: "https api without a host", url: prod, mail: "resend", key: "re_abc", apiURL: "https:///emails", wantErr: "TS_RESEND_API_URL must be https:// unless it points at localhost"},
 		{name: "https api", url: prod, mail: "resend", key: "re_abc", apiURL: "https://api.resend.com", want: "resend"},
-		{name: "bad webhook secret", url: prod, mail: "resend", key: "re_abc", hook: "sec_x", wantErr: "TS_RESEND_WEBHOOK_SECRET must start with whsec_"},
-		{name: "webhook secret", url: prod, mail: "resend", key: "re_abc", hook: "whsec_x", want: "resend"},
+		{name: "webhook secret without whsec_", url: prod, mail: "resend", key: "re_abc", hook: "c2VjcmV0LWtleQ==", wantErr: "TS_RESEND_WEBHOOK_SECRET isn't a valid signing secret"},
+		{name: "webhook secret not base64", url: prod, mail: "resend", key: "re_abc", hook: "whsec_not base64!", wantErr: "TS_RESEND_WEBHOOK_SECRET isn't a valid signing secret"},
+		{name: "empty webhook secret", url: prod, mail: "resend", key: "re_abc", hook: "whsec_", wantErr: "TS_RESEND_WEBHOOK_SECRET isn't a valid signing secret"},
+		{name: "webhook secret", url: prod, mail: "resend", key: "re_abc", hook: "whsec_c2VjcmV0LWtleQ==", want: "resend"},
 		{name: "bad alert address", url: prod, mail: "resend", key: "re_abc", alert: "nobody", wantErr: "TS_MAIL_ALERT_TO must be an address like you@example.com"},
 		{name: "alert address", url: prod, mail: "resend", key: "re_abc", alert: "james@example.com", want: "resend"},
 		{name: "unknown provider", url: prod, mail: "sendgrid", wantErr: "TS_MAIL must be resend, smtp or log"},
@@ -275,7 +277,7 @@ func TestMailConfig(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 					t.Fatalf("err %v, want %q", err, c.wantErr)
 				}
-				if c.key != "" && strings.Contains(err.Error(), c.key) || c.pass != "" && strings.Contains(err.Error(), c.pass) {
+				if c.key != "" && strings.Contains(err.Error(), c.key) || c.hook != "" && strings.Contains(err.Error(), c.hook) || c.pass != "" && strings.Contains(err.Error(), c.pass) {
 					t.Fatalf("error %q repeats a secret", err)
 				}
 				return
