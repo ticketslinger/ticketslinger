@@ -46,6 +46,8 @@ export function Payments({ org }: { org: Org }) {
     });
   const editor = canEdit(org);
   const reconnect = data?.disconnected && data.link_method === "created";
+  // The server sells through its own Stripe account: nothing to connect.
+  const direct = data?.mode === "direct";
 
   return (
     <>
@@ -53,7 +55,13 @@ export function Payments({ org }: { org: Org }) {
       <ErrorText>{error?.message}</ErrorText>
       {!data && !error && <p className="muted">Loading…</p>}
       {data?.provider === "none" && <p>Payments aren't set up on this server yet.</p>}
-      {data && data.provider !== "none" && !data.connected && (
+      {direct && data.provider !== "none" && (
+        <p className="lede">
+          This server takes card payments through its own Stripe account. There's nothing to
+          connect, and paid tickets can go on sale straight away.
+        </p>
+      )}
+      {data && data.provider !== "none" && !direct && !data.connected && (
         <>
           {data.disconnected ? (
             <p className="lede">

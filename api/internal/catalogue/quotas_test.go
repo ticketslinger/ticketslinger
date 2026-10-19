@@ -80,7 +80,7 @@ func (e *qenv) del(q uuid.UUID) error {
 func (e *qenv) setStatus(t *testing.T, st string) error {
 	t.Helper()
 	return e.run(e.a, func(tx pgx.Tx) error {
-		_, err := catalogue.UpdateEvent(context.Background(), tx, e.a, e.ev.ID, e.actor, catalogue.EventPatch{Status: &st})
+		_, err := catalogue.UpdateEvent(context.Background(), tx, e.a, e.ev.ID, e.actor, catalogue.EventPatch{Status: &st}, catalogue.PaymentsConnect)
 		return err
 	})
 }

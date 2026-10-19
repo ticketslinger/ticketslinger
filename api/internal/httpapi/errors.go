@@ -71,6 +71,7 @@ var (
 	errAlreadyConnected      = &apiError{409, "already_connected", "This organizer already has a Stripe account connected. Disconnect it first, then link the other one."}
 	errAccountInUse          = &apiError{409, "account_in_use", "That Stripe account is already taking payments for another organizer here. Disconnect it there first, or use a different account."}
 	errPaymentsInProgress    = &apiError{409, "payments_in_progress", "Someone's paying for tickets right now. Give it a few minutes, then disconnect."}
+	errDirectPayments        = &apiError{409, "direct_payments", "This server takes payments through its own Stripe account, so there's nothing to connect here."}
 	errInvalidState          = &apiError{400, "invalid_state", "That link has expired. Start again from your organizer's Payments page."}
 )
 

@@ -547,11 +547,11 @@ func TestCatalogueEditsAndAHoldDontDeadlock(t *testing.T) {
 			return catalogue.DeleteQuota(ctx, tx, f.org, f.event, f.hall, a)
 		}, "promo", "has_sales"},
 		"event tax": {func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
-			_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, a, catalogue.EventPatch{TaxRateBP: ptr(500)})
+			_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, a, catalogue.EventPatch{TaxRateBP: ptr(500)}, catalogue.PaymentsConnect)
 			return err
 		}, "promo", "has_sales"},
 		"event to draft": {func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {
-			_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, a, catalogue.EventPatch{Status: ptr("draft")})
+			_, err := catalogue.UpdateEvent(ctx, tx, f.org, f.event, a, catalogue.EventPatch{Status: ptr("draft")}, catalogue.PaymentsConnect)
 			return err
 		}, "promo", "has_sales"},
 		"promo value": {func(ctx context.Context, tx pgx.Tx, f fixture, a audit.Actor) error {

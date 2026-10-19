@@ -321,9 +321,10 @@ function Checkout({ data }: { data: CheckoutData }) {
     const keys = savedKeys(data.id);
     if (!secret || !keys) return drop();
     (async () => {
-      const s = await loadStripe(keys.publishable_key, { stripeAccount: keys.account }).catch(
-        () => null,
-      );
+      const s = await loadStripe(
+        keys.publishable_key,
+        keys.account ? { stripeAccount: keys.account } : undefined,
+      ).catch(() => null);
       const r = await s?.retrievePaymentIntent(secret).catch(() => undefined);
       drop();
       const status = r?.paymentIntent?.status;
@@ -407,9 +408,10 @@ function Checkout({ data }: { data: CheckoutData }) {
     if (phase.kind !== "card" || !s?.publishable_key || !s.client_secret || !card.current) return;
     const el = card.current;
     (async () => {
-      const loaded = await loadStripe(s.publishable_key ?? "", { stripeAccount: s.account }).catch(
-        () => null,
-      );
+      const loaded = await loadStripe(
+        s.publishable_key ?? "",
+        s.account ? { stripeAccount: s.account } : undefined,
+      ).catch(() => null);
       if (!loaded)
         return setCardError("We couldn't load the card form. Reload the page to try again.");
       const elements = loaded.elements({ clientSecret: s.client_secret ?? "" });

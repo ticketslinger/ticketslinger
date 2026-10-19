@@ -118,7 +118,7 @@ func serve() error {
 // through m and refunds through pay, the same ones the API uses.
 func newWorker(pool *pgxpool.Pool, m mailer.Mailer, cfg config.Config, pay plugin.PaymentProvider) *jobs.Worker {
 	// Order emails only read orders and rebuild links; refunds need the provider.
-	shop := &sales.Service{Pool: pool, StorefrontURL: cfg.StorefrontURL, SecretKey: cfg.SecretKey, Payments: pay}
+	shop := &sales.Service{Pool: pool, StorefrontURL: cfg.StorefrontURL, SecretKey: cfg.SecretKey, Payments: pay, Direct: cfg.PaymentsMode == "direct"}
 	return &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{
 		"send_email":               jobs.SendEmail(m),
 		sales.OrderConfirmationJob: shop.OrderConfirmation(m),
@@ -176,12 +176,15 @@ func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Hand
 	return h, newWorker(pool, mail, cfg, pay), nil
 }
 
-// paymentProvider is the fake in test mode, Stripe when a secret key is set,
-// and otherwise none: free tickets still sell, paid ones can't.
+// paymentProvider is the fake in test mode, the server's own Stripe account
+// in direct mode, Stripe Connect when a secret key is set, and otherwise
+// none: free tickets still sell, paid ones can't.
 func paymentProvider(cfg config.Config, testMode bool) plugin.PaymentProvider {
 	switch {
 	case testMode:
 		return payments.NewFake()
+	case cfg.PaymentsMode == "direct":
+		return payments.NewDirectStripe(cfg.StripeSecretKey, cfg.StripePublishableKey, nil)
 	case cfg.StripeSecretKey != "":
 		return payments.NewStripe(cfg.StripeSecretKey, cfg.StripePublishableKey, cfg.StripeClientID, nil)
 	}

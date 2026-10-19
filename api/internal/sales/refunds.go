@@ -83,10 +83,10 @@ func Refund(s *Service) jobs.Handler {
 		switch {
 		case r.status == "requested" && r.stripeID == nil:
 			return s.sendRefund(ctx, j.Organizer, r)
-		case r.status == "succeeded" && r.fee > 0 && !r.feeDone:
+		case r.status == "succeeded" && r.fee > 0 && !r.feeDone && !s.Direct:
 			return s.sendFeeRefund(ctx, j.Organizer, r)
 		}
-		return nil // waiting for Stripe's word, failed, or done
+		return nil // waiting for Stripe's word, failed, done, or (direct mode) no fee to give back
 	}
 }
 
@@ -281,7 +281,7 @@ func (s *Service) finishRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID
 				return err
 			}
 		}
-		if fee > 0 && !feeDone {
+		if fee > 0 && !feeDone && !s.Direct {
 			if err := jobs.Enqueue(ctx, tx, RefundJob, refundJob{Organizer: org, Refund: id}); err != nil {
 				return err
 			}

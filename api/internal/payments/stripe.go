@@ -20,6 +20,7 @@ type Stripe struct {
 	c        *stripe.Client
 	pk       string
 	clientID string // Connect OAuth (ca_...); "" turns linking off
+	direct   bool   // the server's own account: no Connect, no fee
 }
 
 var _ plugin.PaymentProvider = (*Stripe)(nil)
@@ -70,6 +71,14 @@ func fail(op string, err error) error {
 	return pe
 }
 
+// NewDirectStripe charges on the server's own Stripe account (TS_PAYMENTS=direct):
+// no Stripe-Account header, no application fee, and nothing to connect.
+func NewDirectStripe(secretKey, publishableKey string, backends *stripe.Backends) *Stripe {
+	s := NewStripe(secretKey, publishableKey, "", backends)
+	s.direct = true
+	return s
+}
+
 func (s *Stripe) Name() string           { return "stripe" }
 func (s *Stripe) PublishableKey() string { return s.pk }
 
@@ -78,6 +87,9 @@ func (s *Stripe) PublishableKey() string { return s.pk }
 // Onboarding collects the email; a retry with the same key sends the same
 // params, as Stripe's idempotency requires.
 func (s *Stripe) CreateAccount(ctx context.Context, key string) (string, error) {
+	if s.direct {
+		return "", plugin.ErrDirectPayments
+	}
 	p := &stripe.AccountCreateParams{
 		Country: stripe.String("US"),
 		Controller: &stripe.AccountCreateControllerParams{
@@ -96,6 +108,9 @@ func (s *Stripe) CreateAccount(ctx context.Context, key string) (string, error) 
 }
 
 func (s *Stripe) OnboardingLink(ctx context.Context, account, refreshURL, returnURL string) (string, error) {
+	if s.direct {
+		return "", plugin.ErrDirectPayments
+	}
 	l, err := s.c.V1AccountLinks.Create(ctx, &stripe.AccountLinkCreateParams{Account: stripe.String(account),
 		RefreshURL: stripe.String(refreshURL), ReturnURL: stripe.String(returnURL), Type: stripe.String("account_onboarding")})
 	if err != nil {
@@ -113,7 +128,8 @@ func (s *Stripe) Account(ctx context.Context, account string) (plugin.AccountSta
 }
 
 // CreatePaymentIntent charges on the organizer's account (direct charge);
-// our fee rides along as the application fee.
+// our fee rides along as the application fee. In direct mode the charge is
+// the server's own and carries no fee.
 func (s *Stripe) CreatePaymentIntent(ctx context.Context, in plugin.PaymentIntentInput) (plugin.PaymentIntent, error) {
 	p := &stripe.PaymentIntentCreateParams{
 		Amount:                  stripe.Int64(in.AmountCents),
@@ -121,13 +137,13 @@ func (s *Stripe) CreatePaymentIntent(ctx context.Context, in plugin.PaymentInten
 		AutomaticPaymentMethods: &stripe.PaymentIntentCreateAutomaticPaymentMethodsParams{Enabled: stripe.Bool(true)},
 		Description:             stripe.String(in.Description),
 	}
-	if in.ApplicationFeeCents > 0 {
+	if in.ApplicationFeeCents > 0 && !s.direct {
 		p.ApplicationFeeAmount = stripe.Int64(in.ApplicationFeeCents)
 	}
 	for k, v := range in.Metadata {
 		p.AddMetadata(k, v)
 	}
-	p.SetStripeAccount(in.Account)
+	onAccount(&p.Params, in.Account)
 	p.SetIdempotencyKey(in.IdempotencyKey)
 	pi, err := s.c.V1PaymentIntents.Create(ctx, p)
 	if err != nil {
@@ -187,6 +203,9 @@ func (s *Stripe) ListRefunds(ctx context.Context, account, intentID string) ([]p
 // The fee id is read on the connected account; the fee itself is ours, so the
 // refund runs on the platform with no Stripe-Account header.
 func (s *Stripe) RefundApplicationFee(ctx context.Context, in plugin.FeeRefundInput) (string, error) {
+	if s.direct {
+		return "", plugin.ErrDirectPayments // no fee was ever taken
+	}
 	g := &stripe.PaymentIntentRetrieveParams{}
 	g.AddExpand("latest_charge")
 	onAccount(&g.Params, in.Account)
@@ -242,6 +261,9 @@ func (s *Stripe) CancelPaymentIntent(ctx context.Context, account, intentID, key
 // LinkURL is Stripe's OAuth page for Standard accounts, asking for
 // read_write so we can charge on the account as with one we created.
 func (s *Stripe) LinkURL(state, redirectURI, email string) (string, error) {
+	if s.direct {
+		return "", plugin.ErrDirectPayments
+	}
 	if s.clientID == "" {
 		return "", plugin.ErrLinkUnavailable
 	}
@@ -259,6 +281,9 @@ func (s *Stripe) LinkURL(state, redirectURI, email string) (string, error) {
 // tokens in Stripe's answer are dropped here: charges use our own key and the
 // Stripe-Account header.
 func (s *Stripe) CompleteLink(ctx context.Context, code string) (string, error) {
+	if s.direct {
+		return "", plugin.ErrDirectPayments
+	}
 	if s.clientID == "" {
 		return "", plugin.ErrLinkUnavailable
 	}
@@ -271,6 +296,9 @@ func (s *Stripe) CompleteLink(ctx context.Context, code string) (string, error) 
 
 // Unlink deauthorizes our platform on the account.
 func (s *Stripe) Unlink(ctx context.Context, account string) error {
+	if s.direct {
+		return plugin.ErrDirectPayments
+	}
 	if s.clientID == "" {
 		return plugin.ErrLinkUnavailable
 	}

@@ -168,3 +168,56 @@ func TestLoadTurnstile(t *testing.T) {
 		t.Fatalf("set: %q %q %v", c.TurnstileSecret, c.TurnstileVerifyURL, err)
 	}
 }
+
+func TestLoadDirectPayments(t *testing.T) {
+	t.Setenv("TS_DATABASE_URL", "postgres://x")
+	keys := func(sk string) {
+		t.Setenv("TS_STRIPE_SECRET_KEY", sk)
+		t.Setenv("TS_STRIPE_PUBLISHABLE_KEY", "pk_test_pubkey")
+		t.Setenv("TS_STRIPE_WEBHOOK_SECRET", "whsec_hooksecret")
+		t.Setenv("TS_STRIPE_CLIENT_ID", "")
+		t.Setenv("TS_PLATFORM_FEE_BP", "")
+		t.Setenv("TS_PLATFORM_FEE_CENTS", "")
+	}
+	t.Setenv("TS_PAYMENTS", "")
+	keys("sk_test_secretkey")
+	if c, err := Load(); err != nil || c.PaymentsMode != "connect" || c.PlatformFeeBP != 200 {
+		t.Fatalf("default: %q %d %v", c.PaymentsMode, c.PlatformFeeBP, err)
+	}
+	t.Setenv("TS_PAYMENTS", "direct")
+	c, err := Load()
+	if err != nil || c.PaymentsMode != "direct" || c.PlatformFeeBP != 0 || c.PlatformFeeCents != 0 {
+		t.Fatalf("direct: %q %d %d %v", c.PaymentsMode, c.PlatformFeeBP, c.PlatformFeeCents, err)
+	}
+	t.Setenv("TS_PLATFORM_FEE_BP", "0")
+	t.Setenv("TS_PLATFORM_FEE_CENTS", "0")
+	if c, err := Load(); err != nil || c.PlatformFeeBP != 0 || c.PlatformFeeCents != 0 {
+		t.Fatalf("direct with fees set to 0: %+v %v", c, err)
+	}
+	for name, tc := range map[string]struct {
+		set   func()
+		names string
+	}{
+		"no secret key":     {func() { keys(""); t.Setenv("TS_STRIPE_PUBLISHABLE_KEY", "") }, "TS_STRIPE_SECRET_KEY"},
+		"no webhook secret": {func() { keys("sk_test_secretkey"); t.Setenv("TS_STRIPE_WEBHOOK_SECRET", "") }, "TS_STRIPE_WEBHOOK_SECRET"},
+		"a client id":       {func() { keys("sk_test_secretkey"); t.Setenv("TS_STRIPE_CLIENT_ID", "ca_ABC123def") }, "TS_STRIPE_CLIENT_ID"},
+		"a percentage fee":  {func() { keys("sk_test_secretkey"); t.Setenv("TS_PLATFORM_FEE_BP", "200") }, "TS_PLATFORM_FEE_BP"},
+		"a flat fee":        {func() { keys("sk_test_secretkey"); t.Setenv("TS_PLATFORM_FEE_CENTS", "50") }, "TS_PLATFORM_FEE_CENTS"},
+	} {
+		tc.set()
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), tc.names) {
+			t.Fatalf("%s: %v, want an error naming %s", name, err, tc.names)
+		}
+		for _, v := range []string{"secretkey", "pubkey", "hooksecret", "ABC123def"} {
+			if strings.Contains(err.Error(), v) {
+				t.Fatalf("%s: error %q repeats a key", name, err)
+			}
+		}
+	}
+	keys("sk_test_secretkey")
+	t.Setenv("TS_PAYMENTS", "sideways")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "TS_PAYMENTS") {
+		t.Fatalf("sideways: %v", err)
+	}
+}

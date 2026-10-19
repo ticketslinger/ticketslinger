@@ -21,10 +21,14 @@ import (
 // newPaymentsHarness is newHarness with a payment provider (nil for none)
 // and the dashboard origin the onboarding links point back to.
 func newPaymentsHarness(t *testing.T, p plugin.PaymentProvider) *harness {
+	return newPaymentsHarnessFor(t, p, config.Config{DashboardOrigin: "http://localhost:5173"})
+}
+
+func newPaymentsHarnessFor(t *testing.T, p plugin.PaymentProvider, cfg config.Config) *harness {
 	pool := testdb.New(t)
 	m := &mailer.Memory{}
 	svc := auth.NewService(pool, m, auth.Options{RPID: "localhost", Origin: "http://localhost:5173", SecretKey: []byte("0123456789abcdef0123456789abcdef")})
-	srv := startServer(t, httpapi.New(httpapi.Deps{Pool: pool, Auth: svc, Payments: p, Config: config.Config{DashboardOrigin: "http://localhost:5173"}}))
+	srv := startServer(t, httpapi.New(httpapi.Deps{Pool: pool, Auth: svc, Payments: p, Config: cfg}))
 	return &harness{t, srv, m, pool, clientFor(t, srv.URL)}
 }
 
@@ -47,7 +51,7 @@ func TestConnectStripe(t *testing.T) {
 	h.createOrganizer(owner, "acme")
 
 	st := h.must(h.do(owner, "GET", paymentsURL, ""), 200)
-	if st["provider"] != "test" || st["connected"] != false || st["charges_enabled"] != false || st["details_submitted"] != false {
+	if st["provider"] != "test" || st["mode"] != "connect" || st["connected"] != false || st["charges_enabled"] != false || st["details_submitted"] != false {
 		t.Fatalf("before connecting: %v", st)
 	}
 	if res := h.do(owner, "POST", paymentsURL+"/refresh", ""); res.StatusCode != 409 || h.errorCode(res) != "not_connected" {
@@ -275,5 +279,60 @@ func TestConnectDoesNotBlockOtherWrites(t *testing.T) {
 	}
 	if code := <-connected; code != 200 {
 		t.Fatalf("connect: %d", code)
+	}
+}
+
+// connectCounter is the fake, counting every call that would reach Stripe's
+// Connect side.
+type connectCounter struct {
+	*payments.Fake
+	mu sync.Mutex
+	n  int
+}
+
+func (c *connectCounter) hit() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+}
+
+func (c *connectCounter) CreateAccount(ctx context.Context, key string) (string, error) {
+	c.hit()
+	return c.Fake.CreateAccount(ctx, key)
+}
+
+func (c *connectCounter) OnboardingLink(ctx context.Context, account, refresh, ret string) (string, error) {
+	c.hit()
+	return c.Fake.OnboardingLink(ctx, account, refresh, ret)
+}
+
+func (c *connectCounter) LinkURL(state, redirect, email string) (string, error) {
+	c.hit()
+	return c.Fake.LinkURL(state, redirect, email)
+}
+
+func (c *connectCounter) Unlink(ctx context.Context, account string) error {
+	c.hit()
+	return c.Fake.Unlink(ctx, account)
+}
+
+// On a server that sells through its own Stripe account, there's nothing for
+// an organizer to connect, link or disconnect.
+func TestDirectPaymentsHaveNothingToConnect(t *testing.T) {
+	p := &connectCounter{Fake: payments.NewFake()}
+	h := newPaymentsHarnessFor(t, p, config.Config{DashboardOrigin: "http://localhost:5173", PaymentsMode: "direct"})
+	owner := h.signupWithMFA("owner@example.com")
+	h.createOrganizer(owner, "acme")
+	if st := h.must(h.do(owner, "GET", paymentsURL, ""), 200); st["mode"] != "direct" {
+		t.Fatalf("status: %v", st)
+	}
+	for _, path := range []string{"/connect", "/link", "/refresh", "/disconnect"} {
+		res := h.do(owner, "POST", paymentsURL+path, "")
+		if res.StatusCode != 409 || h.errorCode(res) != "direct_payments" {
+			t.Fatalf("%s: %d %q, want 409 direct_payments", path, res.StatusCode, h.errorCode(res))
+		}
+	}
+	if p.n != 0 {
+		t.Fatalf("%d Connect calls on a direct-mode server", p.n)
 	}
 }

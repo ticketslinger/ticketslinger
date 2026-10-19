@@ -62,7 +62,7 @@ func New(d Deps) http.Handler {
 	}
 	if d.Sales == nil {
 		d.Sales = &sales.Service{Pool: d.Pool, Fee: pricing.Fee{BP: d.Config.PlatformFeeBP, Cents: d.Config.PlatformFeeCents},
-			Payments: d.Payments, StorefrontURL: d.Config.StorefrontURL, SecretKey: d.Config.SecretKey}
+			Payments: d.Payments, Direct: d.Config.PaymentsMode == "direct", StorefrontURL: d.Config.StorefrontURL, SecretKey: d.Config.SecretKey}
 	}
 	noStore := noStoreRoutes()
 	s := &server{Deps: d, public: publicRoutes(), checkoutLimit: ratelimit.New(10, time.Minute), payLimit: ratelimit.New(20, time.Minute),

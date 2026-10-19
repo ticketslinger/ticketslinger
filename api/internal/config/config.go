@@ -24,6 +24,10 @@ type Config struct {
 	SecretKey []byte
 	// TrustedProxies may set the client address with X-Real-IP.
 	TrustedProxies []netip.Prefix
+	// PaymentsMode is TS_PAYMENTS: "connect" (default) charges on each
+	// organizer's connected Stripe account; "direct" charges on the server's
+	// own, with no Connect and no platform fee (self-hosting).
+	PaymentsMode string
 	// Platform fee per paid ticket: basis points of the pre-tax price plus a flat amount.
 	PlatformFeeBP    int   // TS_PLATFORM_FEE_BP, 0-10000, default 200
 	PlatformFeeCents int64 // TS_PLATFORM_FEE_CENTS, 0-10000, default 50
@@ -87,6 +91,16 @@ func Load() (Config, error) {
 	if err := checkStripe(c); err != nil {
 		return c, err
 	}
+	switch c.PaymentsMode = env("TS_PAYMENTS", "connect"); c.PaymentsMode {
+	case "connect":
+	case "direct":
+		if err := checkDirect(c); err != nil {
+			return c, err
+		}
+		c.PlatformFeeBP, c.PlatformFeeCents = 0, 0
+	default:
+		return c, errors.New("TS_PAYMENTS must be connect or direct")
+	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("TS_DATABASE_URL is required")
 	}
@@ -146,6 +160,22 @@ func checkStripe(c Config) error {
 	}
 	if wh == "" {
 		return errors.New("TS_STRIPE_WEBHOOK_SECRET is required with a secret key")
+	}
+	return nil
+}
+
+// checkDirect: selling through the server's own Stripe account needs its
+// keys, and has no Connect and no platform fee. Errors never repeat a key.
+func checkDirect(c Config) error {
+	switch {
+	case c.StripeSecretKey == "":
+		return errors.New("TS_PAYMENTS=direct needs TS_STRIPE_SECRET_KEY, TS_STRIPE_PUBLISHABLE_KEY and TS_STRIPE_WEBHOOK_SECRET")
+	case c.StripeClientID != "":
+		return errors.New("TS_PAYMENTS=direct takes no TS_STRIPE_CLIENT_ID: there are no connected accounts to link")
+	case c.PlatformFeeBP != 0 && os.Getenv("TS_PLATFORM_FEE_BP") != "":
+		return errors.New("TS_PAYMENTS=direct takes no platform fee: leave TS_PLATFORM_FEE_BP unset or 0")
+	case c.PlatformFeeCents != 0 && os.Getenv("TS_PLATFORM_FEE_CENTS") != "":
+		return errors.New("TS_PAYMENTS=direct takes no platform fee: leave TS_PLATFORM_FEE_CENTS unset or 0")
 	}
 	return nil
 }

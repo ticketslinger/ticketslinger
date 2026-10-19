@@ -16,6 +16,11 @@ var ErrAlreadyRefunded = errors.New("payments: already refunded")
 // can't link a Stripe account they already have.
 var ErrLinkUnavailable = errors.New("plugin: linking existing accounts isn't configured")
 
+// ErrDirectPayments: the server takes payments through its own Stripe
+// account (TS_PAYMENTS=direct), so there are no accounts to create, link or
+// unlink, and no platform fee to give back.
+var ErrDirectPayments = errors.New("plugin: this server takes payments through its own Stripe account")
+
 // A provider call failed in one of two ways. ErrUnavailable: we couldn't
 // reach the provider, it failed on its side, or it asked us to slow down;
 // the same call may work later, and may even have worked already. ErrRefused:

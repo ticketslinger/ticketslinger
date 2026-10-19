@@ -30,7 +30,10 @@ type Service struct {
 	Pool *pgxpool.Pool
 	Fee  pricing.Fee
 	// Payments takes card payments; nil means paid tickets can't be sold.
-	Payments      plugin.PaymentProvider
+	Payments plugin.PaymentProvider
+	// Direct: payments go to the server's own Stripe account
+	// (TS_PAYMENTS=direct), so organizers connect nothing and no fee is taken.
+	Direct        bool
 	StorefrontURL string // TS_STOREFRONT_URL: base for order links
 	SecretKey     []byte // TS_SECRET_KEY: order links are signed with a key derived from it
 }

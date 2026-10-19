@@ -148,7 +148,11 @@ func (s *server) UpdateEvent(ctx context.Context, req UpdateEventRequestObject) 
 	}
 	var out UpdateEvent200JSONResponse
 	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
-		e, err := catalogue.UpdateEvent(ctx, tx, org.ID, req.Event, actorFrom(ctx), p)
+		mode := catalogue.PaymentsConnect
+		if s.direct() {
+			mode = catalogue.PaymentsDirect
+		}
+		e, err := catalogue.UpdateEvent(ctx, tx, org.ID, req.Event, actorFrom(ctx), p, mode)
 		out = UpdateEvent200JSONResponse(toEvent(e))
 		return err
 	})

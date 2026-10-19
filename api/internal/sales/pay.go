@@ -197,10 +197,14 @@ func (s *Service) start(o pendingOrder, p payment) PaymentStart {
 }
 
 // paymentsReady returns the organizer's Stripe account if it can take cards:
-// connected, not disconnected, and Stripe has charges on.
+// connected, not disconnected, and Stripe has charges on. In direct mode
+// every charge is the server's own: "" (no Stripe-Account), and always ready.
 func (s *Service) paymentsReady(ctx context.Context, tx pgx.Tx, org uuid.UUID) (string, error) {
 	if s.Payments == nil {
 		return "", ErrPaymentsNotConfigured
+	}
+	if s.Direct {
+		return "", nil
 	}
 	var account *string
 	var enabled bool
