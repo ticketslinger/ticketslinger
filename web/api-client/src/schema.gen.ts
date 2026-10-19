@@ -1228,7 +1228,7 @@ export interface components {
         };
         CancelEventResult: {
             event: components["schemas"]["Event"];
-            /** @description Paid orders refunded. */
+            /** @description Orders a refund was made for (a free order is voided with nothing to send back). */
             orders: number;
             /**
              * Format: int64

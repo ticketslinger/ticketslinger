@@ -630,6 +630,38 @@ func TestCancelEventRefundsEveryone(t *testing.T) {
 	}
 }
 
+// The count is of orders a refund was made for: a free order is voided but
+// gets no money back, and one whose refund failed keeps its failure for the
+// organizer's Try again.
+func TestCancelEventCountsOnlyOrdersItRefunds(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	f.paidOrder(t, s, fake, 1, 1)
+	failed, _, _ := f.paidOrder(t, s, fake, 1, 2)
+	id := *f.refund(t, s, failed, sales.RefundRequest{}).RefundID
+	drain(t, s, &mailer.Memory{})
+	f.must(t, system.Run(ctx, s.Pool, f.org, func(tx pgx.Tx) error {
+		return sales.FailRefundForTest(s, ctx, tx, f.org, id, "stripe_failed")
+	}))
+	free := f.ticketType(t, f.org, f.event, "Free", 0, false)
+	f.exec(t, `insert into quota_ticket_types(organizer_id, event_id, quota_id, ticket_type_id) values ($1, $2, $3, $4)`, f.org, f.event, f.hall, free)
+	c := f.open(t, s, buy(sales.Item{TicketTypeID: free, Quantity: 1}))
+	_, err := s.Pay(ctx, c.Token, sales.Details{Email: "free@example.com"})
+	f.must(t, err)
+	res, err := f.cancel(s, "Gala")
+	f.must(t, err)
+	if res.Orders != 1 || res.AmountCents != 2600 || res.FeeCents != 100 {
+		t.Fatalf("result %+v, want the one paid order", res)
+	}
+	if n := f.count(t, `select count(*) from tickets where status = 'valid'`); n != 0 {
+		t.Fatalf("%d valid tickets on a cancelled event", n)
+	}
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'failed'`, id); n != 1 {
+		t.Fatal("the failed refund changed")
+	}
+}
+
 func TestCancelEventNeedsItsNameAndALiveEvent(t *testing.T) {
 	s, fake := newPaidService(t)
 	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})

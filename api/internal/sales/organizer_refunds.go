@@ -238,7 +238,7 @@ func OrderDetail(ctx context.Context, tx pgx.Tx, event, order uuid.UUID) (OrderD
 }
 
 type CancelResult struct {
-	Orders                int   // paid orders refunded
+	Orders                int   // orders a refund was made for
 	AmountCents, FeeCents int64 // asked back from Stripe in all
 }
 
@@ -310,7 +310,9 @@ func CancelEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, confirmNa
 		if err != nil {
 			return res, err
 		}
-		res.Orders++
+		if r.RefundID != nil { // a free order is voided, with nothing to send back
+			res.Orders++
+		}
 		res.AmountCents += r.AmountCents
 		res.FeeCents += r.FeeCents
 	}

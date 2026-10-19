@@ -1196,7 +1196,7 @@ components:
       required: [event, orders, amount_cents, fee_cents]
       properties:
         event: { $ref: "#/components/schemas/Event" }
-        orders: { type: integer, description: "Paid orders refunded." }
+        orders: { type: integer, description: "Orders a refund was made for (a free order is voided with nothing to send back)." }
         amount_cents: { type: integer, format: int64, description: "Asked back from Stripe for buyers, in all." }
         fee_cents: { type: integer, format: int64, description: "Our fee going back, in all." }
     LinkMethod: { type: string, enum: [created, linked] }
