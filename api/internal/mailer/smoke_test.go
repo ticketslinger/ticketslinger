@@ -6,9 +6,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -52,9 +55,18 @@ func TestResendSmoke(t *testing.T) {
 	}
 	msg.IdempotencyKey = "ts-smoke-" + run
 
-	monthly := -1
+	// The first send's counts: the one answer that must carry Resend's quota headers.
+	daily, monthly := -1, -1
+	calls := 0
 	r := &mailer.Resend{Key: key, From: "TicketSlinger <tickets@ticketslinger.com>", URL: "https://api.resend.com",
-		OnQuota: func(_ context.Context, _, m int) { monthly = m }}
+		Client: &http.Client{Timeout: 15 * time.Second, Transport: headerNames{t}},
+		OnQuota: func(_ context.Context, d, m int) {
+			calls++
+			t.Logf("call %d quota: daily %d, monthly %d", calls, d, m)
+			if calls == 1 {
+				daily, monthly = d, m
+			}
+		}}
 	ctx := context.Background()
 	if err := r.Send(ctx, msg); err != nil {
 		t.Fatalf("first send: %v", err)
@@ -73,5 +85,25 @@ func TestResendSmoke(t *testing.T) {
 	if monthly < 1 {
 		t.Fatalf("OnQuota monthly = %d, want >= 1", monthly)
 	}
-	t.Logf("monthly quota %d", monthly)
+	t.Logf("first send: daily %d, monthly %d", daily, monthly)
+}
+
+// headerNames logs the names, never the values, of Resend's quota and rate
+// headers on every answer.
+type headerNames struct{ t *testing.T }
+
+func (h headerNames) RoundTrip(req *http.Request) (*http.Response, error) {
+	res, err := http.DefaultTransport.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for k := range res.Header {
+		if l := strings.ToLower(k); strings.HasPrefix(l, "x-resend") || strings.HasPrefix(l, "ratelimit") {
+			names = append(names, l)
+		}
+	}
+	slices.Sort(names)
+	h.t.Logf("%d answer headers: %v", res.StatusCode, names)
+	return res, nil
 }
