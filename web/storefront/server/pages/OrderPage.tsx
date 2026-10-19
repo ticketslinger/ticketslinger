@@ -55,7 +55,8 @@ export function sentNotice(sent: Sent, email: string): string {
   if (sent === "soon") {
     return "We tried sending these less than 10 minutes ago. Wait until it's been 10 minutes, then try again.";
   }
-  return "We're still sending the last one. It'll get there; give it a few minutes.";
+  // Queued or failing: still trying, with no promise it lands.
+  return "We're still trying to send the latest one. Give it a little while, then check your spam folder too.";
 }
 
 export function OrderPage({ order, token, sent }: { order: Order; token: string; sent?: Sent }) {

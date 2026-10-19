@@ -1378,6 +1378,7 @@ test("the PDF link passes the API's PDF through, privately", async () => {
       new Response(pdf, {
         headers: {
           "content-type": "application/pdf",
+          "content-length": String(pdf.length),
           "content-disposition": 'attachment; filename="tickets-TS-7K2QF.pdf"',
           "cache-control": "no-store",
         },
@@ -1393,6 +1394,7 @@ test("the PDF link passes the API's PDF through, privately", async () => {
   );
   expect(res.headers.get("cache-control")).toBe("no-store");
   expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+  expect(res.headers.get("content-length")).toBe(String(pdf.length));
   expect(await res.text()).toBe(pdf);
   const url = new URL(calls[0].url);
   expect(url.pathname).toBe("/v1/orders/TS-7K2QF/tickets.pdf");
@@ -1401,7 +1403,6 @@ test("the PDF link passes the API's PDF through, privately", async () => {
 
   for (const [api, path] of [
     [() => apiError(404, "not_found"), `/orders/TS-7K2QF/tickets.pdf?t=${TOK}`],
-    [() => apiError(409, "no_tickets"), `/orders/TS-7K2QF/tickets.pdf?t=${TOK}`],
     [() => Response.json({}), "/orders/TS-7K2QF/tickets.pdf"],
   ] as [Api, string][]) {
     const r = await app(api).a.request(path);
@@ -1409,6 +1410,31 @@ test("the PDF link passes the API's PDF through, privately", async () => {
     expect(r.headers.get("content-type")).toContain("text/html");
     expect(r.headers.get("referrer-policy")).toBe("no-referrer");
     expect(await r.text()).toContain("That link doesn't open an order.");
+  }
+
+  // No valid ticket left: back to the order page, which says why.
+  const none = await app(() => apiError(409, "no_tickets")).a.request(
+    `/orders/TS-7K2QF/tickets.pdf?t=${TOK}`,
+  );
+  expect(none.status).toBe(303);
+  expect(none.headers.get("location")).toBe(`/orders/TS-7K2QF?t=${TOK}`);
+
+  // No length, or more than 20 MB: refused, and none of the body goes out.
+  for (const length of [null, String(20 * 1024 * 1024 + 1)]) {
+    const headers: Record<string, string> = { "content-type": "application/pdf" };
+    if (length) headers["content-length"] = length;
+    const body = new ReadableStream({
+      start(ctl) {
+        ctl.enqueue(new TextEncoder().encode(pdf));
+        ctl.close();
+      },
+    });
+    const r = await app(() => new Response(body, { headers })).a.request(
+      `/orders/TS-7K2QF/tickets.pdf?t=${TOK}`,
+    );
+    expect(r.status).toBe(502);
+    expect(r.headers.get("content-type")).toContain("text/html");
+    expect(await r.text()).not.toContain(pdf);
   }
 });
 
@@ -1452,7 +1478,7 @@ test("asking for the email again answers on the order page", async () => {
     "We tried sending these less than 10 minutes ago. Wait until it's been 10 minutes, then try again.",
   );
   expect(await notice("pending")).toContain(
-    "We're still sending the last one. It'll get there; give it a few minutes.",
+    "We're still trying to send the latest one. Give it a little while, then check your spam folder too.",
   );
   expect(await notice("other")).not.toContain('role="status"');
 });

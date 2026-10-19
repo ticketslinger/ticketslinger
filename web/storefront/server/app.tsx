@@ -36,6 +36,8 @@ type ApiError = components["schemas"]["Error"]["error"];
 const MAX_BODY = 64 * 1024;
 // The island's pay request: up to 100 tickets' answers, each up to 1,000 characters.
 const MAX_JSON = 1024 * 1024;
+// The most PDF the order page passes through from the API.
+const MAX_PDF = 20 * 1024 * 1024;
 
 // First URL segments the storefront keeps for itself. The API refuses them as organizer slugs.
 const RESERVED = new Set(["checkout", "orders", "assets", "api", "healthz"]);
@@ -425,12 +427,22 @@ export function createApp(opts: StorefrontOptions): Hono {
     if (!r) return trouble(c);
     const status = r.response.status;
     if (status === 200 && r.data) {
+      // A PDF of 100 tickets is well under a megabyte: no length, or a huge one, isn't ours.
+      const length = Number(r.response.headers.get("content-length") ?? NaN);
+      if (!(length >= 0 && length <= MAX_PDF)) {
+        await r.data.cancel().catch(() => {});
+        return trouble(c);
+      }
       const h = new Headers({ "cache-control": "no-store" });
       for (const k of ["content-type", "content-disposition", "content-length"]) {
         const v = r.response.headers.get(k);
         if (v) h.set(k, v);
       }
       return new Response(r.data, { status: 200, headers: h });
+    }
+    // Nothing valid left: the order page says why, and no longer offers the PDF.
+    if (status === 409 && r.error?.error.code === "no_tickets") {
+      return c.redirect(`/orders/${code}?t=${encodeURIComponent(t)}`, 303);
     }
     if (status === 429) return trouble(c, 429, SLOW_DOWN);
     if (status >= 500) return trouble(c);

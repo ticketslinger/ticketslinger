@@ -88,7 +88,7 @@ test("an organizer connects Stripe, a buyer pays on a phone, and the order shows
   // Straight after the sale, the first email is either still going or less than 10 minutes old.
   await expect(
     shop
-      .getByText("We're still sending the last one.")
+      .getByText("We're still trying to send the latest one.")
       .or(shop.getByText("We tried sending these less than 10 minutes ago.")),
   ).toBeVisible();
 
