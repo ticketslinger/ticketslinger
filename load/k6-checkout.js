@@ -6,6 +6,10 @@ import http from "k6/http";
 import { Counter } from "k6/metrics";
 
 const BASE = __ENV.BASE;
+// The load instance and nothing else: production's API is on 127.0.0.1:3000.
+if (BASE !== "http://127.0.0.1:3100") {
+  throw new Error("BASE must be the load instance, http://127.0.0.1:3100");
+}
 const held = new Counter("held");
 const soldOut = new Counter("sold_out");
 
@@ -33,6 +37,8 @@ export const options = {
     "http_req_duration{name:hold}": ["p(95)<150"],
     "http_req_duration{name:read}": ["p(95)<50"],
     checks: ["rate==1"],
+    // Every planned request was sent: a dropped one would hide latency.
+    dropped_iterations: ["count==0"],
   },
 };
 

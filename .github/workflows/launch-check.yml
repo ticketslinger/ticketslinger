@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       event_url:
-        description: "A live event page, e.g. https://tickets.ticketslinger.com/<organizer>/<event>"
+        description: "A live event page, on https://tickets.ticketslinger.com/<organizer>/<event>"
         required: true
         type: string
 permissions:
@@ -27,7 +27,7 @@ jobs:
       - run: cd e2e && bunx playwright install --with-deps chromium
       # The URL reaches the shell only as an env var, never inside run:.
       - run: |
-          case "$PERF_EVENT_URL" in https://*) ;; *) echo "event_url must be an https:// event page"; exit 1;; esac
+          case "$PERF_EVENT_URL" in https://tickets.ticketslinger.com/*) ;; *) echo "event_url must be an event page on https://tickets.ticketslinger.com/"; exit 1;; esac
           cd e2e && bunx playwright test perf.spec.ts
         env:
           PERF_EVENT_URL: ${{ inputs.event_url }}
