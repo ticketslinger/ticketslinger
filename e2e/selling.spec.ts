@@ -1,5 +1,12 @@
-import { devices, expect, test } from "@playwright/test";
-import { API, createSellableEvent, signUpWithPasskey, virtualAuthenticator } from "./helpers";
+import { readFileSync, rmSync } from "node:fs";
+import { type Browser, devices, expect, test } from "@playwright/test";
+import {
+  API,
+  cameraShowing,
+  createSellableEvent,
+  signUpWithPasskey,
+  virtualAuthenticator,
+} from "./helpers";
 
 const SHOP = "http://localhost:3003";
 
@@ -8,6 +15,8 @@ test("an organizer connects Stripe, a buyer pays on a phone, and the order shows
   context,
   browser,
 }) => {
+  // Three camera scans at the door ride on top of the sale.
+  test.slow();
   await virtualAuthenticator(page, context);
   const stamp = Date.now();
   await signUpWithPasskey(page, "Olive", `e2e-sell-${stamp}@example.com`);
@@ -81,6 +90,28 @@ test("an organizer connects Stripe, a buyer pays on a phone, and the order shows
   await expect(shop.locator("img.qr")).toHaveCount(2);
   await expect(shop.locator("img.qr").first()).toBeVisible();
   await expect(shop.locator("img.qr").last()).toBeVisible();
+  // Ada's code, as a phone held up to the door would show it.
+  // Chrome's fake camera on Linux plays a JPEG with an odd side as a black 2×2 frame,
+  // so the picture is clipped to even CSS pixels at one pixel each.
+  const ada = shop.locator("img.qr").first();
+  // A half-loaded image would hand the camera a blank or partial code.
+  await expect(ada).toHaveJSProperty("complete", true);
+  expect(await ada.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
+  await ada.scrollIntoViewIfNeeded();
+  const box = await ada.boundingBox();
+  if (!box) throw new Error("Ada's QR code has no box");
+  const even = (n: number) => Math.ceil(n / 2) * 2;
+  const qr = await shop.screenshot({
+    type: "jpeg",
+    quality: 95,
+    scale: "css",
+    clip: {
+      x: Math.floor(box.x),
+      y: Math.floor(box.y),
+      width: even(box.x + box.width - Math.floor(box.x)),
+      height: even(box.y + box.height - Math.floor(box.y)),
+    },
+  });
   const download = shop.waitForEvent("download");
   await shop.getByRole("link", { name: "Download all tickets (PDF)" }).click();
   expect((await download).suggestedFilename()).toBe(`tickets-${code}.pdf`);
@@ -112,4 +143,63 @@ test("an organizer connects Stripe, a buyer pays on a phone, and the order shows
   await page.getByRole("link", { name: "Spring Social" }).click();
   await page.getByRole("link", { name: "Orders" }).click();
   await expect(page.getByText("2 orders · 3 tickets · $46.90 in sales")).toBeVisible();
+
+  // The owner downloads the orders as a spreadsheet.
+  await page.getByRole("link", { name: "Report" }).click();
+  const csv = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download orders (CSV)" }).click();
+  const header = readFileSync(await (await csv).path(), "utf8").split(/\r?\n/)[0];
+  expect(header).toContain("Tickets bought");
+  expect(header).toContain("Fee paid by");
+
+  // At the door, a phone's camera sees Ada's ticket: green, then amber when it's shown again.
+  // The picture is a ticket credential: it goes once the scans are done, never into the report.
+  const qrFile = test.info().outputPath("qr.mjpeg");
+  const staff = {
+    ...devices["Pixel 7"],
+    permissions: ["camera"],
+    baseURL: test.info().project.use.baseURL,
+  };
+  const cookies = await context.cookies();
+  const scanAt = async (noNativeReader: boolean) => {
+    if (!door) throw new Error("No door camera");
+    const phone = await door.newContext(staff);
+    await phone.addCookies(cookies);
+    const p = await phone.newPage();
+    // Without the browser's own reader, the scanner falls back to our zxing-wasm under the CSP.
+    if (noNativeReader)
+      await p.addInitScript(() => {
+        delete (globalThis as { BarcodeDetector?: unknown }).BarcodeDetector;
+      });
+    await p.goto(`/o/${slug}`);
+    await p.getByRole("link", { name: "Spring Social" }).click();
+    await p.getByRole("link", { name: "Check-in" }).click();
+    await p.getByRole("button", { name: "Start scanning" }).click();
+    return { phone, p };
+  };
+  let door: Browser | undefined;
+  try {
+    door = await cameraShowing(qr, qrFile);
+    const { phone, p } = await scanAt(false);
+    // Green lasts 2.5 s, so its heading and Ada's name are checked together in one look.
+    await expect(p.getByRole("region", { name: "Welcome in" })).toContainText("Ada · General", {
+      timeout: 10_000,
+    });
+    // The frame keeps playing: green clears at 2.5 s, the repeat guard lets go at 3 s.
+    await expect(p.getByRole("heading", { name: "Already checked in" })).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(p.getByText("1 of 3 checked in")).toBeVisible();
+    await phone.close();
+
+    const fallback = await scanAt(true);
+    expect(await fallback.p.evaluate(() => "BarcodeDetector" in globalThis)).toBe(false);
+    await expect(fallback.p.getByRole("heading", { name: "Already checked in" })).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(fallback.p.getByText("1 of 3 checked in")).toBeVisible();
+  } finally {
+    await door?.close();
+    rmSync(qrFile, { force: true });
+  }
 });

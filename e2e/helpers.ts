@@ -1,4 +1,5 @@
-import { type BrowserContext, expect, type Page } from "@playwright/test";
+import { writeFileSync } from "node:fs";
+import { type Browser, type BrowserContext, chromium, expect, type Page } from "@playwright/test";
 
 export const API = process.env.E2E_API ?? "http://127.0.0.1:3001";
 export const PASSWORD = "a long test passphrase";
@@ -15,6 +16,21 @@ export async function virtualAuthenticator(page: Page, context: BrowserContext) 
       hasUserVerification: true,
       isUserVerified: true,
     },
+  });
+}
+
+/**
+ * A browser whose camera shows one picture: `jpeg` written to `file` as a one-frame MJPEG,
+ * which Chrome's fake capture device plays on a loop.
+ */
+export async function cameraShowing(jpeg: Buffer, file: string): Promise<Browser> {
+  writeFileSync(file, jpeg);
+  return chromium.launch({
+    args: [
+      "--use-fake-ui-for-media-stream",
+      "--use-fake-device-for-media-stream",
+      `--use-file-for-fake-video-capture=${file}`,
+    ],
   });
 }
 

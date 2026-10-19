@@ -157,14 +157,17 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
     }
   }
 
-  /** Runs one send (or retry) and shows what came of it. Dropped while another is in flight. */
-  async function settle(go: () => Promise<Outcome | null>) {
-    if (sender.busy) return;
+  /**
+   * Runs one send (or retry) and shows what came of it. Dropped while another is in flight;
+   * says whether it went.
+   */
+  async function settle(go: () => Promise<Outcome | null>): Promise<boolean> {
+    if (sender.busy) return false;
     setError("");
     setSending(true);
     const out = await go();
     setSending(false);
-    if (!out) return;
+    if (!out) return false;
     if (out.kind === "result") {
       setCounts({ checked_in: out.result.checked_in, sold: out.result.sold });
       show(viewFor(out.result, zoneRef.current));
@@ -179,6 +182,7 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
     } else {
       setError(out.message);
     }
+    return true;
   }
 
   async function start() {
@@ -216,6 +220,8 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
     stream.current = s;
     v.srcObject = s;
     await v.play().catch(() => {});
+    // Stopped, or the page closed, while the video started: those tracks are already off.
+    if (stream.current !== s) return;
     setScanning(true);
     setStarting(false);
     loop(v, s, detector.current);
@@ -245,10 +251,11 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
           !showing.current &&
           shouldSend(value, last.current, now)
         ) {
-          last.current = { value, at: now };
-          await settle(() => sender.send({ qr: value }));
-          // The quiet spell starts when the result arrives.
-          if (last.current?.value === value) last.current.at = Date.now();
+          // The quiet spell starts when the result arrives, and only if this scan was sent:
+          // one dropped behind a check-in by name must not hold the ticket back for 3 seconds.
+          if (await settle(() => sender.send({ qr: value }))) {
+            last.current = { value, at: Date.now() };
+          }
         }
       }
       setTimeout(tick, 150);
