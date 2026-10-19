@@ -13,6 +13,7 @@ test("audit actions read as plain words", () => {
   expect(say("refund.succeeded_late")).toBe("Refund went through after all");
   expect(say("refund.fee_stuck")).toBe("Refund stuck on our fee");
   expect(say("refund.retried")).toBe("Refund sent again");
+  expect(say("order.email_resent")).toBe("Order ticket email sent again");
   expect(say("order.refunded")).toBe("Order refunded");
   expect(say("event.cancelled")).toBe("Event cancelled");
   expect(say("order.cancelled")).toBe("Order cancelled");

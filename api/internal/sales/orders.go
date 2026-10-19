@@ -103,6 +103,7 @@ type OrderSummary struct {
 	RefundedCents, FeeRefundedCents int64
 	CreatedAt                       time.Time
 	PaidAt                          *time.Time
+	Mail                            MailState
 }
 
 // orderSummarySelect lists the orders of event $1 that took money or were
@@ -111,14 +112,15 @@ const orderSummarySelect = `select o.id, o.code, o.email::text, o.status,
 		(select count(*) from tickets t where t.order_id = o.id and t.status = 'valid'),
 		o.total_cents, o.fee_cents, o.fee_mode, o.created_at, o.paid_at,
 		coalesce((select sum(r.amount_cents) from refunds r join payments p on p.id = r.payment_id where p.order_id = o.id and r.status <> 'failed'), 0),
-		coalesce((select sum(r.fee_cents) from refunds r join payments p on p.id = r.payment_id where p.order_id = o.id and r.fee_refunded_at is not null), 0)
+		coalesce((select sum(r.fee_cents) from refunds r join payments p on p.id = r.payment_id where p.order_id = o.id and r.fee_refunded_at is not null), 0),
+		o.mail_status, o.mail_problem, o.mail_attempts, o.mail_updated_at
 	from orders o
 	where o.event_id = $1 and o.status <> 'pending'
 	  and (o.paid_at is not null or exists (select 1 from payments p where p.order_id = o.id and p.status = 'succeeded'))`
 
 func scanOrderSummary(r pgx.CollectableRow) (o OrderSummary, err error) {
 	err = r.Scan(&o.ID, &o.Code, &o.Email, &o.Status, &o.TicketCount, &o.TotalCents, &o.FeeCents, &o.FeeMode, &o.CreatedAt, &o.PaidAt,
-		&o.RefundedCents, &o.FeeRefundedCents)
+		&o.RefundedCents, &o.FeeRefundedCents, &o.Mail.Status, &o.Mail.Problem, &o.Mail.Attempts, &o.Mail.UpdatedAt)
 	return o, err
 }
 

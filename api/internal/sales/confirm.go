@@ -31,8 +31,9 @@ import (
 // read after the quota locks. Sellable: cut tickets from orders.quote (16 random bytes each), write
 // answers and attendee names from orders.details, used_count + 1 on the
 // promo, delete the holds, checkout completed, order paid with paid_at and
-// magic_token_hash = sha256(orderToken(...)), and an order_confirmation job
-// that names the order (never the link: see OrderConfirmation). An order that
+// magic_token_hash = sha256(orderToken(...)), and its ticket email queued
+// (queue_order_email: mail_status queued and an order_confirmation job that
+// names the order, never the link: see OrderConfirmation). An order that
 // isn't pending is a no-op.
 //
 // Not sellable any more (unsellable says why): a free order returns the
@@ -110,7 +111,7 @@ func (s *Service) confirmOrder(ctx context.Context, tx pgx.Tx, org, orderID uuid
 	if err := s.settle(ctx, tx, orderID, "paid"); err != nil {
 		return false, err
 	}
-	return true, jobs.Enqueue(ctx, tx, OrderConfirmationJob, confirmation{Order: orderID, Organizer: org})
+	return true, queueTicketEmail(ctx, tx, orderID)
 }
 
 // unsellable is why a pending order can't become tickets: reason for the
@@ -294,8 +295,9 @@ type confirmation struct {
 // its valid tickets as ts_system for the named organizer and sends outside
 // the transaction. An order that is gone or not paid sends nothing, and so
 // does one with no valid ticket left: there's nothing to bring to the door,
-// and the refund email already told the buyer why. Delivery is at least
-// once, as for every job.
+// and the refund email already told the buyer why. Either way its mail
+// status goes back to none (nothingToSend). After a send it records how it
+// went (recordSend). Delivery is at least once, as for every job.
 func (s *Service) OrderConfirmation(m mailer.Mailer) jobs.Handler {
 	return func(ctx context.Context, payload []byte) error {
 		var c confirmation
@@ -307,27 +309,33 @@ func (s *Service) OrderConfirmation(m mailer.Mailer) jobs.Handler {
 		var starts time.Time
 		var version int
 		err := system.Run(ctx, s.Pool, c.Organizer, func(tx pgx.Tx) error {
-			if err := tx.QueryRow(ctx, `select o.email::text, o.code, e.name, e.timezone, e.starts_at, e.venue_name, g.name, g.slug, e.slug, o.link_version
+			err := tx.QueryRow(ctx, `select o.email::text, o.code, e.name, e.timezone, e.starts_at, e.venue_name, g.name, g.slug, e.slug, o.link_version
 				from orders o join events e on e.id = o.event_id join organizers g on g.id = o.organizer_id
 				where o.id = $1 and o.status in ('paid', 'partially_refunded')`, c.Order).
-				Scan(&d.To, &d.Code, &d.Event, &zone, &starts, &d.Venue, &d.Organizer, &orgSlug, &eventSlug, &version); err != nil {
+				Scan(&d.To, &d.Code, &d.Event, &zone, &starts, &d.Venue, &d.Organizer, &orgSlug, &eventSlug, &version)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nothingToSend(ctx, tx, c.Order)
+			}
+			if err != nil {
 				return err
 			}
 			rows, _ := tx.Query(ctx, `select tt.name, t.attendee_name, t.secret from tickets t join ticket_types tt on tt.id = t.ticket_type_id
 				where t.order_id = $1 and t.status = 'valid' order by t.id`, c.Order)
 			var t emails.Ticket
 			var secret []byte
-			_, err := pgx.ForEachRow(rows, []any{&t.Type, &t.Attendee, &secret}, func() error {
+			if _, err := pgx.ForEachRow(rows, []any{&t.Type, &t.Attendee, &secret}, func() error {
 				t.QR = base64.RawURLEncoding.EncodeToString(secret)
 				d.Tickets = append(d.Tickets, t)
 				return nil
-			})
-			return err
-		})
-		if errors.Is(err, pgx.ErrNoRows) || err == nil && len(d.Tickets) == 0 {
+			}); err != nil {
+				return err
+			}
+			if len(d.Tickets) == 0 {
+				return nothingToSend(ctx, tx, c.Order)
+			}
 			return nil
-		}
-		if err != nil {
+		})
+		if err != nil || len(d.Tickets) == 0 {
 			return err
 		}
 		base := strings.TrimRight(s.StorefrontURL, "/")
@@ -338,6 +346,12 @@ func (s *Service) OrderConfirmation(m mailer.Mailer) jobs.Handler {
 		if err != nil {
 			return err
 		}
-		return jobs.Deliver(ctx, m, msg)
+		sendErr := jobs.Deliver(ctx, m, msg)
+		if err := s.recordSend(ctx, c, sendErr); err != nil {
+			// The idempotency key makes the retry the same email; a failed
+			// send keeps its own error, so a Permanent one still parks.
+			return errors.Join(sendErr, err)
+		}
+		return sendErr
 	}
 }

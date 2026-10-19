@@ -91,8 +91,8 @@ type Worker struct {
 	Handlers map[string]Handler
 	// Parked is told about each job the queue gives up on, by kind: after
 	// MaxAttempts failures, or after its worker crashed MaxAttempts times.
-	// The cause is the last error. Runs outside any transaction; it must not
-	// fail the queue.
+	// The cause is the last error, and Attempt(ctx) the runs it had. Runs
+	// outside any transaction; it must not fail the queue.
 	Parked map[string]func(ctx context.Context, payload []byte, cause string)
 	Poll   time.Duration // default 1s
 }
@@ -161,14 +161,15 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		// A job that crashed its worker ten times is poison: park it.
 		const crashed = "gave up after a crash"
 		rows, _ := w.Pool.Query(ctx, `update jobs set run_at = 'infinity', locked_until = null, last_error = $1
-			where attempts >= 10 and run_at <> 'infinity' and locked_until < now() returning kind, payload`, crashed)
+			where attempts >= 10 and run_at <> 'infinity' and locked_until < now() returning kind, payload, attempts`, crashed)
 		// Collected first, so the update has committed before any hook runs.
 		parked, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
-			Kind    string
-			Payload []byte
+			Kind     string
+			Payload  []byte
+			Attempts int
 		}])
 		for _, p := range parked {
-			w.park(ctx, p.Kind, p.Payload, crashed)
+			w.park(ctx, p.Kind, p.Payload, crashed, p.Attempts)
 		}
 		return false, err
 	}
@@ -185,7 +186,7 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		slog.ErrorContext(ctx, "jobs: failed for good", "kind", kind, "id", id, "attempt", attempts, "parked", true, "err", herr)
 		_, err = w.Pool.Exec(rec, `update jobs set attempts = $3, run_at = 'infinity', last_error = left($2, 2000), locked_until = null where id = $1`, id, herr.Error(), MaxAttempts)
 		if err == nil {
-			w.park(rec, kind, payload, herr.Error())
+			w.park(rec, kind, payload, herr.Error(), attempts)
 		}
 	} else if del := (delayError{}); errors.As(herr, &del) && w.delay(rec, id, del.until, herr.Error(), &err) {
 		slog.WarnContext(ctx, "jobs: delayed", "kind", kind, "id", id, "attempt", attempts, "err", herr)
@@ -197,7 +198,7 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		log(ctx, "jobs: failed", "kind", kind, "id", id, "attempt", attempts, "parked", attempts >= MaxAttempts, "err", herr)
 		_, err = w.Pool.Exec(rec, fail, id, herr.Error())
 		if err == nil && attempts >= MaxAttempts {
-			w.park(rec, kind, payload, herr.Error())
+			w.park(rec, kind, payload, herr.Error(), attempts)
 		}
 	} else {
 		_, err = w.Pool.Exec(rec, `delete from jobs where id = $1`, id)
@@ -217,10 +218,11 @@ func (w *Worker) delay(ctx context.Context, id string, until time.Time, cause st
 	return e != nil || tag.RowsAffected() == 1
 }
 
-// park tells kind's Parked hook, if it has one, that the queue gave up.
-func (w *Worker) park(ctx context.Context, kind string, payload []byte, cause string) {
+// park tells kind's Parked hook, if it has one, that the queue gave up
+// after attempts runs.
+func (w *Worker) park(ctx context.Context, kind string, payload []byte, cause string, attempts int) {
 	if hook := w.Parked[kind]; hook != nil {
-		hook(ctx, payload, cause)
+		hook(context.WithValue(ctx, attemptKey{}, attempts), payload, cause)
 	}
 }
 

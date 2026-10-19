@@ -600,6 +600,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/events/{event}/orders/{order}/email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Owners and admins, or a write API key. Sends the order's ticket email again: the same tickets and the same order link, to the address the buyer gave. It goes out from the queue, so this answers 202 with ticket_email queued; the order shows how it went. 409 email_on_its_way while the last one is still queued or being retried. 409 too_soon within 10 minutes of the last time it was asked for (by you, by the buyer, or by the sale itself). 409 no_tickets when the order has no valid ticket left. */
+        post: operations["resendTicketEmail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/events/{event}/cancel": {
         parameters: {
             query?: never;
@@ -1151,6 +1168,24 @@ export interface components {
              * @description How much of our fee has gone back so far (counted once Stripe has returned it).
              */
             fee_refunded_cents: number;
+            ticket_email: components["schemas"]["OrderEmail"];
+        };
+        /** @description How the order's ticket email is getting on. */
+        OrderEmail: {
+            /**
+             * @description null: no ticket email yet. queued: waiting to go. sent: the mail service took it. failing: it hasn't gone yet and we're still trying. gave_up: we stopped trying. delivered: it reached the buyer's mail server. bounced: that server turned it away. complained: delivered, then the buyer marked it as spam.
+             * @enum {string|null}
+             */
+            status: "queued" | "sent" | "failing" | "gave_up" | "delivered" | "bounced" | "complained" | null;
+            /**
+             * @description The last thing that went wrong: rate_limited (the mail service asked us to slow down), quota (we hit our sending limit), refused (the mail service turned the message down), unreachable (we couldn't reach it), bad_address (the address can't take mail), config (our mail settings need fixing).
+             * @enum {string|null}
+             */
+            problem: "rate_limited" | "quota" | "refused" | "unreachable" | "bad_address" | "config" | null;
+            /** @description How many times we've tried to send this one. */
+            attempts: number;
+            /** Format: date-time */
+            updated_at: string | null;
         };
         OrderDetail: components["schemas"]["OrderSummary"] & {
             tickets: components["schemas"]["OrderDetailTicket"][];
@@ -3053,6 +3088,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Refund"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    resendTicketEmail: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderEmail"];
                 };
             };
             400: components["responses"]["Error"];

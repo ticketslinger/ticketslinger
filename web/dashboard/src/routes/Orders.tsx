@@ -31,6 +31,16 @@ export function summarize(orders: OrderSummary[]) {
   return sum;
 }
 
+const EMAIL_TAG: Partial<Record<NonNullable<OrderSummary["ticket_email"]["status"]>, string>> = {
+  failing: "Email failing",
+  gave_up: "Email not sent",
+  bounced: "Email bounced",
+};
+
+/** The tag an order gets when its ticket email didn't get through; null otherwise. */
+export const emailTag = (o: OrderSummary) =>
+  (o.ticket_email.status && EMAIL_TAG[o.ticket_email.status]) ?? null;
+
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 export function Orders({ org, event }: { org: Org; event: Event }) {
@@ -86,6 +96,12 @@ export function Orders({ org, event }: { org: Org; event: Event }) {
                     <td>{formatCents(o.total_cents)}</td>
                     <td>
                       <span className={`pill ${o.status}`}>{STATUS[o.status]}</span>
+                      {emailTag(o) && (
+                        <>
+                          {" "}
+                          <span className="pill failed">{emailTag(o)}</span>
+                        </>
+                      )}
                     </td>
                     <td>{o.paid_at ? formatWhen(o.paid_at, event.timezone) : "—"}</td>
                   </tr>

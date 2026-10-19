@@ -22,6 +22,7 @@ const DONE: Record<string, string> = {
   reordered: "reordered",
   refunded: "refunded",
   retried: "sent again",
+  email_resent: "ticket email sent again",
   failed: "failed",
   cancelled: "cancelled",
   succeeded_late: "went through after all",

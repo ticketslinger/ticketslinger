@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { components } from "@ticketslinger/api-client";
-import { summarize } from "./Orders";
+import { emailTag, summarize } from "./Orders";
 
 type OrderSummary = components["schemas"]["OrderSummary"];
 
@@ -36,4 +36,15 @@ test("summary: gross, refunds, our fee and net, in cents", () => {
     netCents: 7500,
   });
   expect(summarize([]).netCents).toBe(0);
+});
+
+test("the list tags orders whose ticket email didn't get through", () => {
+  const o = (status: OrderSummary["ticket_email"]["status"]) =>
+    ({ ticket_email: { status, problem: null, attempts: 1, updated_at: null } }) as OrderSummary;
+  expect(emailTag(o("failing"))).toBe("Email failing");
+  expect(emailTag(o("gave_up"))).toBe("Email not sent");
+  expect(emailTag(o("bounced"))).toBe("Email bounced");
+  for (const s of ["queued", "sent", "delivered", "complained", null] as const) {
+    expect(emailTag(o(s))).toBeNull();
+  }
 });
