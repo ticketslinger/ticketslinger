@@ -1,19 +1,20 @@
 import type { components } from "@ticketslinger/api-client";
 import { useEffect, useRef, useState } from "react";
 import { ApiFailure, api, must } from "../api";
-import { withKey } from "../idempotency";
 import { createDetector, type Detect } from "../scan/detector";
 import { clock, shouldSend, type View, viewFor } from "../scan/result";
+import { createSender, type Outcome } from "../scan/sender";
 import { ErrorText, Link, useLoad } from "../ui";
 import { eventTabs } from "./Events";
 import type { Org } from "./Organizer";
 
 type Ticket = components["schemas"]["CheckinTicket"];
-type Body = components["schemas"]["CreateCheckin"];
 
 const REFUSED =
   "We can't use your camera. Allow it for this site in your browser settings, or find guests by name below.";
 const NO_CAMERA = "This device has no camera we can use. Find guests by name below.";
+const NO_DECODER =
+  "The scanner didn't load. Tap Start scanning to try again, or find guests by name below.";
 const OFFLINE = "We couldn't reach TicketSlinger. Check your connection and try again.";
 
 const ICON: Record<View["tone"], string> = { green: "✓", amber: "!", red: "✕", grey: "↻" };
@@ -44,23 +45,32 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
   const [counts, setCounts] = useState<{ checked_in: number; sold: number }>();
   const [scanning, setScanning] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [sending, setSending] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const [error, setError] = useState("");
   const [wait, setWait] = useState("");
   const [view, setView] = useState<View | null>(null);
+  // The page is keyed by path, so organizer and event never change under it.
+  const [sender] = useState(() =>
+    createSender((body, k) =>
+      api.POST("/organizers/{organizer}/events/{event}/checkins", {
+        params: { path, header: { "Idempotency-Key": k } },
+        body,
+      }),
+    ),
+  );
 
   const video = useRef<HTMLVideoElement>(null);
   const stream = useRef<MediaStream | null>(null);
+  const detector = useRef<Detect | null>(null);
   const audio = useRef<AudioContext | null>(null);
   const resultButton = useRef<HTMLButtonElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
+  const waitTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   // The scan loop reads these between renders.
-  const busy = useRef(false);
   const showing = useRef(false);
   const last = useRef<{ value: string; at: number } | null>(null);
   const waitUntil = useRef(0);
-  const key = useRef<string | null>(null);
-  const pending = useRef<Body | null>(null);
   const zoneRef = useRef(zone);
   zoneRef.current = zone;
 
@@ -77,14 +87,19 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
     return () => clearInterval(t);
   }, [org.slug, id]);
 
-  // Leaving the page turns the camera and the sound off.
-  useEffect(
-    () => () => {
+  // Leaving the page, or the tab, turns the camera off; leaving the page also stops the sound.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: stop reads only refs and state setters
+  useEffect(() => {
+    const hidden = () => document.visibilityState === "hidden" && stop();
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      document.removeEventListener("visibilitychange", hidden);
       for (const t of stream.current?.getTracks() ?? []) t.stop();
+      stream.current = null;
+      clearTimeout(waitTimer.current);
       audio.current?.close().catch(() => {});
-    },
-    [],
-  );
+    };
+  }, []);
 
   // Green clears itself; anything that needs a decision takes focus.
   // biome-ignore lint/correctness/useExhaustiveDependencies: dismiss reads only refs and a state setter
@@ -98,6 +113,13 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
     const t = setTimeout(dismiss, view.autoDismissMs);
     return () => clearTimeout(t);
   }, [view]);
+
+  function stop() {
+    for (const t of stream.current?.getTracks() ?? []) t.stop();
+    stream.current = null;
+    setScanning(false);
+    setStarting(false);
+  }
 
   function dismiss() {
     if (last.current) last.current = { ...last.current, at: Date.now() };
@@ -135,39 +157,27 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
     }
   }
 
-  /** Sends one check-in. A fresh scan gets a fresh key; "Try again" reuses it. */
-  async function send(body: Body, fresh: boolean) {
-    if (fresh) key.current = null;
-    pending.current = body;
-    busy.current = true;
+  /** Runs one send (or retry) and shows what came of it. Dropped while another is in flight. */
+  async function settle(go: () => Promise<Outcome | null>) {
+    if (sender.busy) return;
     setError("");
-    let retryAfter = 0;
-    try {
-      const r = await withKey(key, async (k) => {
-        const res = await api.POST("/organizers/{organizer}/events/{event}/checkins", {
-          params: { path, header: { "Idempotency-Key": k } },
-          body,
-        });
-        retryAfter = Number(res.response.headers.get("Retry-After")) || 0;
-        return must(res);
-      });
-      setCounts({ checked_in: r.checked_in, sold: r.sold });
-      show(viewFor(r, zoneRef.current));
-    } catch (e) {
-      if (e instanceof ApiFailure && e.status === 429) {
-        // Too many scans: a short pause, not a red screen.
-        const ms = Math.min(retryAfter || 5, 60) * 1000;
-        waitUntil.current = Date.now() + ms;
-        setWait(e.message);
-        setTimeout(() => setWait(""), ms);
-      } else if (!(e instanceof ApiFailure) || e.status === 0 || e.status >= 500) {
-        show(viewFor("network", zoneRef.current));
-      } else {
-        setError(e.message);
-      }
-    } finally {
-      busy.current = false;
-      if (body.qr && last.current?.value === body.qr) last.current.at = Date.now();
+    setSending(true);
+    const out = await go();
+    setSending(false);
+    if (!out) return;
+    if (out.kind === "result") {
+      setCounts({ checked_in: out.result.checked_in, sold: out.result.sold });
+      show(viewFor(out.result, zoneRef.current));
+    } else if (out.kind === "network") {
+      show(viewFor("network", zoneRef.current));
+    } else if (out.kind === "wait") {
+      // Too many check-ins: a short pause, not a red screen.
+      waitUntil.current = Date.now() + out.ms;
+      setWait(out.message);
+      clearTimeout(waitTimer.current);
+      waitTimer.current = setTimeout(() => setWait(""), out.ms);
+    } else {
+      setError(out.message);
     }
   }
 
@@ -176,6 +186,15 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
     setStarting(true);
     wakeAudio();
     setCameraError("");
+    setError("");
+    // The decoder first: no point lighting the camera if it can't be read.
+    try {
+      detector.current ??= await createDetector();
+    } catch {
+      setError(NO_DECODER);
+      setStarting(false);
+      return;
+    }
     let s: MediaStream;
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new DOMException("", "NotFoundError");
@@ -187,15 +206,9 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
       setStarting(false);
       return;
     }
-    let detect: Detect | null = null;
-    try {
-      detect = await createDetector();
-    } catch {
-      setError(OFFLINE);
-    }
     const v = video.current;
-    // The page may have closed while we waited for the camera or the decoder.
-    if (!detect || !v) {
+    // The page may have closed, or the tab gone to the background, while the camera was asked for.
+    if (!v || document.visibilityState === "hidden") {
       for (const t of s.getTracks()) t.stop();
       if (v) setStarting(false);
       return;
@@ -204,31 +217,38 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
     v.srcObject = s;
     await v.play().catch(() => {});
     setScanning(true);
-    loop(v, detect);
+    setStarting(false);
+    loop(v, s, detector.current);
   }
 
-  function loop(v: HTMLVideoElement, detect: Detect) {
+  function loop(v: HTMLVideoElement, s: MediaStream, detect: Detect) {
     const tick = async () => {
-      if (!v.isConnected || stream.current?.active === false) return;
+      // Stopped, restarted or left: this loop is done.
+      if (!v.isConnected || stream.current !== s) return;
       if (
-        !busy.current &&
+        !sender.busy &&
         !showing.current &&
         Date.now() >= waitUntil.current &&
         v.readyState >= 2
       ) {
-        busy.current = true;
         let values: string[] = [];
         try {
           values = await detect(v);
         } catch {
           // A frame that can't be read is just skipped.
         }
-        busy.current = false;
         const value = values[0];
         const now = Date.now();
-        if (value && !showing.current && shouldSend(value, last.current, now)) {
+        if (
+          value &&
+          stream.current === s &&
+          !showing.current &&
+          shouldSend(value, last.current, now)
+        ) {
           last.current = { value, at: now };
-          await send({ qr: value }, true);
+          await settle(() => sender.send({ qr: value }));
+          // The quiet spell starts when the result arrives.
+          if (last.current?.value === value) last.current.at = Date.now();
         }
       }
       setTimeout(tick, 150);
@@ -266,7 +286,14 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
         </p>
       )}
 
-      {!scanning && (
+      <p role="status" className={wait ? "notice" : undefined}>
+        {wait}
+      </p>
+      {scanning ? (
+        <button type="button" className="inline secondary" onClick={stop}>
+          Stop scanning
+        </button>
+      ) : (
         <button type="button" className="inline" disabled={starting} onClick={start}>
           Start scanning
         </button>
@@ -277,9 +304,6 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
         </p>
       )}
       <video ref={video} className="scan-video" muted playsInline hidden={!scanning} />
-      <p role="status" className="muted">
-        {wait}
-      </p>
       <ErrorText>{error}</ErrorText>
 
       <div aria-live="assertive" aria-atomic="true">
@@ -296,10 +320,8 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
                 className="scan-action"
                 ref={resultButton}
                 onClick={() => {
-                  if (view.tone === "grey" && pending.current) {
-                    setView(null);
-                    send(pending.current, false);
-                  } else dismiss();
+                  dismiss();
+                  if (view.tone === "grey") settle(() => sender.retry());
                 }}
               >
                 {view.action}
@@ -312,9 +334,10 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
       <GuestSearch
         path={path}
         zone={zone}
+        sending={sending}
         onCheckIn={async (ticketId) => {
           wakeAudio();
-          return send({ ticket_id: ticketId }, true);
+          await settle(() => sender.send({ ticket_id: ticketId }));
         }}
       />
     </>
@@ -324,10 +347,12 @@ export function Checkin({ org, id }: { org: Org; id: string }) {
 function GuestSearch({
   path,
   zone,
+  sending,
   onCheckIn,
 }: {
   path: { organizer: string; event: string };
   zone: string;
+  sending: boolean;
   onCheckIn: (ticketId: string) => Promise<void>;
 }) {
   const [q, setQ] = useState("");
@@ -341,6 +366,7 @@ function GuestSearch({
   useEffect(() => {
     if (query.length < 2) {
       setFound(null);
+      setError("");
       return;
     }
     let live = true;
@@ -348,7 +374,7 @@ function GuestSearch({
       try {
         const rows = must(
           await api.GET("/organizers/{organizer}/events/{event}/checkins/search", {
-            params: { path, query: { q } },
+            params: { path, query: { q: query } },
           }),
         );
         if (live) {
@@ -363,7 +389,7 @@ function GuestSearch({
       live = false;
       clearTimeout(t);
     };
-  }, [q, again, path.organizer, path.event]);
+  }, [query, again, path.organizer, path.event]);
 
   return (
     <section className="guest-search">
@@ -408,6 +434,7 @@ function GuestSearch({
                   <button
                     type="button"
                     className="inline"
+                    disabled={sending}
                     aria-describedby={`guest-${t.id}`}
                     onClick={async () => {
                       // This button goes once the guest is in; the search box is where they'll go next.
