@@ -36,9 +36,10 @@ type fakeSMTP struct {
 	tlsConfig *tls.Config
 	roots     *x509.CertPool
 
-	mu   sync.Mutex
-	cmds []string
-	data []byte
+	mu    sync.Mutex
+	cmds  []string // verbs
+	lines []string // whole command lines
+	data  []byte
 }
 
 func newFakeSMTP(t *testing.T, implicit, starttls bool, reply map[string]string) *fakeSMTP {
@@ -92,7 +93,7 @@ func (f *fakeSMTP) serve(c net.Conn) {
 		}
 		return def
 	}
-	say("220 fake ESMTP")
+	say(answer("GREETING", "220 fake ESMTP"))
 	for {
 		line, err := tp.ReadLine()
 		if err != nil {
@@ -101,10 +102,13 @@ func (f *fakeSMTP) serve(c net.Conn) {
 		verb := strings.ToUpper(strings.Fields(line + " x")[0])
 		f.mu.Lock()
 		f.cmds = append(f.cmds, verb)
+		f.lines = append(f.lines, line)
 		f.mu.Unlock()
 		switch verb {
-		case "EHLO":
-			if f.starttls && !secure {
+		case "EHLO", "HELO":
+			if r, ok := f.reply["EHLO"]; ok {
+				say(r)
+			} else if f.starttls && !secure {
 				say("250-fake\r\n250-STARTTLS\r\n250 AUTH PLAIN")
 			} else {
 				say("250-fake\r\n250 AUTH PLAIN")
@@ -140,6 +144,17 @@ func (f *fakeSMTP) serve(c net.Conn) {
 			say(answer(verb, "250 ok"))
 		}
 	}
+}
+
+func (f *fakeSMTP) line(verb string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, l := range f.lines {
+		if strings.HasPrefix(strings.ToUpper(l), verb) {
+			return l
+		}
+	}
+	return ""
 }
 
 func (f *fakeSMTP) got() ([]string, []byte) {
@@ -230,6 +245,9 @@ func TestSMTPSendsTheMessage(t *testing.T) {
 	if got := strings.Join(cmds, " "); got != "EHLO STARTTLS EHLO AUTH MAIL RCPT DATA QUIT" {
 		t.Fatalf("commands %q", got)
 	}
+	if l := f.line("EHLO"); l != "EHLO ticketslinger.com" {
+		t.Fatalf("greeted with %q, want the From address's domain", l)
+	}
 	msg, err := mail.ReadMessage(bytes.NewReader(data))
 	if err != nil {
 		t.Fatal(err)
@@ -238,7 +256,7 @@ func TestSMTPSendsTheMessage(t *testing.T) {
 	if err != nil || subject != "Your tickets for Gala ✨" {
 		t.Fatalf("subject %q %v", subject, err)
 	}
-	if msg.Header.Get("To") != "buyer@example.com" || msg.Header.Get("MIME-Version") != "1.0" || !strings.Contains(msg.Header.Get("From"), "<tickets@ticketslinger.com>") {
+	if msg.Header.Get("To") != "<buyer@example.com>" || msg.Header.Get("MIME-Version") != "1.0" || !strings.Contains(msg.Header.Get("From"), "<tickets@ticketslinger.com>") {
 		t.Fatalf("headers %v", msg.Header)
 	}
 	if id := msg.Header.Get("Message-Id"); !strings.HasSuffix(id, "@ticketslinger.com>") || len(id) != len("<@ticketslinger.com>")+32 {
@@ -344,6 +362,49 @@ func TestSMTPStripsHeaderInjection(t *testing.T) {
 	}
 }
 
+func TestSMTPQuotesARecipientsLocalPart(t *testing.T) {
+	f := newFakeSMTP(t, false, true, nil)
+	m := testMessage("Hi")
+	m.To = `"x, victim@other.com"@evil.test`
+	if err := f.client().Send(context.Background(), m); err != nil {
+		t.Fatal(err)
+	}
+	_, data := f.got()
+	msg, err := mail.ReadMessage(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := mail.ParseAddressList(msg.Header.Get("To"))
+	if err != nil || len(list) != 1 || list[0].Address != "x, victim@other.com@evil.test" {
+		t.Fatalf("To %q parsed as %v %v, want exactly the one address", msg.Header.Get("To"), list, err)
+	}
+	if l := f.line("RCPT"); l != `RCPT TO:<"x, victim@other.com"@evil.test>` {
+		t.Fatalf("RCPT line %q", l)
+	}
+}
+
+func TestSMTPFoldsALongSubject(t *testing.T) {
+	f := newFakeSMTP(t, false, true, nil)
+	subject := "Your tickets for " + strings.Repeat("✨", 160) // events.name is at most 160 characters
+	if err := f.client().Send(context.Background(), testMessage(subject)); err != nil {
+		t.Fatal(err)
+	}
+	_, data := f.got()
+	head, _, _ := strings.Cut(string(data), "\n\n")
+	for _, l := range strings.Split(head, "\n") {
+		if len(l) > 998 {
+			t.Fatalf("header line of %d characters", len(l))
+		}
+	}
+	msg, err := mail.ReadMessage(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, err := new(mime.WordDecoder).DecodeHeader(msg.Header.Get("Subject")); err != nil || s != subject {
+		t.Fatalf("subject %q %v", s, err)
+	}
+}
+
 func TestSMTPRefusesAMalformedRecipient(t *testing.T) {
 	f := newFakeSMTP(t, false, true, nil)
 	m := testMessage("Hi")
@@ -367,6 +428,9 @@ func TestSMTPMapsReplies(t *testing.T) {
 		{"RCPT", "553 5.1.3 bad address", Permanent, "553", "bad_address"},
 		{"BODY", "554 5.7.1 rejected as spam", Permanent, "554", "refused"},
 		{"MAIL", "451 4.3.0 try later", Retry, "451", "unreachable"},
+		{"GREETING", "554 5.7.1 no service for you", Retry, "554", "config"},
+		{"EHLO", "550 5.7.1 bad HELO name", Retry, "550", "config"},
+		{"MAIL", "550 5.7.1 sender not allowed", Retry, "550", "config"},
 		{"RCPT", "452 4.2.2 mailbox full", Retry, "452", "unreachable"},
 		{"AUTH", "535 5.7.8 bad credentials for relay hunter2-SECRET", Retry, "535", "config"},
 	} {
@@ -410,7 +474,7 @@ func TestSMTPMapsReplies(t *testing.T) {
 }
 
 func TestBuildMIMECollapsesMissingParts(t *testing.T) {
-	b := buildMIME("a@example.com", Message{To: "b@example.com", Subject: "Plain", Text: "hello"}, time.Unix(0, 0), "00ff")
+	b := buildMIME("a@example.com", &mail.Address{Address: "b@example.com"}, Message{Subject: "Plain", Text: "hello"}, time.Unix(0, 0), "00ff")
 	msg, err := mail.ReadMessage(bytes.NewReader(b))
 	if err != nil {
 		t.Fatal(err)

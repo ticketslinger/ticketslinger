@@ -41,12 +41,11 @@ func (s *SMTP) Send(ctx context.Context, m Message) error {
 	if err != nil {
 		return s.fail(ctx, &Error{Provider: "smtp", Kind: Retry, Code: "from", Problem: "config"})
 	}
-	// One bare address, or nothing is sent: no retry can fix a malformed one.
+	// One address, or nothing is sent: no retry can fix a malformed one.
 	to, err := mail.ParseAddress(m.To)
 	if err != nil {
 		return &Error{Provider: "smtp", Kind: Permanent, Code: "to", Problem: "bad_address"}
 	}
-	m.To = to.Address
 	ctx, cancel := context.WithTimeout(ctx, smtpTimeout)
 	defer cancel()
 	cfg := s.TLS
@@ -71,16 +70,19 @@ func (s *SMTP) Send(ctx context.Context, m Message) error {
 
 	c, err := smtp.NewClient(conn, s.Host)
 	if err != nil {
-		return smtpError("greeting", err)
+		return s.smtpError(ctx, "greeting", err)
 	}
 	defer func() { _ = c.Close() }()
+	if err := c.Hello(domainOf(from.Address)); err != nil {
+		return s.smtpError(ctx, "ehlo", err)
+	}
 	if s.Port != implicitTLSPort {
-		ok, _ := c.Extension("STARTTLS")
-		if !ok {
+		// Extension hides a failed EHLO as "not offered"; Hello above has already surfaced it.
+		if ok, _ := c.Extension("STARTTLS"); !ok {
 			return s.fail(ctx, &Error{Provider: "smtp", Kind: Retry, Code: "no_starttls", Problem: "config"})
 		}
 		if err := c.StartTLS(cfg); err != nil {
-			return smtpError("starttls", err)
+			return s.smtpError(ctx, "starttls", err)
 		}
 	}
 	if s.Username != "" {
@@ -94,20 +96,21 @@ func (s *SMTP) Send(ctx context.Context, m Message) error {
 		}
 	}
 	if err := c.Mail(from.Address); err != nil {
-		return smtpError("mail", err)
+		return s.smtpError(ctx, "mail", err)
 	}
-	if err := c.Rcpt(m.To); err != nil {
-		return smtpError("rcpt", err)
+	// Quoted as in the To header: an unquoted local part could read as more than one address.
+	if err := c.Rcpt(strings.Trim(quote(to), "<>")); err != nil {
+		return s.smtpError(ctx, "rcpt", err)
 	}
 	w, err := c.Data()
 	if err != nil {
-		return smtpError("data", err)
+		return s.smtpError(ctx, "data", err)
 	}
-	if _, err := w.Write(buildMIME(s.From, m, time.Now(), randomID())); err != nil {
-		return smtpError("data", err)
+	if _, err := w.Write(buildMIME(s.From, to, m, time.Now(), randomID())); err != nil {
+		return s.smtpError(ctx, "data", err)
 	}
 	if err := w.Close(); err != nil {
-		return smtpError("data", err)
+		return s.smtpError(ctx, "data", err)
 	}
 	_ = c.Quit() // the message is already accepted
 	return nil
@@ -123,20 +126,35 @@ func unreachable() error {
 	return &Error{Provider: "smtp", Kind: Retry, Code: "network", Problem: "unreachable"}
 }
 
-// smtpError keeps only a reply's code: its text can quote addresses.
-func smtpError(stage string, err error) error {
+// smtpError keeps only a reply's code: its text can quote addresses. A 5xx
+// before RCPT is about this server's settings (its name, TS_MAIL_FROM), so
+// it waits for a fix instead of dropping the email.
+func (s *SMTP) smtpError(ctx context.Context, stage string, err error) error {
 	te, ok := errors.AsType[*textproto.Error](err)
 	if !ok {
 		return unreachable()
 	}
 	e := &Error{Provider: "smtp", Kind: Retry, Code: strconv.Itoa(te.Code), Problem: "unreachable"}
-	if te.Code >= 500 {
+	switch {
+	case te.Code < 500:
+	case stage == "greeting" || stage == "ehlo" || stage == "mail":
+		return s.fail(ctx, &Error{Provider: "smtp", Kind: Retry, Code: e.Code, Problem: "config"})
+	case stage == "rcpt":
+		e.Kind, e.Problem = Permanent, "bad_address"
+	default:
 		e.Kind, e.Problem = Permanent, "refused"
-		if stage == "rcpt" {
-			e.Problem = "bad_address"
-		}
 	}
 	return e
+}
+
+// domainOf is the part of addr after its last @.
+func domainOf(addr string) string {
+	return addr[strings.LastIndexByte(addr, '@')+1:]
+}
+
+// quote is <addr>, its local part quoted where it needs to be.
+func quote(a *mail.Address) string {
+	return (&mail.Address{Address: a.Address}).String()
 }
 
 func randomID() string {
@@ -198,12 +216,12 @@ func multi(kind string, parts ...entity) entity {
 
 // buildMIME is m as mixed{ related{ alternative{text, html}, inline images },
 // attachments }, each level dropped when it would hold one part.
-func buildMIME(from string, m Message, now time.Time, msgID string) []byte {
+func buildMIME(from string, to *mail.Address, m Message, now time.Time, msgID string) []byte {
 	from = clean(from)
 	domain := "localhost"
 	if a, err := mail.ParseAddress(from); err == nil {
 		from = a.String()
-		domain = a.Address[strings.LastIndexByte(a.Address, '@')+1:]
+		domain = domainOf(a.Address)
 	}
 	body := []entity{textEntity("text/plain; charset=utf-8", m.Text)}
 	if m.HTML != "" {
@@ -223,8 +241,9 @@ func buildMIME(from string, m Message, now time.Time, msgID string) []byte {
 	var b bytes.Buffer
 	for _, kv := range [][2]string{
 		{"From", from},
-		{"To", clean(m.To)},
-		{"Subject", mime.QEncoding.Encode("utf-8", clean(m.Subject))},
+		{"To", clean(quote(to))},
+		// Folded between encoded-words: 160 characters of event name can Q-encode past the 998-octet line limit.
+		{"Subject", strings.ReplaceAll(mime.QEncoding.Encode("utf-8", clean(m.Subject)), "?= =?", "?=\r\n =?")},
 		{"Date", now.Format(time.RFC1123Z)},
 		{"Message-ID", "<" + msgID + "@" + clean(domain) + ">"},
 		{"MIME-Version", "1.0"},
