@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/mail"
 	"net/netip"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -42,6 +44,13 @@ type Config struct {
 	// Cloudflare Turnstile on sign-up, repeated failed sign-ins and checkouts. Off when the secret is unset.
 	TurnstileSecret    string // TS_TURNSTILE_SECRET
 	TurnstileVerifyURL string // TS_TURNSTILE_VERIFY_URL, Cloudflare's siteverify by default
+	// Mail is TS_MAIL: "resend", or "log" (only on a local TS_PUBLIC_URL).
+	Mail                string
+	MailFrom            string // TS_MAIL_FROM, parsed with net/mail
+	MailAlertTo         string // TS_MAIL_ALERT_TO: quota warnings; optional
+	ResendAPIKey        string // TS_RESEND_API_KEY: re_
+	ResendAPIURL        string // TS_RESEND_API_URL: https://, or http on localhost for tests
+	ResendWebhookSecret string // TS_RESEND_WEBHOOK_SECRET: whsec_; optional
 }
 
 func Load() (Config, error) {
@@ -61,6 +70,13 @@ func Load() (Config, error) {
 
 		TurnstileSecret:    os.Getenv("TS_TURNSTILE_SECRET"),
 		TurnstileVerifyURL: env("TS_TURNSTILE_VERIFY_URL", "https://challenges.cloudflare.com/turnstile/v0/siteverify"),
+
+		Mail:                os.Getenv("TS_MAIL"),
+		MailFrom:            env("TS_MAIL_FROM", "TicketSlinger <tickets@ticketslinger.com>"),
+		MailAlertTo:         os.Getenv("TS_MAIL_ALERT_TO"),
+		ResendAPIKey:        os.Getenv("TS_RESEND_API_KEY"),
+		ResendAPIURL:        env("TS_RESEND_API_URL", "https://api.resend.com"),
+		ResendWebhookSecret: os.Getenv("TS_RESEND_WEBHOOK_SECRET"),
 	}
 	for _, cidr := range strings.Split(env("TS_TRUSTED_PROXIES", "127.0.0.1/32,::1/128"), ",") {
 		if cidr = strings.TrimSpace(cidr); cidr == "" {
@@ -100,6 +116,9 @@ func Load() (Config, error) {
 		c.PlatformFeeBP, c.PlatformFeeCents = 0, 0
 	default:
 		return c, errors.New("TS_PAYMENTS must be connect or direct")
+	}
+	if err := checkMail(&c); err != nil {
+		return c, err
 	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("TS_DATABASE_URL is required")
@@ -178,6 +197,53 @@ func checkDirect(c Config) error {
 		return errors.New("TS_PAYMENTS=direct takes no platform fee: leave TS_PLATFORM_FEE_CENTS unset or 0")
 	}
 	return nil
+}
+
+// checkMail picks the mailer and checks its settings. The log mailer sends
+// nothing, so it is only allowed where nobody is waiting for real email: a
+// local http TS_PUBLIC_URL. Errors never repeat a key.
+func checkMail(c *Config) error {
+	u, err := url.Parse(c.PublicURL)
+	local := err == nil && u.Scheme == "http" && IsLocalHost(u.Hostname())
+	switch c.Mail {
+	case "":
+		if !local {
+			return errors.New("TS_MAIL is required: resend or smtp")
+		}
+		c.Mail = "log"
+	case "log":
+		if !local {
+			return errors.New("TS_MAIL=log only works on a local TS_PUBLIC_URL; production needs resend or smtp")
+		}
+	case "resend":
+		if !strings.HasPrefix(c.ResendAPIKey, "re_") {
+			return errors.New("TS_RESEND_API_KEY must be set with TS_MAIL=resend and start with re_")
+		}
+	default:
+		return errors.New("TS_MAIL must be resend, smtp or log")
+	}
+	if _, err := mail.ParseAddress(c.MailFrom); err != nil {
+		return errors.New("TS_MAIL_FROM must be an address like TicketSlinger <tickets@example.com>")
+	}
+	if c.MailAlertTo != "" {
+		if _, err := mail.ParseAddress(c.MailAlertTo); err != nil {
+			return errors.New("TS_MAIL_ALERT_TO must be an address like you@example.com")
+		}
+	}
+	// A typo here would send the bearer key in clear.
+	if a, err := url.Parse(c.ResendAPIURL); err != nil || a.Hostname() == "" || a.Scheme != "https" && (a.Scheme != "http" || !IsLocalHost(a.Hostname())) {
+		return errors.New("TS_RESEND_API_URL must be https:// unless it points at localhost")
+	}
+	if s := c.ResendWebhookSecret; s != "" && !strings.HasPrefix(s, "whsec_") {
+		return errors.New("TS_RESEND_WEBHOOK_SECRET must start with whsec_")
+	}
+	return nil
+}
+
+// IsLocalHost reports whether host is "localhost" or a loopback IP.
+func IsLocalHost(host string) bool {
+	ip, err := netip.ParseAddr(host)
+	return host == "localhost" || err == nil && ip.IsLoopback()
 }
 
 // StripeMode is "test" or "live" for a key that starts with one of prefixes

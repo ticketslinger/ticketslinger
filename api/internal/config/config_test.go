@@ -221,3 +221,70 @@ func TestLoadDirectPayments(t *testing.T) {
 		t.Fatalf("sideways: %v", err)
 	}
 }
+
+func TestMailConfig(t *testing.T) {
+	const prod = "https://tickets.ticketslinger.com"
+	for _, c := range []struct {
+		name, url, mail, key, from, apiURL, hook, alert string
+		want, wantErr                                   string
+	}{
+		{name: "local default", url: "http://localhost:3000", want: "log"},
+		{name: "loopback default", url: "http://127.0.0.1:3001", want: "log"},
+		{name: "production needs a choice", url: prod, wantErr: "TS_MAIL is required: resend or smtp"},
+		{name: "production refuses log", url: prod, mail: "log", wantErr: "TS_MAIL=log only works on a local TS_PUBLIC_URL; production needs resend or smtp"},
+		{name: "https localhost is not local http", url: "https://localhost:3000", mail: "log", wantErr: "TS_MAIL=log only works on a local TS_PUBLIC_URL"},
+		{name: "resend", url: prod, mail: "resend", key: "re_abc", want: "resend"},
+		{name: "resend without key", url: prod, mail: "resend", wantErr: "TS_RESEND_API_KEY must be set with TS_MAIL=resend and start with re_"},
+		{name: "resend with a wrong key", url: prod, mail: "resend", key: "sk_x", wantErr: "TS_RESEND_API_KEY must be set with TS_MAIL=resend and start with re_"},
+		{name: "bad from", url: prod, mail: "resend", key: "re_abc", from: "tickets at example", wantErr: "TS_MAIL_FROM must be an address like TicketSlinger <tickets@example.com>"},
+		{name: "plain http api", url: prod, mail: "resend", key: "re_abc", apiURL: "http://api.resend.com", wantErr: "TS_RESEND_API_URL must be https:// unless it points at localhost"},
+		{name: "loopback api", url: prod, mail: "resend", key: "re_abc", apiURL: "http://127.0.0.1:9999", want: "resend"},
+		{name: "https api without a host", url: prod, mail: "resend", key: "re_abc", apiURL: "https:///emails", wantErr: "TS_RESEND_API_URL must be https:// unless it points at localhost"},
+		{name: "https api", url: prod, mail: "resend", key: "re_abc", apiURL: "https://api.resend.com", want: "resend"},
+		{name: "bad webhook secret", url: prod, mail: "resend", key: "re_abc", hook: "sec_x", wantErr: "TS_RESEND_WEBHOOK_SECRET must start with whsec_"},
+		{name: "webhook secret", url: prod, mail: "resend", key: "re_abc", hook: "whsec_x", want: "resend"},
+		{name: "bad alert address", url: prod, mail: "resend", key: "re_abc", alert: "nobody", wantErr: "TS_MAIL_ALERT_TO must be an address like you@example.com"},
+		{name: "alert address", url: prod, mail: "resend", key: "re_abc", alert: "james@example.com", want: "resend"},
+		{name: "unknown provider", url: prod, mail: "sendgrid", wantErr: "TS_MAIL must be resend, smtp or log"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("TS_DATABASE_URL", "postgres://x")
+			t.Setenv("TS_PUBLIC_URL", c.url)
+			t.Setenv("TS_MAIL", c.mail)
+			t.Setenv("TS_RESEND_API_KEY", c.key)
+			t.Setenv("TS_MAIL_FROM", c.from)
+			t.Setenv("TS_RESEND_API_URL", c.apiURL)
+			t.Setenv("TS_RESEND_WEBHOOK_SECRET", c.hook)
+			t.Setenv("TS_MAIL_ALERT_TO", c.alert)
+			cfg, err := Load()
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("err %v, want %q", err, c.wantErr)
+				}
+				if c.key != "" && strings.Contains(err.Error(), c.key) {
+					t.Fatalf("error %q repeats the key", err)
+				}
+				return
+			}
+			if err != nil || cfg.Mail != c.want || cfg.ResendAPIKey != c.key || cfg.ResendWebhookSecret != c.hook || cfg.MailAlertTo != c.alert {
+				t.Fatalf("cfg %+v err %v, want TS_MAIL %s", cfg, err, c.want)
+			}
+		})
+	}
+	t.Setenv("TS_DATABASE_URL", "postgres://x")
+	t.Setenv("TS_PUBLIC_URL", "")
+	for _, k := range []string{"TS_MAIL", "TS_MAIL_FROM", "TS_RESEND_API_URL", "TS_RESEND_API_KEY", "TS_RESEND_WEBHOOK_SECRET", "TS_MAIL_ALERT_TO"} {
+		t.Setenv(k, "")
+	}
+	if cfg, err := Load(); err != nil || cfg.MailFrom != "TicketSlinger <tickets@ticketslinger.com>" || cfg.ResendAPIURL != "https://api.resend.com" {
+		t.Fatalf("defaults: %+v %v", cfg, err)
+	}
+}
+
+func TestIsLocalHost(t *testing.T) {
+	for host, want := range map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true, "127.9.9.9": true, "example.com": false, "10.0.0.1": false, "": false} {
+		if IsLocalHost(host) != want {
+			t.Errorf("IsLocalHost(%q) = %v", host, !want)
+		}
+	}
+}
