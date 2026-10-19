@@ -148,6 +148,12 @@ a.button {
   font-weight: 600;
 }
 
+/* A whole 44px row to tap, not a line of text next to the Apply button. */
+.order-link a {
+  display: inline-block;
+  padding: 12px 0;
+}
+
 .cf-turnstile {
   margin-bottom: 12px;
 }
