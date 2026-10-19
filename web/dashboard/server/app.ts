@@ -236,7 +236,16 @@ export function createApp(opts: AppOptions): Hono {
       return err(c, 404, "not_found", "Not found.");
     await next();
   });
-  app.use(serveStatic({ root: opts.staticDir }));
+  // Vite puts a content hash in every name under /assets/, so those never change.
+  app.use(
+    serveStatic({
+      root: opts.staticDir,
+      onFound: (_path, c) => {
+        if (c.req.path.startsWith("/assets/"))
+          c.header("Cache-Control", "public, max-age=31536000, immutable");
+      },
+    }),
+  );
   const spa = serveStatic({ root: opts.staticDir, path: "index.html" });
   app.get("*", async (c, next) => {
     if (/\.[^/]+$/.test(c.req.path)) return err(c, 404, "not_found", "Not found.");
