@@ -177,8 +177,8 @@ func TestWorkerSendsQueuedEmail(t *testing.T) {
 	m := &mailer.Memory{}
 	w := newWorker(nil, m, config.Config{}, nil)
 	h := w.Handlers["send_email"]
-	if h == nil || w.Handlers["order_confirmation"] == nil || w.Handlers[sales.RefundJob] == nil || w.Parked[sales.RefundJob] == nil {
-		t.Fatal("serve's worker is missing the send_email, order_confirmation or refund handler, or the refund's parking hook")
+	if h == nil || w.Handlers["order_confirmation"] == nil || w.Handlers[sales.RefundJob] == nil || w.Parked[sales.RefundJob] == nil || w.Parked[sales.OrderConfirmationJob] == nil {
+		t.Fatal("serve's worker is missing the send_email, order_confirmation or refund handler, or a parking hook")
 	}
 	if err := h(context.Background(), []byte(`{"to":"a@example.com","subject":"Hi","text":"Hello"}`)); err != nil || len(m.Sent) != 1 {
 		t.Fatalf("err=%v sent=%d", err, len(m.Sent))

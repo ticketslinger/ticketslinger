@@ -82,3 +82,53 @@ func (h *harness) jsonList(res *http.Response) []any {
 	}
 	return out
 }
+
+func TestResendTicketEmailAPI(t *testing.T) {
+	s := newShop(t, nil)
+	order := s.buyPaid(1, "buyer@example.com", "evt_resend_paid")
+	path := s.orderPath(order) + "/email"
+	root := testdb.Owner(t, s.pool)
+	sentAgo := func(minutes int) {
+		t.Helper()
+		if _, err := root.Exec(context.Background(), `update orders set mail_status = 'sent',
+			mail_requested_at = now() - make_interval(mins => $2) where id = $1`, order, minutes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	conflict := func(who, code string) {
+		t.Helper()
+		if res := s.do(who, "POST", path, ""); res.StatusCode != 409 || s.errorCode(res) != code {
+			t.Fatalf("%d %q, want 409 %s", res.StatusCode, s.errorCode(res), code)
+		}
+	}
+	conflict(s.owner, "email_on_its_way") // the first one is still queued
+
+	_, writeKey := s.createKey(s.owner, "acme", "write")
+	for _, who := range []string{s.owner, writeKey} {
+		sentAgo(11)
+		r := s.must(s.do(who, "POST", path, ""), 202)
+		if r["status"] != "queued" || r["problem"] != nil || r["attempts"] != float64(0) || r["updated_at"] == nil {
+			t.Fatalf("resent: %v", r)
+		}
+		conflict(who, "email_on_its_way")
+	}
+	sentAgo(5)
+	conflict(s.owner, "too_soon")
+
+	_, readKey := s.createKey(s.owner, "acme", "read")
+	sentAgo(11)
+	for _, who := range []string{readKey, s.member("door@example.com", "checkin")} {
+		if res := s.do(who, "POST", path, ""); res.StatusCode != 403 {
+			t.Fatalf("%d, want 403", res.StatusCode)
+		}
+	}
+	if _, err := root.Exec(context.Background(), `update tickets set status = 'void' where order_id = $1`, order); err != nil {
+		t.Fatal(err)
+	}
+	conflict(s.owner, "no_tickets")
+
+	d := s.must(s.do(s.owner, "GET", s.orderPath(order), ""), 200)
+	if e, _ := d["ticket_email"].(map[string]any); e["status"] != "sent" {
+		t.Fatalf("order detail ticket_email %v, want sent", d["ticket_email"])
+	}
+}

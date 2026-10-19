@@ -63,6 +63,79 @@ export const reasonText = (r: Refund, eventCancelled: boolean) =>
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
+type OrderEmail = components["schemas"]["OrderEmail"];
+const PROBLEM: Record<NonNullable<OrderEmail["problem"]>, string> = {
+  rate_limited: "the mail service asked us to slow down",
+  quota: "we've hit our sending limit for now",
+  refused: "the mail service turned the message down",
+  unreachable: "we couldn't reach the mail service",
+  bad_address: "that address can't take mail",
+  config: "our mail settings need fixing (that one's on us)",
+};
+
+/** The "Ticket email" line: how the order's email is getting on. null before there is one. */
+export function emailLine(e: OrderEmail, when: (iso: string) => string): string | null {
+  const at = e.updated_at ? ` ${when(e.updated_at)}` : "";
+  const last = e.problem ? ` Last problem: ${PROBLEM[e.problem]}.` : "";
+  switch (e.status) {
+    case null:
+      return null;
+    case "queued":
+      return "On its way.";
+    case "sent":
+      return `Sent${at}.`;
+    case "delivered":
+      return `Delivered${at}.`;
+    case "failing":
+      return `Not sent yet. We've tried ${e.attempts === 1 ? "once" : `${e.attempts} times`} and we'll keep going for a while.${last}`;
+    case "gave_up":
+      return `We gave up after ${e.attempts === 1 ? "one try" : `${e.attempts} tries`}.${last}`;
+    case "bounced":
+      return "Bounced. The buyer's mail server turned it away, so the address may have a typo. Check it with them.";
+    case "complained":
+      return "Delivered, then the buyer marked it as spam.";
+  }
+}
+
+/** Sending again waits until the last email has gone, or we've stopped trying. */
+export const canResend = (e: OrderEmail) =>
+  e.status !== null && e.status !== "queued" && e.status !== "failing";
+
+function ResendEmail({
+  path,
+  onSent,
+}: {
+  path: { organizer: string; event: string; order: string };
+  onSent: () => Promise<void>;
+}) {
+  const action = useAction();
+  const key = useRef<string | null>(null);
+  return (
+    <>
+      <button
+        type="button"
+        className="inline secondary"
+        disabled={action.busy}
+        onClick={() =>
+          action.run(async () => {
+            await withKey(key, async (k) =>
+              must(
+                await api.POST("/organizers/{organizer}/events/{event}/orders/{order}/email", {
+                  params: { path, header: { "Idempotency-Key": k } },
+                }),
+              ),
+            );
+            await onSent();
+          })
+        }
+      >
+        Send the tickets again
+      </button>
+      <ErrorText>{action.error}</ErrorText>
+    </>
+  );
+}
+
 function RefundRow({
   r,
   canRetry,
@@ -156,6 +229,7 @@ export function OrderDetail({
   // Unchecked unless the organizer decides otherwise: the platform keeps its fee by default.
   const [feeBack, setFeeBack] = useState(false);
   const [asking, setAsking] = useState<boolean | null>(null);
+  const [resentTo, setResentTo] = useState("");
   const refund = useAction();
   const key = useRef<string | null>(null);
 
@@ -176,6 +250,8 @@ export function OrderDetail({
         : "Refund failed";
   };
 
+  const mailLine =
+    order && event && emailLine(order.ticket_email, (iso) => formatWhen(iso, event.timezone));
   const valid = order?.tickets.filter((t) => t.status === "valid") ?? [];
   const preview = order && refundPreview(order, picked, feeBack);
   const label =
@@ -222,6 +298,21 @@ export function OrderDetail({
               <span className="muted"> · paid {formatWhen(order.paid_at, event.timezone)}</span>
             )}
           </p>
+          {mailLine && (
+            <p>
+              <strong>Ticket email</strong> · {mailLine}
+            </p>
+          )}
+          {resentTo && <p role="status">Sending again to {resentTo}.</p>}
+          {canEdit(org) && canResend(order.ticket_email) && (
+            <ResendEmail
+              path={path}
+              onSent={async () => {
+                setResentTo(order.email);
+                await reload();
+              }}
+            />
+          )}
           <p>
             Total {formatCents(order.total_cents)} · Refunded or on its way{" "}
             {formatCents(order.refunded_cents)} · Our fee{" "}

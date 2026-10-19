@@ -1,9 +1,17 @@
 import { expect, test } from "bun:test";
 import type { components } from "@ticketslinger/api-client";
-import { failureText, reasonText, refundPreview, retryable } from "./OrderDetail";
+import {
+  canResend,
+  emailLine,
+  failureText,
+  reasonText,
+  refundPreview,
+  retryable,
+} from "./OrderDetail";
 
 type Detail = components["schemas"]["OrderDetail"];
 type Refund = components["schemas"]["Refund"];
+type OrderEmail = components["schemas"]["OrderEmail"];
 
 const ticket = (id: string, charge: number, fee: number, status: "valid" | "void") => ({
   id,
@@ -73,4 +81,55 @@ test("a late payment on a cancelled event reads as the cancellation", () => {
   expect(reasonText(r, true)).toBe("Event cancelled");
   expect(reasonText(r, false)).toBe("Paid after the tickets had gone");
   expect(reasonText({ ...r, reason: "organizer" }, true)).toBe("You refunded it");
+});
+
+test("the ticket email line says how the email is getting on, in the spec's words", () => {
+  const e = (
+    status: OrderEmail["status"],
+    attempts = 0,
+    problem: OrderEmail["problem"] = null,
+  ): OrderEmail => ({ status, problem, attempts, updated_at: "2026-10-19T18:00:00Z" });
+  const when = (iso: string) => `at ${iso.slice(11, 16)}`;
+  expect(emailLine(e(null), when)).toBeNull();
+  expect(emailLine(e("queued"), when)).toBe("On its way.");
+  expect(emailLine(e("sent", 1), when)).toBe("Sent at 18:00.");
+  expect(emailLine(e("delivered", 1), when)).toBe("Delivered at 18:00.");
+  expect(emailLine(e("failing", 3, "quota"), when)).toBe(
+    "Not sent yet. We've tried 3 times and we'll keep going for a while. Last problem: we've hit our sending limit for now.",
+  );
+  expect(emailLine(e("failing", 1, "unreachable"), when)).toBe(
+    "Not sent yet. We've tried once and we'll keep going for a while. Last problem: we couldn't reach the mail service.",
+  );
+  expect(emailLine(e("gave_up", 1, "bad_address"), when)).toBe(
+    "We gave up after one try. Last problem: that address can't take mail.",
+  );
+  expect(emailLine(e("gave_up", 10, "rate_limited"), when)).toBe(
+    "We gave up after 10 tries. Last problem: the mail service asked us to slow down.",
+  );
+  expect(emailLine(e("gave_up", 2, "refused"), when)).toBe(
+    "We gave up after 2 tries. Last problem: the mail service turned the message down.",
+  );
+  expect(emailLine(e("failing", 2, "config"), when)).toBe(
+    "Not sent yet. We've tried 2 times and we'll keep going for a while. Last problem: our mail settings need fixing (that one's on us).",
+  );
+  expect(emailLine(e("gave_up", 10), when)).toBe("We gave up after 10 tries.");
+  expect(emailLine(e("bounced", 1), when)).toBe(
+    "Bounced. The buyer's mail server turned it away, so the address may have a typo. Check it with them.",
+  );
+  expect(emailLine(e("complained", 1), when)).toBe("Delivered, then the buyer marked it as spam.");
+});
+
+test("the tickets can be sent again only once the last email has settled", () => {
+  const e = (status: OrderEmail["status"]): OrderEmail => ({
+    status,
+    problem: null,
+    attempts: 1,
+    updated_at: null,
+  });
+  for (const s of ["sent", "delivered", "gave_up", "bounced", "complained"] as const) {
+    expect(canResend(e(s))).toBe(true);
+  }
+  for (const s of ["queued", "failing", null] as const) {
+    expect(canResend(e(s))).toBe(false);
+  }
 });

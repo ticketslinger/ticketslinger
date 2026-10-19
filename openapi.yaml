@@ -616,6 +616,23 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/orders/{order}/email:
+    post:
+      operationId: resendTicketEmail
+      description: "Owners and admins, or a write API key. Sends the order's ticket email again: the same tickets and the same order link, to the address the buyer gave. It goes out from the queue, so this answers 202 with ticket_email queued; the order shows how it went. 409 email_on_its_way while the last one is still queued or being retried. 409 too_soon within 10 minutes of the last time it was asked for (by you, by the buyer, or by the sale itself). 409 no_tickets when the order has no valid ticket left."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "202": { description: Queued, content: { application/json: { schema: { $ref: "#/components/schemas/OrderEmail" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/cancel:
     post:
       operationId: cancelEvent
@@ -1125,7 +1142,7 @@ components:
         details_submitted: { type: boolean, description: Whether the organizer has finished Stripe's onboarding form. }
     OrderSummary:
       type: object
-      required: [id, code, email, status, ticket_count, total_cents, fee_cents, fee_mode, created_at, paid_at, refunded_cents, fee_refunded_cents]
+      required: [id, code, email, status, ticket_count, total_cents, fee_cents, fee_mode, created_at, paid_at, refunded_cents, fee_refunded_cents, ticket_email]
       properties:
         id: { type: string, format: uuid }
         code: { type: string }
@@ -1139,6 +1156,16 @@ components:
         paid_at: { type: [string, "null"], format: date-time }
         refunded_cents: { type: integer, format: int64, description: "Refunded to the buyer so far, counting refunds still on their way and leaving out failed ones." }
         fee_refunded_cents: { type: integer, format: int64, description: "How much of our fee has gone back so far (counted once Stripe has returned it)." }
+        ticket_email: { $ref: "#/components/schemas/OrderEmail" }
+    OrderEmail:
+      type: object
+      description: How the order's ticket email is getting on.
+      required: [status, problem, attempts, updated_at]
+      properties:
+        status: { type: [string, "null"], enum: [queued, sent, failing, gave_up, delivered, bounced, complained, null], description: "null: no ticket email yet. queued: waiting to go. sent: the mail service took it. failing: it hasn't gone yet and we're still trying. gave_up: we stopped trying. delivered: it reached the buyer's mail server. bounced: that server turned it away. complained: delivered, then the buyer marked it as spam." }
+        problem: { type: [string, "null"], enum: [rate_limited, quota, refused, unreachable, bad_address, config, null], description: "The last thing that went wrong: rate_limited (the mail service asked us to slow down), quota (we hit our sending limit), refused (the mail service turned the message down), unreachable (we couldn't reach it), bad_address (the address can't take mail), config (our mail settings need fixing)." }
+        attempts: { type: integer, description: "How many times we've tried to send this one." }
+        updated_at: { type: [string, "null"], format: date-time }
     OrderDetail:
       allOf:
         - { $ref: "#/components/schemas/OrderSummary" }

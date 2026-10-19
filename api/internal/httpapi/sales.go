@@ -687,7 +687,7 @@ func (s *server) ListOrders(ctx context.Context, req ListOrdersRequestObject) (L
 		for _, o := range list {
 			out = append(out, OrderSummary{Id: o.ID, Code: o.Code, Email: o.Email, Status: OrderSummaryStatus(o.Status), TicketCount: o.TicketCount,
 				TotalCents: o.TotalCents, FeeCents: o.FeeCents, FeeMode: OrderSummaryFeeMode(o.FeeMode), CreatedAt: o.CreatedAt, PaidAt: nullOf(o.PaidAt),
-				RefundedCents: o.RefundedCents, FeeRefundedCents: o.FeeRefundedCents})
+				RefundedCents: o.RefundedCents, FeeRefundedCents: o.FeeRefundedCents, TicketEmail: toOrderEmail(o.Mail)})
 		}
 		return err
 	})
@@ -710,7 +710,7 @@ func (s *server) GetOrderDetail(ctx context.Context, req GetOrderDetailRequestOb
 	}
 	out := GetOrderDetail200JSONResponse{Id: d.ID, Code: d.Code, Email: d.Email, Status: OrderDetailStatus(d.Status), TicketCount: d.TicketCount,
 		TotalCents: d.TotalCents, FeeCents: d.FeeCents, FeeMode: OrderDetailFeeMode(d.FeeMode), CreatedAt: d.CreatedAt, PaidAt: nullOf(d.PaidAt),
-		RefundedCents: d.RefundedCents, FeeRefundedCents: d.FeeRefundedCents, Tickets: []OrderDetailTicket{}, Refunds: []Refund{}}
+		RefundedCents: d.RefundedCents, FeeRefundedCents: d.FeeRefundedCents, TicketEmail: toOrderEmail(d.Mail), Tickets: []OrderDetailTicket{}, Refunds: []Refund{}}
 	for _, t := range d.Tickets {
 		out.Tickets = append(out.Tickets, OrderDetailTicket{Id: t.ID, TicketTypeName: t.TicketTypeName, AttendeeName: t.AttendeeName,
 			Status: OrderDetailTicketStatus(t.Status), ChargeCents: t.ChargeCents, FeeCents: t.FeeCents, RefundId: nullOf(t.RefundID)})
@@ -728,6 +728,33 @@ func toRefund(r sales.RefundView) Refund {
 		out.Failure.Set(RefundFailure(*r.Failure))
 	}
 	return out
+}
+
+func toOrderEmail(m sales.MailState) OrderEmail {
+	out := OrderEmail{Attempts: m.Attempts, Status: nullable.NewNullNullable[OrderEmailStatus](),
+		Problem: nullable.NewNullNullable[OrderEmailProblem](), UpdatedAt: nullOf(m.UpdatedAt)}
+	if m.Status != nil {
+		out.Status.Set(OrderEmailStatus(*m.Status))
+	}
+	if m.Problem != nil {
+		out.Problem.Set(OrderEmailProblem(*m.Problem))
+	}
+	return out
+}
+
+// ResendTicketEmail queues the order's ticket email again. It moves no
+// money, so a write key may ask too.
+func (s *server) ResendTicketEmail(ctx context.Context, req ResendTicketEmailRequestObject) (ResendTicketEmailResponseObject, error) {
+	var out ResendTicketEmail202JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		m, err := sales.ResendTicketEmail(ctx, tx, org.ID, req.Event, req.Order, actorFrom(ctx))
+		out = ResendTicketEmail202JSONResponse(toOrderEmail(m))
+		return err
+	})
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return out, nil
 }
 
 // refundsWrite: money leaving the organizer's Stripe balance is a person's
