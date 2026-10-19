@@ -14,6 +14,7 @@ export function serverOptions(env: Record<string, string | undefined>) {
       staticDir: env.TS_DASHBOARD_STATIC ?? "./dist",
       secureCookies: env.TS_DASHBOARD_DEV !== "1",
       turnstileSiteKey: env.TS_TURNSTILE_SITEKEY ?? "",
+      storefrontUrl: env.TS_STOREFRONT_URL ?? "",
     } satisfies AppOptions,
   };
 }

@@ -29,8 +29,15 @@ test("environment overrides", () => {
       staticDir: "/srv/dash",
       secureCookies: true,
       turnstileSiteKey: "",
+      storefrontUrl: "",
     },
   });
+});
+
+test("storefront URL", () => {
+  expect(serverOptions({ TS_STOREFRONT_URL: "https://t.example.com" }).app.storefrontUrl).toBe(
+    "https://t.example.com",
+  );
 });
 
 test("Turnstile site key", () => {

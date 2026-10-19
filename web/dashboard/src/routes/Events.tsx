@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, must } from "../api";
+import { publicEventUrl, publicLinkState, storefrontUrl } from "../publicLink";
 import { formatWhen } from "../time";
 import { ErrorText, focusOnMount, Link, navigate, useAction, useLoad } from "../ui";
 import { CancelEvent } from "./CancelEvent";
@@ -122,6 +123,11 @@ export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: s
   const remove = useAction();
   // null until asked; false after "Keep it", so focus can go back to the first button.
   const [confirming, setConfirming] = useState<boolean | null>(null);
+  const [origin, setOrigin] = useState("");
+  const [copied, setCopied] = useState("");
+  useEffect(() => {
+    storefrontUrl().then(setOrigin);
+  }, []);
 
   const setStatus = (to: "draft" | "live") =>
     status.run(async () => {
@@ -156,6 +162,40 @@ export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: s
           <p className="muted">
             {formatWhen(event.starts_at, event.timezone)} · {event.timezone.replaceAll("_", " ")}
           </p>
+          {(() => {
+            const url = publicEventUrl(origin, org.slug, event.slug);
+            const state = publicLinkState(event.status, url);
+            if (state === "draft")
+              return (
+                <p className="muted">Your public link shows up here once the event is live.</p>
+              );
+            if (state === "none") return null;
+            return (
+              <div className="row">
+                <p>
+                  Share this link: <code>{url}</code>
+                </p>
+                <button
+                  type="button"
+                  className="inline secondary"
+                  onClick={() =>
+                    (navigator.clipboard?.writeText(url) ?? Promise.reject()).then(
+                      () => setCopied("Copied."),
+                      () =>
+                        setCopied(
+                          "Copying didn't work here. Select the link and copy it yourself.",
+                        ),
+                    )
+                  }
+                >
+                  Copy link
+                </button>
+                <span className="success" role="status">
+                  {copied}
+                </span>
+              </div>
+            );
+          })()}
           {canEdit(org) && (event.status === "draft" || event.status === "live") && (
             <div className="status-box">
               {event.status === "draft" ? (

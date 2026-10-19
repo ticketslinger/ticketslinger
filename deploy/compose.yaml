@@ -93,6 +93,7 @@ services:
       TS_STOREFRONT_PORT: ${TS_STOREFRONT_PORT:-3001}
       TS_API_URL: ${TS_API_URL:-http://127.0.0.1:3000/v1}
       TS_TURNSTILE_SITEKEY: ${TS_TURNSTILE_SITEKEY:-}
+      TS_STOREFRONT_URL: ${TS_STOREFRONT_URL:-}
     restart: unless-stopped
     depends_on: [api]
 
@@ -107,6 +108,7 @@ services:
       TS_DASHBOARD_PORT: ${TS_DASHBOARD_PORT:-3002}
       TS_API_URL: ${TS_API_URL:-http://127.0.0.1:3000/v1}
       TS_TURNSTILE_SITEKEY: ${TS_TURNSTILE_SITEKEY:-}
+      TS_STOREFRONT_URL: ${TS_STOREFRONT_URL:-}
     restart: unless-stopped
     depends_on: [api]
 
