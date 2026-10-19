@@ -37,7 +37,7 @@ func TestVersionIsSet(t *testing.T) {
 
 // local is a test-mode config that serve accepts.
 func local(addr string) config.Config {
-	return config.Config{HTTPAddr: addr, PublicURL: "http://127.0.0.1:3001", DashboardOrigin: "http://localhost:3002"}
+	return config.Config{HTTPAddr: addr, PublicURL: "http://127.0.0.1:3001", DashboardOrigin: "http://localhost:3002", Mail: "log"}
 }
 
 func get(t *testing.T, h http.Handler, path string, header ...string) (int, string) {
@@ -53,7 +53,7 @@ func get(t *testing.T, h http.Handler, path string, header ...string) (int, stri
 }
 
 func TestTestMailEndpointIsAbsentWithoutTestMode(t *testing.T) {
-	h, _, err := newHandler(config.Config{HTTPAddr: "127.0.0.1:3000", TurnstileSecret: "s"}, nil, false)
+	h, _, err := newHandler(config.Config{HTTPAddr: "127.0.0.1:3000", TurnstileSecret: "s", Mail: "log"}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestServeNeedsTurnstileOutsideTestMode(t *testing.T) {
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
-	bare := config.Config{HTTPAddr: "127.0.0.1:3000"}
+	bare := config.Config{HTTPAddr: "127.0.0.1:3000", Mail: "log"}
 	t.Setenv("TS_ALLOW_NO_TURNSTILE", "")
 	if _, _, err := newHandler(bare, nil, false); err == nil || !strings.Contains(err.Error(), "TS_TURNSTILE_SECRET") {
 		t.Fatalf("no secret: %v, want a refusal naming TS_TURNSTILE_SECRET", err)
@@ -362,7 +362,7 @@ func TestTestModeUsesStripeWithATestKey(t *testing.T) {
 // TS_PAYMENTS=direct outside test mode sells through the server's own Stripe
 // account: the API says so, and the provider has nothing to connect.
 func TestDirectModeServesTheServersOwnStripe(t *testing.T) {
-	cfg := config.Config{HTTPAddr: "127.0.0.1:3000", TurnstileSecret: "s", PaymentsMode: "direct",
+	cfg := config.Config{HTTPAddr: "127.0.0.1:3000", TurnstileSecret: "s", PaymentsMode: "direct", Mail: "log",
 		StripeSecretKey: "sk_test_abc", StripePublishableKey: "pk_test_abc", StripeWebhookSecret: "whsec_abc"}
 	p := paymentProvider(cfg, false)
 	if p == nil || p.Name() != "stripe" || p.PublishableKey() != "pk_test_abc" {
@@ -419,4 +419,17 @@ func paymentsStatus(t *testing.T, cfg config.Config, testMode bool) paymentsStat
 		t.Fatalf("payments status: %d %s", code, body)
 	}
 	return st
+}
+
+func TestServeUsesTheConfiguredMailer(t *testing.T) {
+	m, err := newMailer(config.Config{Mail: "resend", ResendAPIKey: "re_abc", ResendAPIURL: "https://api.resend.com", MailFrom: "TicketSlinger <tickets@ticketslinger.com>"}, nil)
+	if r, ok := m.(*mailer.Resend); err != nil || !ok || r.Key != "re_abc" || r.URL != "https://api.resend.com" || r.From != "TicketSlinger <tickets@ticketslinger.com>" {
+		t.Fatalf("resend: %#v %v", m, err)
+	}
+	if m, err := newMailer(config.Config{Mail: "log"}, nil); err != nil || m != (mailer.Log{}) {
+		t.Fatalf("log: %#v %v", m, err)
+	}
+	if _, err := newMailer(config.Config{Mail: "sendgrid"}, nil); err == nil {
+		t.Fatal("an unknown mailer must be refused")
+	}
 }

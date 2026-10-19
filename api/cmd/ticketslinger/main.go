@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
@@ -134,16 +133,16 @@ func newWorker(pool *pgxpool.Pool, m mailer.Mailer, cfg config.Config, pay plugi
 // adds GET /__test/last-email and POST /__test/stripe/pay-latest for the
 // end-to-end suite, and only on a loopback address.
 func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Handler, *jobs.Worker, error) {
-	var mail mailer.Mailer = mailer.Log{}
+	var mail mailer.Mailer
 	mem := &mailer.Memory{}
 	if testMode {
 		// A same-host reverse proxy also reaches the API on loopback, so the
 		// public URLs have to be local too; production's https URLs fail here.
-		if host, _, err := net.SplitHostPort(cfg.HTTPAddr); err != nil || !isLocal(host) {
+		if host, _, err := net.SplitHostPort(cfg.HTTPAddr); err != nil || !config.IsLocalHost(host) {
 			return nil, nil, fmt.Errorf("TS_TEST_MODE needs a loopback TS_HTTP_ADDR, not %q", cfg.HTTPAddr)
 		}
 		for name, v := range map[string]string{"TS_PUBLIC_URL": cfg.PublicURL, "TS_DASHBOARD_ORIGIN": cfg.DashboardOrigin} {
-			if u, err := url.Parse(v); err != nil || u.Scheme != "http" || !isLocal(u.Hostname()) {
+			if u, err := url.Parse(v); err != nil || u.Scheme != "http" || !config.IsLocalHost(u.Hostname()) {
 				return nil, nil, fmt.Errorf("TS_TEST_MODE needs an http://localhost or loopback %s, not %q", name, v)
 			}
 		}
@@ -164,6 +163,12 @@ func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Hand
 		slog.Warn("RUNNING WITHOUT TURNSTILE (TS_ALLOW_NO_TURNSTILE=1): sign-up and checkouts go unchecked, " +
 			"and an account under attack is only slowed to one sign-in attempt every 10 seconds")
 	}
+	if mail == nil {
+		var err error
+		if mail, err = newMailer(cfg, pool); err != nil {
+			return nil, nil, err
+		}
+	}
 	pay := paymentProvider(cfg, testMode)
 	ts := &turnstile.Verifier{Secret: cfg.TurnstileSecret, URL: cfg.TurnstileVerifyURL, Client: &http.Client{Timeout: 2 * time.Second}}
 	h := httpapi.New(httpapi.Deps{Pool: pool, Auth: auth.NewService(pool, mail, auth.Options{RPID: cfg.WebAuthnRPID, Origin: cfg.DashboardOrigin, SecretKey: cfg.SecretKey,
@@ -174,6 +179,18 @@ func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Hand
 		h = testRoutes(h, mem, fake, cfg.StripeWebhookSecret)
 	}
 	return h, newWorker(pool, mail, cfg, pay), nil
+}
+
+// newMailer is the mailer TS_MAIL names; config.Load has already checked its
+// settings and kept the log mailer to local URLs.
+func newMailer(cfg config.Config, _ *pgxpool.Pool) (mailer.Mailer, error) {
+	switch cfg.Mail {
+	case "resend":
+		return &mailer.Resend{Key: cfg.ResendAPIKey, From: cfg.MailFrom, URL: cfg.ResendAPIURL}, nil
+	case "log":
+		return mailer.Log{}, nil
+	}
+	return nil, fmt.Errorf("TS_MAIL must be resend, smtp or log, not %q", cfg.Mail)
 }
 
 // paymentProvider is the fake in test mode without a secret key (test mode
@@ -278,10 +295,4 @@ func proxied(r *http.Request) bool {
 		}
 	}
 	return false
-}
-
-// isLocal reports whether host is "localhost" or a loopback IP.
-func isLocal(host string) bool {
-	ip, err := netip.ParseAddr(host)
-	return host == "localhost" || err == nil && ip.IsLoopback()
 }
