@@ -1,0 +1,7 @@
+**/.env
+**/.env.*
+.git
+**/node_modules
+**/dist
+.superpowers
+_local

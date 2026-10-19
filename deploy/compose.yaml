@@ -9,6 +9,8 @@
 # (from a loopback peer only). Behind published bridge ports every buyer would
 # arrive from the Docker gateway and share one rate limit.
 # Host networking is Linux-only: Docker Desktop on macOS or Windows won't do.
+# deploy/.env feeds interpolation only; each service is handed just the
+# variables it reads, so a compromised storefront holds no Stripe or database key.
 services:
   db:
     image: postgres:18
@@ -36,7 +38,8 @@ services:
     image: ticketslinger-api
     command: ["migrate"]
     network_mode: host
-    env_file: .env
+    environment:
+      TS_MIGRATE_DATABASE_URL: postgres://ts_owner:${TS_OWNER_PASSWORD}@127.0.0.1:5432/ticketslinger?sslmode=disable
     restart: "no"
     depends_on:
       db: {condition: service_healthy}
@@ -46,7 +49,35 @@ services:
     image: ticketslinger-api
     command: ["serve"]
     network_mode: host
-    env_file: .env
+    environment:
+      TS_DATABASE_URL: postgres://ts_app:${TS_APP_PASSWORD}@127.0.0.1:5432/ticketslinger?sslmode=disable
+      TS_HTTP_ADDR: ${TS_HTTP_ADDR:-127.0.0.1:3000}
+      TS_PUBLIC_URL: ${TS_PUBLIC_URL:-}
+      TS_DASHBOARD_ORIGIN: ${TS_DASHBOARD_ORIGIN:-}
+      TS_STOREFRONT_URL: ${TS_STOREFRONT_URL:-}
+      TS_WEBAUTHN_RPID: ${TS_WEBAUTHN_RPID:-}
+      TS_SECRET_KEY: ${TS_SECRET_KEY:-}
+      TS_TRUSTED_PROXIES: ${TS_TRUSTED_PROXIES:-}
+      TS_PAYMENTS: ${TS_PAYMENTS:-}
+      TS_PLATFORM_FEE_BP: ${TS_PLATFORM_FEE_BP:-}
+      TS_PLATFORM_FEE_CENTS: ${TS_PLATFORM_FEE_CENTS:-}
+      TS_STRIPE_SECRET_KEY: ${TS_STRIPE_SECRET_KEY:-}
+      TS_STRIPE_PUBLISHABLE_KEY: ${TS_STRIPE_PUBLISHABLE_KEY:-}
+      TS_STRIPE_WEBHOOK_SECRET: ${TS_STRIPE_WEBHOOK_SECRET:-}
+      TS_STRIPE_CLIENT_ID: ${TS_STRIPE_CLIENT_ID:-}
+      TS_TURNSTILE_SECRET: ${TS_TURNSTILE_SECRET:-}
+      TS_TURNSTILE_VERIFY_URL: ${TS_TURNSTILE_VERIFY_URL:-}
+      TS_ALLOW_NO_TURNSTILE: ${TS_ALLOW_NO_TURNSTILE:-}
+      TS_MAIL: ${TS_MAIL:-}
+      TS_MAIL_FROM: ${TS_MAIL_FROM:-}
+      TS_MAIL_ALERT_TO: ${TS_MAIL_ALERT_TO:-}
+      TS_RESEND_API_KEY: ${TS_RESEND_API_KEY:-}
+      TS_RESEND_API_URL: ${TS_RESEND_API_URL:-}
+      TS_RESEND_WEBHOOK_SECRET: ${TS_RESEND_WEBHOOK_SECRET:-}
+      TS_SMTP_HOST: ${TS_SMTP_HOST:-}
+      TS_SMTP_PORT: ${TS_SMTP_PORT:-}
+      TS_SMTP_USERNAME: ${TS_SMTP_USERNAME:-}
+      TS_SMTP_PASSWORD: ${TS_SMTP_PASSWORD:-}
     restart: unless-stopped
     depends_on:
       migrate: {condition: service_completed_successfully}
@@ -57,7 +88,11 @@ services:
     working_dir: /app/storefront
     command: ["bun", "server.js"]
     network_mode: host
-    env_file: .env
+    environment:
+      TS_STOREFRONT_HOST: ${TS_STOREFRONT_HOST:-127.0.0.1}
+      TS_STOREFRONT_PORT: ${TS_STOREFRONT_PORT:-3001}
+      TS_API_URL: ${TS_API_URL:-http://127.0.0.1:3000/v1}
+      TS_TURNSTILE_SITEKEY: ${TS_TURNSTILE_SITEKEY:-}
     restart: unless-stopped
     depends_on: [api]
 
@@ -67,7 +102,11 @@ services:
     working_dir: /app/dashboard
     command: ["bun", "server.js"]
     network_mode: host
-    env_file: .env
+    environment:
+      TS_DASHBOARD_HOST: ${TS_DASHBOARD_HOST:-127.0.0.1}
+      TS_DASHBOARD_PORT: ${TS_DASHBOARD_PORT:-3002}
+      TS_API_URL: ${TS_API_URL:-http://127.0.0.1:3000/v1}
+      TS_TURNSTILE_SITEKEY: ${TS_TURNSTILE_SITEKEY:-}
     restart: unless-stopped
     depends_on: [api]
 

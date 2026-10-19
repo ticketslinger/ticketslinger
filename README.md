@@ -21,6 +21,10 @@ docker compose -f deploy/compose.yaml up -d --build
 
 The three services use host networking and listen on `127.0.0.1` only (API 3000, storefront 3001, dashboard 3002). Your reverse proxy on the same machine terminates TLS, sends each hostname to its port, and sets `X-Real-IP` to the visitor's address. That header is how rate limits tell buyers apart, and it's only trusted from the loopback peer. Host networking works on Linux only, so Docker Desktop on macOS or Windows won't run this file.
 
+The API won't start without `TS_TURNSTILE_SECRET` (and the widget needs `TS_TURNSTILE_SITEKEY`). `TS_ALLOW_NO_TURNSTILE=1` switches the bot check off entirely: fine for a trial, never for a public site. `TS_MAIL` is required for any URL that isn't `http://localhost`.
+
+Port 5432 on `127.0.0.1` has to be free. If another Postgres already listens there, the services would talk to it instead of the container, silently.
+
 Set the database passwords before the first `up`: the roles are created then, once. Postgres is published on `127.0.0.1:5432` and nowhere else.
 
 ## Selling with your own Stripe account (self-hosting)

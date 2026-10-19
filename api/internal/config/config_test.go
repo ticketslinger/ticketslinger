@@ -308,8 +308,9 @@ func TestIsLocalHost(t *testing.T) {
 	}
 }
 
-// Self-hosters copy deploy/.env.example, so it has to name every variable
-// config.go reads.
+// Self-hosters copy deploy/.env.example, and each service in compose.yaml is
+// handed only what it reads, so the example must name every variable config.go
+// reads and the api service must pass every one on.
 func TestComposePassesEveryConfigVariable(t *testing.T) {
 	src, err := os.ReadFile("config.go")
 	if err != nil {
@@ -319,13 +320,24 @@ func TestComposePassesEveryConfigVariable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	names := regexp.MustCompile(`(?:os\.Getenv|env|intEnv)\("(TS_[A-Z_]+)"`).FindAllStringSubmatch(string(src), -1)
+	compose, err := os.ReadFile("../../../deploy/compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := regexp.MustCompile(`(?s)\n  api:\n.*?(?:\n  [a-z]+:\n|\nvolumes:)`).Find(compose)
+	if api == nil {
+		t.Fatal("no api service in compose.yaml")
+	}
+	names := regexp.MustCompile(`\("(TS_[A-Z_]+)"`).FindAllStringSubmatch(string(src), -1)
 	if len(names) < 20 {
 		t.Fatalf("found only %d variables in config.go; the pattern is stale", len(names))
 	}
 	for _, m := range names {
 		if !regexp.MustCompile(`(?m)^#?\s*` + m[1] + `=`).Match(example) {
 			t.Errorf("deploy/.env.example is missing %s", m[1])
+		}
+		if !regexp.MustCompile(`(?m)^\s+` + m[1] + `:`).Match(api) {
+			t.Errorf("compose.yaml does not pass %s to the api service", m[1])
 		}
 	}
 }

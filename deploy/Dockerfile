@@ -17,7 +17,9 @@ CMD ["serve"]
 
 FROM oven/bun:1.3.14 AS webbuild
 WORKDIR /src
-COPY . .
+COPY package.json bun.lock bunfig.toml ./
+COPY e2e/package.json ./e2e/package.json
+COPY web ./web
 RUN bun install --frozen-lockfile
 RUN cd web/storefront && bun build.ts /out/storefront/dist \
  && bun build server/index.ts --target=bun --minify --outfile /out/storefront/server.js
