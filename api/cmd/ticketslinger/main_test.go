@@ -336,10 +336,26 @@ func TestPaymentProvider(t *testing.T) {
 	if p := paymentProvider(config.Config{StripeSecretKey: "sk_test_abc", StripePublishableKey: "pk_test_abc"}, false); p == nil || p.Name() != "stripe" || p.PublishableKey() != "pk_test_abc" {
 		t.Fatalf("with a key: %v", p)
 	}
-	for _, c := range []config.Config{{}, {StripeSecretKey: "sk_test_abc", StripePublishableKey: "pk_test_abc"}} {
-		if p := paymentProvider(c, true); p == nil || p.Name() != "test" {
-			t.Fatalf("test mode: %v, want the fake", p)
-		}
+	if p := paymentProvider(config.Config{}, true); p == nil || p.Name() != "test" {
+		t.Fatalf("test mode: %v, want the fake", p)
+	}
+}
+
+// Test mode with a test secret key takes real test-mode Stripe payments, for
+// the manual smoke run; without one it keeps the fake. Live keys are refused
+// (TestTestModeRefusesLiveStripeKeys).
+func TestTestModeUsesStripeWithATestKey(t *testing.T) {
+	cfg := local("127.0.0.1:3001")
+	if st := paymentsStatus(t, cfg, true); st.Provider != "test" {
+		t.Fatalf("no key: provider %q, want the fake", st.Provider)
+	}
+	cfg.StripeSecretKey, cfg.StripePublishableKey, cfg.StripeWebhookSecret = "sk_test_x", "pk_test_x", "whsec_x"
+	if st := paymentsStatus(t, cfg, true); st.Provider != "stripe" {
+		t.Fatalf("test key: provider %q, want stripe", st.Provider)
+	}
+	cfg.StripeSecretKey = "sk_live_x"
+	if _, _, err := newHandler(cfg, nil, true); err == nil {
+		t.Fatal("test mode started with a live key")
 	}
 }
 
@@ -355,6 +371,24 @@ func TestDirectModeServesTheServersOwnStripe(t *testing.T) {
 	if _, err := p.LinkURL("state", "https://x", ""); !errors.Is(err, plugin.ErrDirectPayments) {
 		t.Fatalf("LinkURL: %v, want the direct provider's refusal", err)
 	}
+	_, w, err := newHandler(cfg, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := paymentsStatus(t, cfg, false); st.Mode != "direct" || st.Provider != "stripe" {
+		t.Fatalf("payments status: %+v", st)
+	}
+	if w.Handlers[sales.RefundJob] == nil {
+		t.Fatal("no refund handler")
+	}
+}
+
+type paymentsStatusBody struct{ Mode, Provider string }
+
+// paymentsStatus is GET /v1/organizers/acme/payments from a fresh organizer
+// on a server built from cfg.
+func paymentsStatus(t *testing.T, cfg config.Config, testMode bool) paymentsStatusBody {
+	t.Helper()
 	pool := testdb.New(t)
 	ctx := context.Background()
 	owner := testdb.Owner(t, pool)
@@ -375,16 +409,14 @@ func TestDirectModeServesTheServersOwnStripe(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	h, w, err := newHandler(cfg, pool, false)
+	h, _, err := newHandler(cfg, pool, testMode)
 	if err != nil {
 		t.Fatal(err)
 	}
 	code, body := get(t, h, "/v1/organizers/acme/payments", "Authorization", "Bearer "+key)
-	var st struct{ Mode, Provider string }
-	if err := json.Unmarshal([]byte(body), &st); err != nil || code != 200 || st.Mode != "direct" || st.Provider != "stripe" {
+	var st paymentsStatusBody
+	if err := json.Unmarshal([]byte(body), &st); err != nil || code != 200 {
 		t.Fatalf("payments status: %d %s", code, body)
 	}
-	if w.Handlers[sales.RefundJob] == nil {
-		t.Fatal("no refund handler")
-	}
+	return st
 }

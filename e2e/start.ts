@@ -13,7 +13,7 @@ const DB = "ticketslinger_e2e";
 const url = (role: string, db: string) => `postgres://${role}:${role}@${pg}/${db}?sslmode=disable`;
 const bin = join(tmpdir(), "ticketslinger-e2e");
 
-const apiEnv = {
+const apiEnv: Record<string, string | undefined> = {
   ...process.env,
   TS_DATABASE_URL: url("ts_app", DB),
   TS_MIGRATE_DATABASE_URL: url("ts_owner", DB),
@@ -28,11 +28,31 @@ const apiEnv = {
   TS_TRUSTED_PROXIES: "127.0.0.1/32,::1/128",
   TS_WEBAUTHN_RPID: "localhost",
   TS_TEST_MODE: "1",
-  // Test mode always takes payments through the built-in fake provider.
+  // Test mode takes payments through the built-in fake provider, unless the
+  // manual stripe-smoke run brings test keys (below).
   TS_STRIPE_WEBHOOK_SECRET: "whsec_e2e",
   // Cloudflare's published test secret: every token passes.
   TS_TURNSTILE_SECRET: "1x0000000000000000000000000000000AA",
 };
+
+// The stripe-smoke run: real test-mode Stripe, webhooks through `stripe listen`.
+// Never with live keys, and never saying what the keys were.
+if (process.env.STRIPE_SMOKE_ACCOUNT) {
+  const { TS_STRIPE_SECRET_KEY: sk = "", TS_STRIPE_PUBLISHABLE_KEY: pk = "" } = process.env;
+  if (!sk.startsWith("sk_test_") || !pk.startsWith("pk_test_")) {
+    throw new Error("stripe smoke runs on test keys only");
+  }
+  if (!process.env.TS_STRIPE_WEBHOOK_SECRET?.startsWith("whsec_")) {
+    throw new Error("stripe smoke needs TS_STRIPE_WEBHOOK_SECRET from stripe listen");
+  }
+  // The keys already came through with process.env; the secret replaces whsec_e2e.
+  apiEnv.TS_STRIPE_WEBHOOK_SECRET = process.env.TS_STRIPE_WEBHOOK_SECRET;
+} else {
+  // Anything Stripe or TS_PAYMENTS in the caller's environment stays out of the normal suite.
+  delete apiEnv.TS_STRIPE_SECRET_KEY;
+  delete apiEnv.TS_STRIPE_PUBLISHABLE_KEY;
+  delete apiEnv.TS_PAYMENTS;
+}
 
 function run(cmd: string[], opts: { cwd?: string; env?: Record<string, string | undefined> } = {}) {
   const r = Bun.spawnSync(cmd, { ...opts, stdout: "inherit", stderr: "inherit" });

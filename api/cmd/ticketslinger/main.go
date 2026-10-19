@@ -176,12 +176,14 @@ func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Hand
 	return h, newWorker(pool, mail, cfg, pay), nil
 }
 
-// paymentProvider is the fake in test mode, the server's own Stripe account
-// in direct mode, Stripe Connect when a secret key is set, and otherwise
-// none: free tickets still sell, paid ones can't.
+// paymentProvider is the fake in test mode without a secret key (test mode
+// refuses live keys, so one set there is a test key, for the manual smoke
+// run), the server's own Stripe account in direct mode, Stripe Connect when a
+// secret key is set, and otherwise none: free tickets still sell, paid ones
+// can't.
 func paymentProvider(cfg config.Config, testMode bool) plugin.PaymentProvider {
 	switch {
-	case testMode:
+	case testMode && cfg.StripeSecretKey == "":
 		return payments.NewFake()
 	case cfg.PaymentsMode == "direct":
 		return payments.NewDirectStripe(cfg.StripeSecretKey, cfg.StripePublishableKey, nil)
