@@ -246,3 +246,27 @@ func TestLatePaymentOnACancelledEventSaysCancelled(t *testing.T) {
 	}
 	t.Fatalf("no refund email in %+v", m.Sent)
 }
+
+// The checkout's address never expires, so once a link is rotated it must
+// stop handing out the order's link: the new one goes by email only.
+func TestARotatedLinkIsntOnTheCheckout(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500})
+	ctx := context.Background()
+	c, pi := paying(t, s, f, fake, sales.Details{Email: "buyer@example.com"}, sales.Item{TicketTypeID: f.general, Quantity: 1})
+	f.must(t, s.HandleStripeEvent(ctx, succeeded(pi.ID, "acct_fake1", c.Quote.TotalCents, 1)))
+	drain(t, s, &mailer.Memory{})
+	order, code, _ := f.orderOf(t, c.ID)
+	got, err := s.GetCheckout(ctx, c.Token)
+	f.must(t, err)
+	if got.OrderURL != "https://tickets.example/orders/"+code+"?t="+sales.OrderToken(s.SecretKey, order) {
+		t.Fatalf("before rotation: order url %q", got.OrderURL)
+	}
+	f.must(t, s.RequestOrderLinks(ctx, "acme", "gala", "buyer@example.com"))
+	runKind(t, s, sales.OrderLinksJob, s.OrderLinks(&mailer.Memory{}))
+	got, err = s.GetCheckout(ctx, c.Token)
+	f.must(t, err)
+	if got.OrderURL != "" || got.Status != "completed" || got.OrderCode != code {
+		t.Fatalf("after rotation: status %s, code %q, order url %q; want completed, the code, no url", got.Status, got.OrderCode, got.OrderURL)
+	}
+}

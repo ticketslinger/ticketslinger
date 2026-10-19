@@ -722,6 +722,18 @@ test("a completed checkout goes to its order", async () => {
   expect(res.headers.get("cache-control")).toBe("no-store");
 });
 
+test("a completed checkout whose link was replaced points to the email", async () => {
+  const { a } = app(() => Response.json(checkout({ status: "completed", order_code: "TS-7K2QF" })));
+  const res = await a.request(`/checkout/${TOK}`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("location")).toBeNull();
+  const html = await res.text();
+  expect(html).toContain(
+    "You've got these tickets. To see them, open the newest link we emailed you.",
+  );
+  expect(html).not.toContain("<script");
+});
+
 test("an expired checkout says so and links back, with no script", async () => {
   const { a } = app(() => Response.json(checkout({ status: "expired" })));
   const res = await a.request(`/checkout/${TOK}`);
@@ -1160,6 +1172,7 @@ test("a refund the bank sent back tells the buyer to contact the organizer", asy
   const html = await (await a.request(`/orders/TS-7K2QF?t=${TOK}`)).text();
   expect(html).toContain("Your bank sent $46.90 of your refund back, so it's with Acme again.");
   expect(html).not.toContain("refunded in full");
+  expect(html).not.toContain('class="order-status"');
 });
 
 test("every event page links to getting the ticket link again", async () => {

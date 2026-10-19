@@ -7,7 +7,7 @@ import { bodyLimit } from "hono/body-limit";
 import { serveStatic } from "hono/bun";
 import type { VNode } from "preact";
 import { render } from "preact-render-to-string";
-import { EVENT_CANCELLED } from "../islands/checkout";
+import { EVENT_CANCELLED, LINK_BY_EMAIL } from "../islands/checkout";
 import { ORDER, orderPath, TOKEN } from "../islands/links";
 import { csp } from "./csp";
 import { CheckoutPage } from "./pages/CheckoutPage";
@@ -318,6 +318,10 @@ export function createApp(opts: StorefrontOptions): Hono {
     const checkout = r.data;
     if (!checkout?.event) return trouble(c);
     if (checkout.status === "completed") {
+      // The buyer asked for a new link since: this address no longer hands it out.
+      if (!checkout.order_url) {
+        return page(c, 200, <ErrorPage title="Your tickets" message={LINK_BY_EMAIL} />);
+      }
       // Rebuilt from the code and token: the link's own path never reaches the Location header.
       const to = orderPath(checkout.order_url ?? "", checkout.order_code);
       if (!to) return trouble(c);

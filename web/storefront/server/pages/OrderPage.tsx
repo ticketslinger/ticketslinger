@@ -35,6 +35,7 @@ export function orderStatus(order: Order): string {
 
 export function OrderPage({ order }: { order: Order }) {
   const e = order.event;
+  const status = orderStatus(order);
   return (
     <Layout title={`Order ${order.code} · ${e.name}`}>
       <p class="organizer">{e.organizer_name}</p>
@@ -44,7 +45,7 @@ export function OrderPage({ order }: { order: Order }) {
         {e.venue_name}
         {e.venue_address && <span class="address">{e.venue_address}</span>}
       </p>
-      <p class="order-status">{orderStatus(order)}</p>
+      {status && <p class="order-status">{status}</p>}
       {order.returned_cents > 0 && (
         <p class="notice">
           Your bank sent {formatCents(order.returned_cents)} of your refund back, so it's with{" "}

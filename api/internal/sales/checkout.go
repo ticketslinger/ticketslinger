@@ -523,8 +523,11 @@ func (s *Service) GetCheckout(ctx context.Context, token string) (Checkout, erro
 		}
 		if out.Status != "completed" {
 			out.OrderCode = "" // pending: not the buyer's yet
-		} else if orderID != nil {
-			out.OrderURL = s.orderURL(out.OrderCode, *orderID, version)
+		} else if orderID != nil && version == 0 {
+			// The checkout's address never expires, so it hands out only the
+			// first link. Once the buyer asks for a new one, it goes by email
+			// alone: otherwise this address would outlive every rotation.
+			out.OrderURL = s.orderURL(out.OrderCode, *orderID, 0)
 		}
 		var pp *promo
 		if promoID != nil {

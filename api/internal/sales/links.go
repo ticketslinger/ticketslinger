@@ -94,6 +94,10 @@ func (s *Service) OrderLinks(m mailer.Mailer) jobs.Handler {
 		if err != nil || len(lines) == 0 {
 			return err
 		}
+		// ponytail: the rotation commits before Send, so if every attempt to send
+		// fails, the old link is dead and no new one arrived (the buyer can ask
+		// again). Upgrade path: rotate only after a successful send, or keep the
+		// previous version valid until the new link is delivered.
 		return m.Send(ctx, to, "Your ticket link for "+name, "Here's the link to your tickets for "+name+
 			". It replaces any link we sent before, so an older one won't open them any more. Keep it to yourself: anyone with it can see your tickets.\n\n"+
 			strings.Join(lines, "\n"))

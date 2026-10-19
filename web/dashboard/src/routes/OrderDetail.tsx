@@ -53,11 +53,19 @@ export function failureText(r: Refund): string {
   return r.failure ? WHY[r.failure] : WHY.stripe_failed;
 }
 
+/** A bank that sent a refund back would only send a retry back too: the organizer settles it with the buyer. */
+export const retryable = (r: Refund) => r.status === "failed" && !r.returned_by_bank;
+
+/** A payment that landed after the event was cancelled was refunded because of the cancellation. */
+export const reasonText = (r: Refund, eventCancelled: boolean) =>
+  r.reason === "late_payment" && eventCancelled ? REASON.event_cancelled : REASON[r.reason];
+
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 function RefundRow({
   r,
   canRetry,
+  eventCancelled,
   onRetried,
   org,
   ev,
@@ -65,6 +73,7 @@ function RefundRow({
 }: {
   r: Refund;
   canRetry: boolean;
+  eventCancelled: boolean;
   onRetried: () => void;
   org: string;
   ev: string;
@@ -76,13 +85,13 @@ function RefundRow({
     <li>
       <p>
         <strong>{formatCents(r.amount_cents)}</strong> ·{" "}
-        {r.fee_back ? "with our fee" : "without our fee"} · {REASON[r.reason]} ·{" "}
+        {r.fee_back ? "with our fee" : "without our fee"} · {reasonText(r, eventCancelled)} ·{" "}
         <span className={`pill ${r.status}`}>{STATE[r.status]}</span>
       </p>
       {r.status === "failed" && (
         <>
           <p>{failureText(r)}</p>
-          {canRetry && (
+          {canRetry && retryable(r) && (
             <button
               type="button"
               className="inline secondary"
@@ -312,6 +321,7 @@ export function OrderDetail({
                     key={r.id}
                     r={r}
                     canRetry={canEdit(org)}
+                    eventCancelled={event?.status === "cancelled"}
                     onRetried={reload}
                     org={org.slug}
                     ev={eventId}

@@ -766,7 +766,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Whoever has the token. status is expired once the hold has run out with no payment started. Once a payment exists, a card may already be charged, so it stays paying past the hold until Stripe's answer settles it. cancelled: the hold is over and the payment was stopped, so nothing was charged (we stop a payment still unfinished an hour after its hold ran out). 409 event_cancelled once the organizer has cancelled the event. Answers come with Cache-Control: no-store. A completed checkout carries order_code and order_url, the buyer's link to their tickets. event carries what the checkout page needs: the event's names, the cart's ticket type names and the questions asked of them. */
+        /** @description Whoever has the token. status is expired once the hold has run out with no payment started. Once a payment exists, a card may already be charged, so it stays paying past the hold until Stripe's answer settles it. cancelled: the hold is over and the payment was stopped, so nothing was charged (we stop a payment still unfinished an hour after its hold ran out). 409 event_cancelled once the organizer has cancelled the event. Answers come with Cache-Control: no-store. A completed checkout carries order_code and order_url, the buyer's link to their tickets, until the buyer asks for a new link (requestOrderLinks): from then on order_url is left out, and the link goes by email only. event carries what the checkout page needs: the event's names, the cart's ticket type names and the questions asked of them. */
         get: operations["getCheckout"];
         put?: never;
         post?: never;
@@ -983,7 +983,7 @@ export interface components {
             quote: components["schemas"]["Quote"];
             /** @description Once completed. */
             order_code?: string;
-            /** @description Once completed: the buyer's link to their tickets. */
+            /** @description Once completed: the buyer's link to their tickets. Left out once the buyer has asked for a new link, which goes by email only. */
             order_url?: string;
             event?: components["schemas"]["CheckoutEvent"];
         };
