@@ -720,6 +720,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/events/{event}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Owners and admins, or any API key; check-in members get 403 forbidden_role. The event's sales, refunds and our fee, from live data. Money counts paid orders; refunded_cents counts every refund that hasn't failed, and platform_fee_cents is our fee on succeeded payments less the fee that has gone back. net_cents = gross_cents - refunded_cents - platform_fee_cents, before Stripe's processing fees. */
+        get: operations["getEventReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/exports/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Owners and admins, or any API key; check-in members get 403 forbidden_role. The event's orders, attendees (one row per ticket, any status, then a column per question) or check-ins as CSV: UTF-8 with a BOM, CRLF line ends, times in the event's time zone with their offset, money like 25.00. A cell that starts with =, +, -, @, tab or CR gets a leading ' so spreadsheets don't run it. It comes with Content-Disposition: attachment; filename="<event-slug>-<kind>" and Cache-Control: no-store. 400 unknown_export for any other kind. */
+        get: operations["exportEventCsv"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/events/{event}/promo-codes": {
         parameters: {
             query?: never;
@@ -1356,6 +1390,80 @@ export interface components {
             checked_in: number;
             /** @description The event's valid tickets. */
             sold: number;
+        };
+        EventReport: {
+            /** @enum {string} */
+            currency: "USD";
+            /**
+             * Format: int64
+             * @description Paid orders' totals.
+             */
+            gross_cents: number;
+            /**
+             * Format: int64
+             * @description Refunds that haven't failed: gone through or on their way.
+             */
+            refunded_cents: number;
+            /**
+             * Format: int64
+             * @description Our fee on succeeded payments, less the fee that has gone back.
+             */
+            platform_fee_cents: number;
+            /**
+             * Format: int64
+             * @description Paid orders' tax.
+             */
+            tax_cents: number;
+            /**
+             * Format: int64
+             * @description gross_cents - refunded_cents - platform_fee_cents, before Stripe's processing fees.
+             */
+            net_cents: number;
+            /** @description Paid orders. */
+            orders: number;
+            /** @description Valid tickets. */
+            sold: number;
+            /** @description Valid tickets checked in. */
+            checked_in: number;
+            /** @description In position order. */
+            ticket_types: components["schemas"]["ReportTicketType"][];
+            quotas: components["schemas"]["ReportQuota"][];
+            /** @description By the day orders were paid, in the event's time zone, oldest first. */
+            sales_by_day: components["schemas"]["ReportDay"][];
+            promo_codes: components["schemas"]["ReportPromoCode"][];
+        };
+        ReportTicketType: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            sold: number;
+            checked_in: number;
+        };
+        ReportQuota: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            size: number;
+            /** @description Size less tickets and live holds counted against it, never below 0. */
+            remaining: number;
+        };
+        ReportDay: {
+            /** @description YYYY-MM-DD. */
+            day: string;
+            orders: number;
+            tickets: number;
+            /** Format: int64 */
+            gross_cents: number;
+        };
+        ReportPromoCode: {
+            code: string;
+            used_count: number;
+            max_uses: number | null;
+            /**
+             * Format: int64
+             * @description Discount given on paid orders.
+             */
+            discount_cents: number;
         };
         OrderDetail: components["schemas"]["OrderSummary"] & {
             tickets: components["schemas"]["OrderDetailTicket"][];
@@ -3537,6 +3645,61 @@ export interface operations {
                     "application/json": components["schemas"]["CheckinSummary"];
                 };
             };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    getEventReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventReport"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    exportEventCsv: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                kind: "orders.csv" | "attendees.csv" | "checkins.csv";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Content-Disposition": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv; charset=utf-8": string;
+                };
+            };
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];

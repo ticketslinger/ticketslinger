@@ -128,7 +128,7 @@ func seedCatalogue(h *harness, owner, slug, apiKey string) map[string]string {
 		h.t.Fatal(err)
 	}
 	return map[string]string{"organizer": slug, "member": member, "apiKey": apiKey, "event": event, "ticketType": ticketType, "quota": quota, "promoCode": promoCode, "question": question, "challengeId": "0190a0a0-0000-7000-8000-000000000000",
-		"eventSlug": "gala", "token": "no-such-checkout-token-0000000000000000000", "order": order, "refund": refund, "code": "TS-00000", "q": "ab"}
+		"eventSlug": "gala", "token": "no-such-checkout-token-0000000000000000000", "order": order, "refund": refund, "code": "TS-00000", "q": "ab", "kind": "orders.csv"}
 }
 
 // walk calls every secured operation with token and checks the status (and

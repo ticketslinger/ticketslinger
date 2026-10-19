@@ -735,6 +735,36 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/report:
+    get:
+      operationId: getEventReport
+      description: "Owners and admins, or any API key; check-in members get 403 forbidden_role. The event's sales, refunds and our fee, from live data. Money counts paid orders; refunded_cents counts every refund that hasn't failed, and platform_fee_cents is our fee on succeeded payments less the fee that has gone back. net_cents = gross_cents - refunded_cents - platform_fee_cents, before Stripe's processing fees."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/EventReport" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/exports/{kind}:
+    get:
+      operationId: exportEventCsv
+      description: "Owners and admins, or any API key; check-in members get 403 forbidden_role. The event's orders, attendees (one row per ticket, any status, then a column per question) or check-ins as CSV: UTF-8 with a BOM, CRLF line ends, times in the event's time zone with their offset, money like 25.00. A cell that starts with =, +, -, @, tab or CR gets a leading ' so spreadsheets don't run it. It comes with Content-Disposition: attachment; filename=\"<event-slug>-<kind>\" and Cache-Control: no-store. 400 unknown_export for any other kind."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [orders.csv, attendees.csv, checkins.csv] } }
+      responses:
+        "200":
+          description: OK
+          headers:
+            Content-Disposition: { required: true, schema: { type: string } }
+          content: { "text/csv; charset=utf-8": { schema: { type: string } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/promo-codes:
     get:
       operationId: listPromoCodes
@@ -1322,6 +1352,65 @@ components:
       properties:
         checked_in: { type: integer, description: "The event's valid tickets checked in so far." }
         sold: { type: integer, description: "The event's valid tickets." }
+    EventReport:
+      type: object
+      required: [currency, gross_cents, refunded_cents, platform_fee_cents, tax_cents, net_cents, orders, sold, checked_in, ticket_types, quotas, sales_by_day, promo_codes]
+      properties:
+        currency: { type: string, enum: [USD] }
+        gross_cents: { type: integer, format: int64, description: "Paid orders' totals." }
+        refunded_cents: { type: integer, format: int64, description: "Refunds that haven't failed: gone through or on their way." }
+        platform_fee_cents: { type: integer, format: int64, description: "Our fee on succeeded payments, less the fee that has gone back." }
+        tax_cents: { type: integer, format: int64, description: "Paid orders' tax." }
+        net_cents: { type: integer, format: int64, description: "gross_cents - refunded_cents - platform_fee_cents, before Stripe's processing fees." }
+        orders: { type: integer, description: "Paid orders." }
+        sold: { type: integer, description: "Valid tickets." }
+        checked_in: { type: integer, description: "Valid tickets checked in." }
+        ticket_types:
+          type: array
+          description: In position order.
+          items: { $ref: "#/components/schemas/ReportTicketType" }
+        quotas:
+          type: array
+          items: { $ref: "#/components/schemas/ReportQuota" }
+        sales_by_day:
+          type: array
+          description: "By the day orders were paid, in the event's time zone, oldest first."
+          items: { $ref: "#/components/schemas/ReportDay" }
+        promo_codes:
+          type: array
+          items: { $ref: "#/components/schemas/ReportPromoCode" }
+    ReportTicketType:
+      type: object
+      required: [id, name, sold, checked_in]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        sold: { type: integer }
+        checked_in: { type: integer }
+    ReportQuota:
+      type: object
+      required: [id, name, size, remaining]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        size: { type: integer }
+        remaining: { type: integer, description: "Size less tickets and live holds counted against it, never below 0." }
+    ReportDay:
+      type: object
+      required: [day, orders, tickets, gross_cents]
+      properties:
+        day: { type: string, description: "YYYY-MM-DD." }
+        orders: { type: integer }
+        tickets: { type: integer }
+        gross_cents: { type: integer, format: int64 }
+    ReportPromoCode:
+      type: object
+      required: [code, used_count, max_uses, discount_cents]
+      properties:
+        code: { type: string }
+        used_count: { type: integer }
+        max_uses: { type: [integer, "null"] }
+        discount_cents: { type: integer, format: int64, description: "Discount given on paid orders." }
     OrderDetail:
       allOf:
         - { $ref: "#/components/schemas/OrderSummary" }
