@@ -463,3 +463,103 @@ func TestParkedJobsReachTheirHook(t *testing.T) {
 		t.Fatalf("hook calls %q", got)
 	}
 }
+
+func TestIDIsTheJobsOwn(t *testing.T) {
+	pool := testdb.New(t)
+	var got string
+	w := &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{"ping": func(ctx context.Context, _ []byte) error {
+		got = jobs.ID(ctx)
+		return nil
+	}}}
+	enqueue(t, pool, "ping", 1)
+	var want string
+	if err := pool.QueryRow(context.Background(), `select id::text from jobs`).Scan(&want); err != nil {
+		t.Fatal(err)
+	}
+	if ran, err := w.RunOnce(context.Background()); !ran || err != nil {
+		t.Fatal(ran, err)
+	}
+	if got == "" || got != want {
+		t.Fatalf("ID = %q, want %q", got, want)
+	}
+	if id := jobs.ID(context.Background()); id != "" {
+		t.Fatalf("ID outside a handler = %q", id)
+	}
+}
+
+func TestPermanentParksAtOnce(t *testing.T) {
+	pool := testdb.New(t)
+	var hooked []string
+	cause := errors.New("resend: 422 validation_error")
+	w := &jobs.Worker{Pool: pool,
+		Handlers: map[string]jobs.Handler{"mail": func(context.Context, []byte) error { return jobs.Permanent(cause) }},
+		Parked: map[string]func(context.Context, []byte, string){"mail": func(_ context.Context, _ []byte, c string) {
+			hooked = append(hooked, c)
+		}}}
+	enqueue(t, pool, "mail", 1)
+	if ran, err := w.RunOnce(context.Background()); !ran || err != nil {
+		t.Fatal(ran, err)
+	}
+	if n := count(t, pool, `select count(*) from jobs where attempts = 10 and run_at = 'infinity'
+		and last_error = 'resend: 422 validation_error' and locked_until is null`); n != 1 {
+		t.Fatal("job was not parked at once")
+	}
+	if len(hooked) != 1 || hooked[0] != "resend: 422 validation_error" {
+		t.Fatalf("hook calls %q", hooked)
+	}
+	if !errors.Is(jobs.Permanent(cause), cause) || errors.Unwrap(jobs.Delay(time.Now(), cause)) != cause {
+		t.Fatal("wrappers do not unwrap to the cause")
+	}
+}
+
+func TestDelayKeepsTheAttempt(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	var until time.Time
+	w := &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{"mail": func(context.Context, []byte) error {
+		return jobs.Delay(until, errors.New("resend: 429 rate_limit_exceeded"))
+	}}}
+	run := func() (attempts int, secs float64) {
+		t.Helper()
+		if ran, err := w.RunOnce(ctx); !ran || err != nil {
+			t.Fatal(ran, err)
+		}
+		if err := pool.QueryRow(ctx, `select attempts, extract(epoch from run_at - now()) from jobs`).Scan(&attempts, &secs); err != nil {
+			t.Fatal(err)
+		}
+		return attempts, secs
+	}
+	enqueue(t, pool, "mail", 1)
+	until = time.Now().Add(3 * time.Hour)
+	if a, s := run(); a != 0 || s < 3*3600-5 || s > 3*3600+1 {
+		t.Fatalf("attempts=%d run_at in %.0fs, want 0, ~3h", a, s)
+	}
+	mustExec(t, pool, `update jobs set run_at = now()`)
+	until = time.Now().Add(48 * time.Hour)
+	if a, s := run(); a != 0 || s > 25*3600+1 || s < 25*3600-5 {
+		t.Fatalf("attempts=%d run_at in %.0fs, want 0, ~25h", a, s)
+	}
+	mustExec(t, pool, `update jobs set run_at = now(), created_at = now() - interval '73 hours'`)
+	until = time.Now().Add(3 * time.Hour)
+	if a, s := run(); a != 1 || s < 110 || s > 121 {
+		t.Fatalf("attempts=%d run_at in %.0fs, want 1, ~120s backoff", a, s)
+	}
+}
+
+func TestSweepDeletesParkedJobsAfter30Days(t *testing.T) {
+	pool := testdb.New(t)
+	owner := testdb.Owner(t, pool)
+	mustExec(t, owner, `insert into jobs (kind, payload, attempts, run_at, created_at) values
+		('old', '{}', 10, 'infinity', now() - interval '31 days'),
+		('recent', '{}', 10, 'infinity', now() - interval '29 days'),
+		('live', '{}', 0, now() + interval '1 hour', now() - interval '31 days')`)
+	if err := jobs.Sweep(context.Background(), pool); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, pool, `select count(*) from jobs where kind in ('recent', 'live')`); n != 2 {
+		t.Fatalf("%d of the two keepers left", n)
+	}
+	if n := count(t, pool, `select count(*) from jobs where kind = 'old'`); n != 0 {
+		t.Fatal("31-day-old parked job survived")
+	}
+}
