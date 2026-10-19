@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
 	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
@@ -185,6 +186,18 @@ func TestAbandonedWithoutAPaymentIsCancelled(t *testing.T) {
 	}
 }
 
+// lockingOnIntent takes the event's lock in tx as Stripe makes the intent:
+// a cancellation that starts after Pay's first transaction.
+type lockingOnIntent struct {
+	*payments.Fake
+	lock func()
+}
+
+func (l lockingOnIntent) CreatePaymentIntent(ctx context.Context, in plugin.PaymentIntentInput) (plugin.PaymentIntent, error) {
+	l.lock()
+	return l.Fake.CreatePaymentIntent(ctx, in)
+}
+
 // A cancellation that lands while Pay is making the intent: Pay sees it as
 // it stores the intent, cancels the intent itself and says so.
 func TestPayRacingACancellationStopsItsIntent(t *testing.T) {
@@ -195,8 +208,11 @@ func TestPayRacingACancellationStopsItsIntent(t *testing.T) {
 	tx, err := f.owner.Begin(ctx)
 	f.must(t, err)
 	t.Cleanup(func() { _ = tx.Rollback(ctx) })
-	_, err = tx.Exec(ctx, `select 1 from events where id = $1 for no key update`, f.event)
-	f.must(t, err)
+	s.Payments = lockingOnIntent{fake, func() {
+		if _, err := tx.Exec(ctx, `select 1 from events where id = $1 for no key update`, f.event); err != nil {
+			t.Error(err) // Pay's goroutine: no Fatal
+		}
+	}}
 	done := make(chan error)
 	go func() {
 		_, err := s.Pay(ctx, c.Token, sales.Details{Email: "buyer@example.com"})
@@ -219,6 +235,67 @@ func TestPayRacingACancellationStopsItsIntent(t *testing.T) {
 	}
 	if _, err := s.GetCheckout(ctx, c.Token); !errors.As(err, &conflict) || conflict.Code != "event_cancelled" {
 		t.Fatalf("get checkout: %v, want event_cancelled", err)
+	}
+}
+
+// A free order is paid inside Pay's own transaction, so a cancellation that
+// lands while Pay is under way must still void it: Pay holds the event, the
+// cancellation waits and then finds the order. No ticket stays valid.
+func TestCancelRacingAFreePayLeavesNoValidTickets(t *testing.T) {
+	s, _ := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 0})
+	ctx := context.Background()
+	// Pay locks the promo code last, after it has seen the event live: the
+	// blocker holds Pay there, past every check, with its order written.
+	promo := f.promo(t, "FREE", "percent", 1000)
+	in := buy(sales.Item{TicketTypeID: f.general, Quantity: 1})
+	in.PromoCode = "FREE"
+	c := f.open(t, s, in)
+	blocker, err := f.owner.Begin(ctx)
+	f.must(t, err)
+	t.Cleanup(func() { _ = blocker.Rollback(ctx) })
+	_, err = blocker.Exec(ctx, `select 1 from promo_codes where id = $1 for no key update`, promo)
+	f.must(t, err)
+	payDone, cancelDone := make(chan error, 1), make(chan error, 1)
+	go func() {
+		_, err := s.Pay(ctx, c.Token, sales.Details{Email: "free@example.com"})
+		payDone <- err
+	}()
+	waitForLockWaiters(t, f.owner, 1) // Pay, on the promo code
+	go func() {
+		_, err := f.cancel(s, "Gala")
+		cancelDone <- err
+	}()
+	// The cancellation either waits on the event Pay holds, or (the bug) runs
+	// to the end without seeing Pay's order.
+	var cancelErr error
+	cancelled := false
+	for deadline := time.Now().Add(10 * time.Second); !cancelled; {
+		var waiting int
+		f.must(t, f.owner.QueryRow(ctx, `select count(distinct l.pid) from pg_locks l join pg_stat_activity a on a.pid = l.pid
+			where not l.granted and a.datname = current_database()`).Scan(&waiting))
+		if waiting >= 2 {
+			break
+		}
+		select {
+		case cancelErr = <-cancelDone:
+			cancelled = true
+		case <-time.After(10 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the cancellation neither waited nor finished")
+		}
+	}
+	f.must(t, blocker.Rollback(ctx))
+	if err := <-payDone; err != nil && conflictCode(err) != "event_cancelled" {
+		t.Fatalf("pay: %v", err)
+	}
+	if !cancelled {
+		cancelErr = <-cancelDone
+	}
+	f.must(t, cancelErr)
+	if n := f.count(t, `select count(*) from tickets where status = 'valid'`); n != 0 {
+		t.Fatalf("%d valid tickets on a cancelled event", n)
 	}
 }
 
