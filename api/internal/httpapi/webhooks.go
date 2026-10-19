@@ -64,11 +64,13 @@ const webhookTolerance = 5 * time.Minute
 
 // privateAnswers keeps a buyer's order page, its PDF and checkout out of
 // caches and referrers: the first two carry the tickets' QR codes, the last
-// (once paid) order_url, the link to them.
+// (once paid) order_url, the link to them. An event's CSV exports hold its
+// buyers' names and emails, so they stay out of caches too.
 func privateAnswers(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Pattern {
-		case "GET /v1/orders/{code}", "GET /v1/orders/{code}/tickets.pdf", "GET /v1/checkouts/{token}":
+		case "GET /v1/orders/{code}", "GET /v1/orders/{code}/tickets.pdf", "GET /v1/checkouts/{token}",
+			"GET /v1/organizers/{organizer}/events/{event}/exports/{kind}":
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Referrer-Policy", "no-referrer")
 		}
