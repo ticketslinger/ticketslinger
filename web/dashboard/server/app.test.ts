@@ -351,11 +351,19 @@ test("/config.json tells the page the Turnstile site key", async () => {
   const on = mk(fakeApi(), { turnstileSiteKey: "1x00000000000000000000AA" });
   const res = await on.request("/config.json");
   expect(res.status).toBe(200);
-  expect(await res.json()).toEqual({ turnstileSiteKey: "1x00000000000000000000AA" });
+  expect(await res.json()).toEqual({
+    turnstileSiteKey: "1x00000000000000000000AA",
+    storefrontUrl: "",
+  });
   expect(res.headers.get("content-security-policy")).toBe(PLAIN_CSP);
   expect(await (await mk(fakeApi()).request("/config.json")).json()).toEqual({
     turnstileSiteKey: "",
+    storefrontUrl: "",
   });
+  const sf = mk(fakeApi(), { storefrontUrl: "https://t.example.com" });
+  expect(
+    ((await (await sf.request("/config.json")).json()) as { storefrontUrl: string }).storefrontUrl,
+  ).toBe("https://t.example.com");
 });
 
 test("only the HTML shell lets Turnstile in, and only when it's on", async () => {

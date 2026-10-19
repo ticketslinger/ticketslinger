@@ -29,8 +29,15 @@ test("environment overrides", () => {
       staticDir: "/srv/dash",
       secureCookies: true,
       turnstileSiteKey: "",
+      storefrontUrl: "",
     },
   });
+});
+
+test("storefront URL", () => {
+  expect(serverOptions({ TS_STOREFRONT_URL: "https://t.example.com" }).app.storefrontUrl).toBe(
+    "https://t.example.com",
+  );
 });
 
 test("Turnstile site key", () => {
@@ -38,4 +45,21 @@ test("Turnstile site key", () => {
   expect(
     serverOptions({ TS_TURNSTILE_SITEKEY: "1x00000000000000000000AA" }).app.turnstileSiteKey,
   ).toBe("1x00000000000000000000AA");
+});
+
+test("storefront URL is validated and reduced to its origin", () => {
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    for (const bad of ["javascript:alert(1)", "ftp://x", "http://evil.com", "garbage"])
+      expect(serverOptions({ TS_STOREFRONT_URL: bad }).app.storefrontUrl).toBe("");
+  } finally {
+    console.warn = warn;
+  }
+  expect(serverOptions({ TS_STOREFRONT_URL: "http://localhost:3001" }).app.storefrontUrl).toBe(
+    "http://localhost:3001",
+  );
+  expect(
+    serverOptions({ TS_STOREFRONT_URL: "https://tickets.example.com/path/" }).app.storefrontUrl,
+  ).toBe("https://tickets.example.com");
 });

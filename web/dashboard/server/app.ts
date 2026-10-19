@@ -10,6 +10,8 @@ export type AppOptions = {
   secureCookies: boolean;
   /** Cloudflare Turnstile site key; "" turns the widget off. */
   turnstileSiteKey?: string;
+  /** Public address of the storefront, for the link organizers share; "" hides the link. */
+  storefrontUrl?: string;
   /** Address of the TCP peer. Defaults to Bun's server.requestIP; tests inject their own. */
   peerIp?: (c: Context) => string | undefined;
 };
@@ -196,7 +198,9 @@ export function createApp(opts: AppOptions): Hono {
     return c.json(rest, res.status as 200 | 201);
   }
 
-  app.get("/config.json", (c) => c.json({ turnstileSiteKey: siteKey }));
+  app.get("/config.json", (c) =>
+    c.json({ turnstileSiteKey: siteKey, storefrontUrl: opts.storefrontUrl ?? "" }),
+  );
 
   app.post("/session/login", (c) => login(c, "/auth/login"));
   app.post("/session/signup", (c) => login(c, "/auth/signup"));
