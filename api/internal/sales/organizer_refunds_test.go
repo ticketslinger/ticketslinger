@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
@@ -851,5 +852,99 @@ func TestASucceededRefundOnlyFailsOnStripesWord(t *testing.T) {
 	fail("stripe_failed")
 	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'failed' and failure = 'stripe_failed'`, id); n != 1 {
 		t.Fatal("Stripe's own failure didn't fail it")
+	}
+}
+
+// A retry starts the row afresh: a refund the buyer's bank sent back, once
+// sent again, isn't still marked returned.
+func TestRetryClearsReturnedByBank(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	ctx := context.Background()
+	order, _, _ := f.paidOrder(t, s, fake, 1, 1)
+	id := *f.refund(t, s, order, sales.RefundRequest{}).RefundID
+	drain(t, s, &mailer.Memory{})
+	f.must(t, system.Run(ctx, s.Pool, f.org, func(tx pgx.Tx) error {
+		return sales.FailRefundForTest(s, ctx, tx, f.org, id, "stripe_failed")
+	}))
+	if n := f.count(t, `select count(*) from refunds where id = $1 and returned_by_bank`, id); n != 1 {
+		t.Fatal("not returned by the bank")
+	}
+	v, err := f.retry(s, order, id)
+	f.must(t, err)
+	if v.Status != "requested" || v.ReturnedByBank {
+		t.Fatalf("retried refund %+v, want requested and not returned", v)
+	}
+}
+
+// The database backs up the app's refund rule: refunds that haven't failed
+// never add up to more than the payment, nor their fees to more than the
+// fee it carried, whoever writes them.
+func TestRefundsCantExceedThePayment(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	ctx := context.Background()
+	order, _, tickets := f.paidOrder(t, s, fake, 2, 1)                                // 5200, our fee 200
+	f.refund(t, s, order, sales.RefundRequest{TicketIDs: tickets[:1], FeeBack: true}) // 2600, fee 100
+	payment := f.id(t, `select id from payments where order_id = $1`, order)
+	asApp := func(amount, fee int64) error {
+		return db.WithOrganizer(ctx, s.Pool, f.user, f.org, func(tx pgx.Tx, _ string) error {
+			_, err := tx.Exec(ctx, `insert into refunds (organizer_id, payment_id, amount_cents, fee_refunded, fee_cents, status, reason, actor_user_id)
+				values ($1, $2, $3, $4, $5, 'requested', 'organizer', $6)`, f.org, payment, amount, fee > 0, fee, f.user)
+			return err
+		})
+	}
+	for name, c := range map[string]struct{ amount, fee int64 }{
+		"over-refund":   {2601, 0},
+		"fee clawback":  {1, 101},
+		"both together": {5200, 200},
+	} {
+		var pg *pgconn.PgError
+		if err := asApp(c.amount, c.fee); !errors.As(err, &pg) || pg.Code != "23514" {
+			t.Errorf("%s: %v, want check_violation", name, err)
+		}
+	}
+	// The app's own insert maps it to its error.
+	err := db.WithOrganizer(ctx, s.Pool, f.user, f.org, func(tx pgx.Tx, _ string) error {
+		_, err := sales.RequestRefundForTest(ctx, tx, f.org, payment, 2601, 0, false, "organizer", &f.user)
+		return err
+	})
+	if conflictCode(err) != "not_refundable" {
+		t.Fatalf("app over-refund: %v, want not_refundable", err)
+	}
+	// What's left, to the cent, still goes through.
+	if res := f.refund(t, s, order, sales.RefundRequest{FeeBack: true}); res.AmountCents != 2600 || res.FeeCents != 100 {
+		t.Fatalf("the rest: %+v", res)
+	}
+	if n := f.count(t, `select count(*) from refunds`); n != 2 {
+		t.Fatalf("%d refunds, want 2", n)
+	}
+}
+
+// Two inserts at once can't both fit in what's left: the second waits on
+// the payment, then sees the first.
+func TestConcurrentRefundsCantBothFit(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	ctx := context.Background()
+	order, _, _ := f.paidOrder(t, s, fake, 2, 1)
+	payment := f.id(t, `select id from payments where order_id = $1`, order)
+	insert := `insert into refunds (organizer_id, payment_id, amount_cents, fee_refunded, fee_cents, status, reason)
+		values ($1, $2, 3000, false, 0, 'requested', 'organizer')`
+	first, err := f.owner.Begin(ctx)
+	f.must(t, err)
+	t.Cleanup(func() { _ = first.Rollback(ctx) })
+	_, err = first.Exec(ctx, insert, f.org, payment)
+	f.must(t, err)
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.owner.Exec(ctx, insert, f.org, payment)
+		done <- err
+	}()
+	waitForLockWaiters(t, f.owner, 1)
+	f.must(t, first.Commit(ctx))
+	var pg *pgconn.PgError
+	if err := <-done; !errors.As(err, &pg) || pg.Code != "23514" {
+		t.Fatalf("second insert: %v, want check_violation", err)
 	}
 }
