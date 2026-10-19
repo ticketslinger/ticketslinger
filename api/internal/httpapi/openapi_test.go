@@ -26,7 +26,7 @@ import (
 )
 
 // unspecified are paths the API serves on purpose outside openapi.yaml.
-var unspecified = []string{"/v1/webhooks/stripe", "/__test/"}
+var unspecified = []string{"/v1/webhooks/stripe", "/v1/webhooks/resend", "/__test/"}
 
 // clients holds the validating client for each test server, by base URL.
 var clients sync.Map

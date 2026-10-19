@@ -84,6 +84,7 @@ func New(d Deps) http.Handler {
 		ErrorHandlerFunc: writeBadRequest,
 	})
 	mux.HandleFunc("POST /v1/webhooks/stripe", s.stripeWebhook)
+	mux.HandleFunc("POST /v1/webhooks/resend", s.resendWebhook)
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { writeError(w, notFound()) })
 	return requestID(recoverer(limitBody(mux)))
 }

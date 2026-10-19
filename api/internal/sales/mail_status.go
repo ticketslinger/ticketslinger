@@ -139,3 +139,23 @@ func TicketEmailParked(s *Service) func(ctx context.Context, payload []byte, cau
 		}
 	}
 }
+
+// MailEvent records what Resend says became of an order's ticket email:
+// kind is delivered, bounced or complained. delivered moves queued, failing
+// or sent (a fast webhook can beat the handler's sent, whose write then
+// leaves it be); bounced and complained hold from any status. An email
+// created before the order's latest send request belongs to an older send
+// and changes nothing, and neither does a repeat of the status it has.
+func (s *Service) MailEvent(ctx context.Context, org, order uuid.UUID, kind string, emailCreated time.Time) error {
+	switch kind {
+	case "delivered", "bounced", "complained":
+	default:
+		return fmt.Errorf("mail event: unknown kind %q", kind)
+	}
+	return system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `update orders set mail_status = $2, mail_updated_at = statement_timestamp()
+			where id = $1 and mail_requested_at <= $3 and mail_status is distinct from $2
+				and ($2 <> 'delivered' or mail_status in ('queued', 'failing', 'sent'))`, order, kind, emailCreated)
+		return err
+	})
+}
