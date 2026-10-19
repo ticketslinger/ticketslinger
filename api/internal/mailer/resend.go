@@ -20,7 +20,8 @@ type Resend struct {
 	Key, From, URL string
 	Client         *http.Client // nil: a 15 s timeout
 	// OnQuota gets Resend's used daily and monthly counts after every
-	// answer; a missing header is -1.
+	// answer; a missing header is -1. Resend sends both on a 2xx (the daily
+	// one only on the free plan) and neither on a 422.
 	OnQuota func(ctx context.Context, daily, monthly int)
 }
 
