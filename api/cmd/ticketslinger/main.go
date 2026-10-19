@@ -48,20 +48,23 @@ func main() {
 			os.Exit(1)
 		}
 	case "migrate":
-		cfg, err := config.Load()
-		if err == nil && cfg.MigrateDatabaseURL == "" {
-			err = errors.New("TS_MIGRATE_DATABASE_URL is required for migrate")
-		}
-		if err == nil {
-			err = db.Migrate(context.Background(), cfg.MigrateDatabaseURL)
-		}
-		if err != nil {
+		if err := runMigrate(context.Background(), os.Getenv); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 	default:
 		usage()
 	}
+}
+
+// runMigrate needs only the owner's URL: the migrate unit holds no other secret,
+// so it must not load the serve config, which would ask for them.
+func runMigrate(ctx context.Context, getenv func(string) string) error {
+	u := getenv("TS_MIGRATE_DATABASE_URL")
+	if u == "" {
+		return errors.New("TS_MIGRATE_DATABASE_URL is required for migrate")
+	}
+	return db.Migrate(ctx, u)
 }
 
 func usage() {

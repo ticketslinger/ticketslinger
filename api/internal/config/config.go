@@ -15,12 +15,11 @@ import (
 )
 
 type Config struct {
-	DatabaseURL        string // ts_app
-	MigrateDatabaseURL string // ts_owner; only needed by `ticketslinger migrate`
-	HTTPAddr           string
-	PublicURL          string
-	DashboardOrigin    string
-	WebAuthnRPID       string
+	DatabaseURL     string // ts_app
+	HTTPAddr        string
+	PublicURL       string
+	DashboardOrigin string
+	WebAuthnRPID    string
 	// SecretKey encrypts secrets at rest (TS_SECRET_KEY: base64 of 32 bytes).
 	// Nil when unset; `serve` refuses to start without it.
 	SecretKey []byte
@@ -59,13 +58,12 @@ type Config struct {
 
 func Load() (Config, error) {
 	c := Config{
-		DatabaseURL:        os.Getenv("TS_DATABASE_URL"),
-		MigrateDatabaseURL: os.Getenv("TS_MIGRATE_DATABASE_URL"),
-		HTTPAddr:           env("TS_HTTP_ADDR", "127.0.0.1:3000"),
-		PublicURL:          env("TS_PUBLIC_URL", "http://localhost:3000"),
-		DashboardOrigin:    env("TS_DASHBOARD_ORIGIN", "http://localhost:5173"),
-		WebAuthnRPID:       env("TS_WEBAUTHN_RPID", "localhost"),
-		StorefrontURL:      env("TS_STOREFRONT_URL", "http://localhost:3001"),
+		DatabaseURL:     os.Getenv("TS_DATABASE_URL"),
+		HTTPAddr:        env("TS_HTTP_ADDR", "127.0.0.1:3000"),
+		PublicURL:       env("TS_PUBLIC_URL", "http://localhost:3000"),
+		DashboardOrigin: env("TS_DASHBOARD_ORIGIN", "http://localhost:5173"),
+		WebAuthnRPID:    env("TS_WEBAUTHN_RPID", "localhost"),
+		StorefrontURL:   env("TS_STOREFRONT_URL", "http://localhost:3001"),
 
 		StripeSecretKey:      os.Getenv("TS_STRIPE_SECRET_KEY"),
 		StripePublishableKey: os.Getenv("TS_STRIPE_PUBLISHABLE_KEY"),
