@@ -22,3 +22,5 @@ TS_STRIPE_WEBHOOK_SECRET=whsec_...      # from the endpoint below
 ```
 
 In Stripe, go to Developers → Webhooks → Add destination, pick events from **Your account**, set the API version to `2026-09-30.endive`, and choose `payment_intent.succeeded`, `refund.created`, `refund.updated`, `refund.failed` and `charge.refunded`. The URL is `https://<your API host>/v1/webhooks/stripe`, and the signing secret it gives you is your `TS_STRIPE_WEBHOOK_SECRET`. Keep the platform-fee variables (`TS_PLATFORM_FEE_BP`, `TS_PLATFORM_FEE_CENTS`) unset; the server won't start with a fee in this mode.
+
+Pick your payments mode before you sell your first ticket. Switch later and refunds of the payments you took before can get stranded.

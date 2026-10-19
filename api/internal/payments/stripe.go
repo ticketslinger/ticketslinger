@@ -203,8 +203,10 @@ func (s *Stripe) ListRefunds(ctx context.Context, account, intentID string) ([]p
 // The fee id is read on the connected account; the fee itself is ours, so the
 // refund runs on the platform with no Stripe-Account header.
 func (s *Stripe) RefundApplicationFee(ctx context.Context, in plugin.FeeRefundInput) (string, error) {
-	if s.direct {
-		return "", plugin.ErrDirectPayments // no fee was ever taken
+	if s.direct && in.Account == "" {
+		// A direct charge never carries our fee. One made on a connected
+		// account before the server switched modes still can, and goes back.
+		return "", plugin.ErrDirectPayments
 	}
 	g := &stripe.PaymentIntentRetrieveParams{}
 	g.AddExpand("latest_charge")

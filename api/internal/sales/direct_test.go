@@ -2,11 +2,13 @@ package sales_test
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/stripe/stripe-go/v87"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/payments"
@@ -131,6 +133,13 @@ func TestDirectModeSellsWithoutConnect(t *testing.T) {
 		t.Fatalf("%d refund jobs queued after the refund succeeded, want no fee step", n)
 	}
 
+	// Stripe's charge.refunded names no account either, and still finds the payment.
+	raw, _ := json.Marshal(map[string]any{"id": "ch_1", "object": "charge", "payment_intent": pi.ID, "amount_refunded": 2500})
+	f.must(t, s.HandleStripeEvent(ctx, stripe.Event{ID: "evt_ch1", Type: stripe.EventTypeChargeRefunded, Data: &stripe.EventData{Raw: raw}}))
+	if n := f.count(t, `select count(*) from stripe_events where id = 'evt_ch1'`); n != 1 {
+		t.Fatalf("charge.refunded recorded %d times, want 1 (it didn't find the payment)", n)
+	}
+
 	// The event is cancelled: the rest of the paid order goes back, and the
 	// payment still in flight is stopped.
 	_, err = f.cancel(s, "Gala")
@@ -180,6 +189,12 @@ func TestDirectModeSkipsTheFeeStep(t *testing.T) {
 		refund, err = sales.RequestRefundForTest(ctx, tx, f.org, payment, 2500, 100, true, "organizer", nil)
 		return err
 	}))
+	// Stripe's word that the money went back queues no fee step: only the
+	// request's own job is waiting.
+	f.must(t, system.Run(ctx, s.Pool, f.org, func(tx pgx.Tx) error { return sales.FinishRefundForTest(s, ctx, tx, f.org, refund, "succeeded") }))
+	if n := f.count(t, `select count(*) from jobs where kind = $1`, sales.RefundJob); n != 1 {
+		t.Fatalf("%d refund jobs after it succeeded, want just the request's", n)
+	}
 	drain(t, s, &mailer.Memory{})
 	if st := f.str(t, `select status from refunds where id = $1`, refund); st != "succeeded" {
 		t.Fatalf("refund %s, want succeeded", st)
@@ -190,7 +205,48 @@ func TestDirectModeSkipsTheFeeStep(t *testing.T) {
 	if n := f.count(t, `select count(*) from jobs`); n != 0 {
 		t.Fatalf("%d jobs left waiting to retry", n)
 	}
+	// The job itself and the parking hook skip it too, should either see it.
+	payload, _ := json.Marshal(map[string]string{"organizer_id": f.org.String(), "refund_id": refund.String()})
+	f.must(t, sales.Refund(s)(ctx, payload))
+	sales.RefundParked(s)(ctx, payload, "test")
+	if n := own.seen()["RefundApplicationFee "]; n != 0 {
+		t.Fatalf("%d fee refunds asked for in direct mode", n)
+	}
 	if n := f.count(t, `select count(*) from audit_log where action = 'refund.fee_stuck'`); n != 0 {
 		t.Fatalf("%d fee_stuck rows", n)
+	}
+}
+
+// Direct mode takes no platform fee, whatever fee the service was given.
+func TestDirectModeTakesNoFee(t *testing.T) {
+	s := newService(t) // Fee{BP: 200, Cents: 50}
+	s.Direct = true
+	fake := payments.NewFake()
+	s.Payments = fake
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	c, pi := paying(t, s, f, fake, sales.Details{}, sales.Item{TicketTypeID: f.general, Quantity: 2})
+	if c.Quote.TotalCents != 5000 || c.Quote.FeeCents != 0 {
+		t.Fatalf("quote %+v, want 5000 with no fee", c.Quote)
+	}
+	if n := f.count(t, `select count(*) from payments where payment_intent_id = $1 and application_fee_cents = 0 and amount_cents = 5000`, pi.ID); n != 1 {
+		t.Fatal("payment recorded with a fee")
+	}
+}
+
+// A payment taken with our fee before the server switched to direct mode
+// still gets that fee back when the organizer asks: the fee step follows
+// the payment, not the mode.
+func TestFeeTakenBeforeDirectModeStillGoesBack(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	order, pi, tickets := f.paidOrder(t, s, fake, 2, 1)
+	s.Direct, s.Fee = true, pricing.Fee{}
+	res := f.refund(t, s, order, sales.RefundRequest{TicketIDs: tickets[:1], FeeBack: true})
+	if res.FeeCents != 100 {
+		t.Fatalf("refund %+v, want 100 of fee back", res)
+	}
+	drain(t, s, &mailer.Memory{})
+	if amount, fee := fake.Refunded(pi); amount != 2600 || fee != 100 {
+		t.Fatalf("Stripe refunded %d and fee %d, want 2600 and 100", amount, fee)
 	}
 }

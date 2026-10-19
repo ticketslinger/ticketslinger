@@ -290,7 +290,7 @@ func (s *Service) cart(ctx context.Context, tx pgx.Tx, checkout, event uuid.UUID
 	if err != nil {
 		return nil, pricing.Quote{}, err
 	}
-	return items, pricing.Compute(lines(tts, items, p), p.pricing(), feeMode, s.Fee), nil
+	return items, pricing.Compute(lines(tts, items, p), p.pricing(), feeMode, s.fee()), nil
 }
 
 type question struct {

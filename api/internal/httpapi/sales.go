@@ -44,14 +44,16 @@ func accountInUse(err error) bool {
 }
 
 func (s *server) paymentsStatus(ctx context.Context, tx pgx.Tx, org organizers.Organizer) (PaymentsStatus, error) {
-	st := PaymentsStatus{Provider: PaymentsStatusProviderNone, Mode: Connect, LinkMethod: nullable.NewNullNullable[LinkMethod]()}
+	st := PaymentsStatus{Provider: PaymentsStatusProviderNone, Mode: PaymentsModeConnect, LinkMethod: nullable.NewNullNullable[LinkMethod]()}
 	if s.Payments != nil {
 		st.Provider = PaymentsStatusProvider(s.Payments.Name())
 		// The test provider always links; Stripe needs the platform's OAuth client id.
 		st.CanLinkExisting = st.Provider == PaymentsStatusProviderTest || s.Config.StripeClientID != ""
 	}
 	if s.direct() {
-		st.Mode, st.CanLinkExisting = Direct, false // nothing to connect or link
+		// Nothing to connect or link, whatever the organizer had before.
+		st.Mode, st.CanLinkExisting = PaymentsModeDirect, false
+		return st, nil
 	}
 	var method *string
 	err := tx.QueryRow(ctx, `select stripe_account_id is not null and stripe_disconnected_at is null, stripe_disconnected_at is not null,

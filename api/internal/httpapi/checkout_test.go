@@ -37,12 +37,20 @@ func newShop(t *testing.T, v *turnstile.Verifier) shop {
 
 // newShopWith is newShop selling through p.
 func newShopWith(t *testing.T, v *turnstile.Verifier, p plugin.PaymentProvider) shop {
+	return newShopFor(t, v, p, nil)
+}
+
+// newShopFor is newShopWith with its config changed by mod first.
+func newShopFor(t *testing.T, v *turnstile.Verifier, p plugin.PaymentProvider, mod func(*config.Config)) shop {
 	pool := testdb.New(t)
 	m := &mailer.Memory{}
 	svc := auth.NewService(pool, m, auth.Options{RPID: "localhost", Origin: "http://localhost:5173", SecretKey: []byte("0123456789abcdef0123456789abcdef")})
 	cfg := config.Config{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.MustParsePrefix("::1/128")},
 		StorefrontURL: "http://localhost:3003", SecretKey: []byte("0123456789abcdef0123456789abcdef"), PlatformFeeBP: 200, PlatformFeeCents: 50,
 		StripeWebhookSecret: webhookSecret}
+	if mod != nil {
+		mod(&cfg)
+	}
 	srv := startServer(t, httpapi.New(httpapi.Deps{Pool: pool, Auth: svc, Payments: p, Config: cfg, Turnstile: v}))
 	h := &harness{t, srv, m, pool, clientFor(t, srv.URL)}
 	owner := h.signupWithMFA("owner@example.com")
@@ -138,6 +146,17 @@ func TestCheckoutOverHTTP(t *testing.T) {
 	res := s.send("", "", "POST", "/v1/checkouts/"+token+"/pay", `{"email":"buyer@example.com"}`)
 	if e, _ := s.json(res)["error"].(map[string]any); res.StatusCode != 409 || e["code"] != "checkout_completed" || e["order_code"] != pay["order_code"] {
 		t.Fatalf("paying twice: %d %v", res.StatusCode, e)
+	}
+}
+
+// On a server selling through its own Stripe account, the pay answer names
+// no account, so Stripe.js loads without stripeAccount.
+func TestDirectPayNamesNoAccount(t *testing.T) {
+	s := newShopFor(t, nil, payments.NewFake(), func(c *config.Config) { c.PaymentsMode, c.PlatformFeeBP, c.PlatformFeeCents = "direct", 0, 0 })
+	token := s.must(s.send("", "", "POST", "/v1/checkouts", s.cart(s.f["ticketType"], 2, "")), 201)["token"].(string)
+	pay := s.must(s.send("", "", "POST", "/v1/checkouts/"+token+"/pay", `{"email":"buyer@example.com","attendees":["Ada","Bob"]}`), 200)
+	if _, ok := pay["account"]; ok || pay["client_secret"] == "" || pay["amount_cents"] != float64(5000) {
+		t.Fatalf("pay = %v, want no account and no fee", pay)
 	}
 }
 

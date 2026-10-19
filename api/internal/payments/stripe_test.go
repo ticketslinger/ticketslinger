@@ -548,4 +548,8 @@ func TestDirectChargesTheServersOwnAccount(t *testing.T) {
 	if len(rec.reqs) != calls {
 		t.Fatalf("%d Stripe calls for things direct mode doesn't do", len(rec.reqs)-calls)
 	}
+	// A fee taken on a connected account before the switch still goes back.
+	if id, err := s.RefundApplicationFee(ctx, plugin.FeeRefundInput{Account: "acct_test1", PaymentIntentID: "pi_test1", AmountCents: 100, IdempotencyKey: "appfee-c"}); err != nil || id == "" {
+		t.Fatalf("fee from before the switch: %q %v", id, err)
+	}
 }

@@ -1115,7 +1115,7 @@ components:
       type: object
       required: [provider, mode, connected, charges_enabled, details_submitted, disconnected, link_method, can_link_existing]
       properties:
-        mode: { type: string, enum: [connect, direct], description: "connect: each organizer takes payments on its own connected Stripe account. direct: this server takes every payment through its own Stripe account (self-hosting), so there's nothing to connect, connected stays false, and paid tickets can go on sale without it." }
+        mode: { type: string, enum: [connect, direct], x-enum-varnames: [PaymentsModeConnect, PaymentsModeDirect], description: "connect: each organizer takes payments on its own connected Stripe account. direct: this server takes every payment through its own Stripe account (self-hosting), so there's nothing to connect, connected stays false, and paid tickets can go on sale without it." }
         provider: { type: string, enum: [stripe, test, none], description: "stripe in production, test for the built-in fake, none when the server takes no payments." }
         connected: { type: boolean, description: "Whether the organizer has a Stripe account it hasn't disconnected." }
         disconnected: { type: boolean, description: "Whether the organizer disconnected its Stripe account (or Stripe told us it was unlinked). Paid tickets are off sale until it connects again." }

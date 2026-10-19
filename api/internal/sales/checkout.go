@@ -90,6 +90,15 @@ const (
 
 var errQuotasMoved = errors.New("sales: the quotas of these ticket types changed")
 
+// fee is the platform fee per ticket: none in direct mode, where the
+// server's own Stripe account takes the whole payment.
+func (s *Service) fee() pricing.Fee {
+	if s.Direct {
+		return pricing.Fee{}
+	}
+	return s.Fee
+}
+
 // HashToken is what we store for a buyer's token.
 func HashToken(token string) []byte {
 	h := sha256.Sum256([]byte(token))
@@ -194,7 +203,7 @@ func (s *Service) hold(ctx context.Context, org, event uuid.UUID, hash []byte, i
 		if !applies(p, in.Items, tts) {
 			return errPromoNotHere
 		}
-		out.Quote = pricing.Compute(lines(tts, in.Items, p), p.pricing(), ev.feeMode, s.Fee)
+		out.Quote = pricing.Compute(lines(tts, in.Items, p), p.pricing(), ev.feeMode, s.fee())
 		// Never hold seats nobody can pay for.
 		if out.Quote.TotalCents > 0 {
 			if _, err := s.paymentsReady(ctx, tx, org); err != nil {

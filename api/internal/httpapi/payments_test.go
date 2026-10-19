@@ -323,7 +323,10 @@ func TestDirectPaymentsHaveNothingToConnect(t *testing.T) {
 	h := newPaymentsHarnessFor(t, p, config.Config{DashboardOrigin: "http://localhost:5173", PaymentsMode: "direct"})
 	owner := h.signupWithMFA("owner@example.com")
 	h.createOrganizer(owner, "acme")
-	if st := h.must(h.do(owner, "GET", paymentsURL, ""), 200); st["mode"] != "direct" {
+	// Connected before the server switched to direct: none of that shows.
+	h.chargesEnabled("acme")
+	if st := h.must(h.do(owner, "GET", paymentsURL, ""), 200); st["mode"] != "direct" || st["connected"] != false || st["disconnected"] != false ||
+		st["charges_enabled"] != false || st["details_submitted"] != false || st["link_method"] != nil || st["can_link_existing"] != false {
 		t.Fatalf("status: %v", st)
 	}
 	for _, path := range []string{"/connect", "/link", "/refresh", "/disconnect"} {
