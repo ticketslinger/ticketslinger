@@ -38,13 +38,20 @@ const STATE: Record<Refund["status"], string> = {
   succeeded: "Refunded",
   failed: "Failed",
 };
-// ponytail: the detail API can't say a refund once succeeded and came back, so no bank-bounce copy yet.
 const WHY: Record<NonNullable<Refund["failure"]>, string> = {
   stripe_failed: "Stripe couldn't send it.",
   no_access:
     "We can't reach that Stripe account any more. Refund this one from your Stripe dashboard.",
   gave_up: "Stripe kept saying no, so we stopped trying.",
 };
+
+/** Why a failed refund failed, in the organizer's terms. */
+export function failureText(r: Refund): string {
+  if (r.returned_by_bank) {
+    return "This one went through, then the buyer's bank sent it back, so the money is in your Stripe balance again. Contact the buyer to find another way to pay them back.";
+  }
+  return r.failure ? WHY[r.failure] : WHY.stripe_failed;
+}
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
@@ -74,7 +81,7 @@ function RefundRow({
       </p>
       {r.status === "failed" && (
         <>
-          <p>{r.failure ? WHY[r.failure] : WHY.stripe_failed}</p>
+          <p>{failureText(r)}</p>
           {canRetry && (
             <button
               type="button"

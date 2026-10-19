@@ -35,6 +35,15 @@ func Enqueue(ctx context.Context, tx pgx.Tx, kind string, payload any) error {
 // say the same in SQL).
 const MaxAttempts = 10
 
+type attemptKey struct{}
+
+// Attempt is which run of its job this is, from 1, inside a Handler; 0
+// outside one. At MaxAttempts a failure parks the job.
+func Attempt(ctx context.Context) int {
+	n, _ := ctx.Value(attemptKey{}).(int)
+	return n
+}
+
 type Worker struct {
 	Pool     *pgxpool.Pool
 	Handlers map[string]Handler
@@ -124,7 +133,7 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	herr := w.handle(ctx, kind, payload)
+	herr := w.handle(context.WithValue(ctx, attemptKey{}, attempts), kind, payload)
 	// A shutdown mid-job must still record the outcome.
 	rec := context.WithoutCancel(ctx)
 	if herr != nil && ctx.Err() != nil {

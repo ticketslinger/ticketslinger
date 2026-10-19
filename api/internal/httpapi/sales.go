@@ -567,6 +567,30 @@ func (s *server) CreateCheckout(ctx context.Context, req CreateCheckoutRequestOb
 	return CreateCheckout201JSONResponse(toCheckout(c)), nil
 }
 
+var errTooManyLinkRequests = &apiError{429, "rate_limited", "That's a lot of link requests from one connection. Wait an hour, then try again."}
+
+// RequestOrderLinks answers the same for every address: the job decides
+// whether there is anything to send.
+func (s *server) RequestOrderLinks(ctx context.Context, req RequestOrderLinksRequestObject) (RequestOrderLinksResponseObject, error) {
+	if !s.linkLimit.Allow(ratelimit.AddrKey(clientFrom(ctx).ip), time.Now()) {
+		return nil, errTooManyLinkRequests
+	}
+	tok, err := turnstileToken(req.Body.TurnstileToken)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Turnstile.Verify(ctx, tok, clientFrom(ctx).ip); err != nil {
+		if te := turnstileError(ctx, err); te != nil {
+			return nil, te
+		}
+		return nil, err
+	}
+	if err := s.Sales.RequestOrderLinks(ctx, req.Organizer, req.EventSlug, req.Body.Email); err != nil {
+		return nil, salesError(err)
+	}
+	return RequestOrderLinks204Response{}, nil
+}
+
 func (s *server) GetCheckout(ctx context.Context, req GetCheckoutRequestObject) (GetCheckoutResponseObject, error) {
 	c, err := s.Sales.GetCheckout(ctx, req.Token)
 	if err != nil {
@@ -618,9 +642,15 @@ func (s *server) GetOrder(ctx context.Context, req GetOrderRequestObject) (GetOr
 	out.Event.VenueName, out.Event.VenueAddress, out.Event.OrganizerName = e.VenueName, e.VenueAddress, e.Organizer
 	out.Totals.SubtotalCents, out.Totals.DiscountCents, out.Totals.TaxCents = o.SubtotalCents, o.DiscountCents, o.TaxCents
 	out.Totals.FeeCents, out.Totals.TotalCents = o.FeeCents, o.TotalCents
+	out.Event.Status = OrderEventStatus(e.Status)
+	out.RefundedCents, out.ReturnedCents = o.RefundedCents, o.ReturnedCents
 	for _, t := range o.Tickets {
+		qr := nullable.NewNullNullable[string]()
+		if t.QR != "" {
+			qr.Set(t.QR)
+		}
 		out.Tickets = append(out.Tickets, OrderTicket{Id: t.ID, TicketTypeName: t.TicketTypeName, AttendeeName: t.AttendeeName,
-			Status: OrderTicketStatus(t.Status), Qr: t.QR})
+			Status: OrderTicketStatus(t.Status), Refunded: t.Refunded, Qr: qr})
 	}
 	return GetOrder200JSONResponse(out), nil
 }
@@ -668,7 +698,7 @@ func (s *server) GetOrderDetail(ctx context.Context, req GetOrderDetailRequestOb
 }
 
 func toRefund(r sales.RefundView) Refund {
-	out := Refund{Id: r.ID, AmountCents: r.AmountCents, FeeCents: r.FeeCents, FeeBack: r.FeeBack, Status: RefundStatus(r.Status),
+	out := Refund{Id: r.ID, AmountCents: r.AmountCents, FeeCents: r.FeeCents, FeeBack: r.FeeBack, Status: RefundStatus(r.Status), ReturnedByBank: r.ReturnedByBank,
 		Reason: RefundReason(r.Reason), CreatedAt: r.CreatedAt, Failure: nullable.NewNullNullable[RefundFailure]()}
 	if r.Failure != nil {
 		out.Failure.Set(RefundFailure(*r.Failure))

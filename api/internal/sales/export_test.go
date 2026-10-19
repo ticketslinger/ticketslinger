@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-var OrderToken = orderToken
+var OrderToken = func(key []byte, order uuid.UUID) string { return orderToken(key, order, 0) }
 
 var RequestRefundForTest = requestRefund
 
@@ -18,3 +18,5 @@ func FinishRefundForTest(s *Service, ctx context.Context, tx pgx.Tx, org, refund
 func FailRefundForTest(s *Service, ctx context.Context, tx pgx.Tx, org, refund uuid.UUID, failure string) error {
 	return s.failRefund(ctx, tx, org, refund, failure, "")
 }
+
+var OrderTokenAt = orderToken

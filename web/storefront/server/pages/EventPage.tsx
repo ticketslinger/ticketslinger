@@ -183,6 +183,9 @@ export function EventPage(p: EventPageProps) {
           </form>
         </>
       )}
+      <p class="order-link">
+        <a href={`${home}/order-link`}>Already bought? Get your ticket link again</a>
+      </p>
     </Layout>
   );
 }

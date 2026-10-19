@@ -242,7 +242,7 @@ func closeCheckout(ctx context.Context, tx pgx.Tx, checkout *uuid.UUID) error {
 // page tells the buyer what happened. The payment's client secret goes: the
 // intent is paid or being refunded, so the secret has no use left.
 func (s *Service) settle(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, status string) error {
-	hash := sha256.Sum256([]byte(orderToken(s.SecretKey, orderID)))
+	hash := sha256.Sum256([]byte(orderToken(s.SecretKey, orderID, 0))) // a new order: its first link
 	if _, err := tx.Exec(ctx, `update orders set status = $2, magic_token_hash = $3,
 		paid_at = case when $2 = 'paid' then statement_timestamp() end where id = $1`, orderID, status, hash[:]); err != nil {
 		return err
@@ -299,10 +299,11 @@ func (s *Service) OrderConfirmation(m mailer.Mailer) jobs.Handler {
 		}
 		var email, code, name, zone string
 		var starts time.Time
+		var version int
 		err := system.Run(ctx, s.Pool, c.Organizer, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx, `select o.email, o.code, e.name, e.timezone, e.starts_at
+			return tx.QueryRow(ctx, `select o.email, o.code, e.name, e.timezone, e.starts_at, o.link_version
 				from orders o join events e on e.id = o.event_id where o.id = $1 and o.status in ('paid', 'partially_refunded')`, c.Order).
-				Scan(&email, &code, &name, &zone, &starts)
+				Scan(&email, &code, &name, &zone, &starts, &version)
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
@@ -311,6 +312,6 @@ func (s *Service) OrderConfirmation(m mailer.Mailer) jobs.Handler {
 			return err
 		}
 		return m.Send(ctx, email, "Your tickets for "+name, "You're going to "+name+" on "+when(starts, zone)+
-			". Your tickets are here, and this link is the only key to them, so keep it to yourself: "+s.orderURL(code, c.Order))
+			". Your tickets are here, and this link is the only key to them, so keep it to yourself: "+s.orderURL(code, c.Order, version))
 	}
 }

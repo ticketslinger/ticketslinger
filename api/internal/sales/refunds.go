@@ -241,8 +241,9 @@ func (s *Service) finishRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID
 		return err
 	}
 	var email, event, organizer string
-	if err := tx.QueryRow(ctx, `select o.email, e.name, g.name from orders o join events e on e.id = o.event_id
-		join organizers g on g.id = o.organizer_id where o.id = $1 for update of o`, order).Scan(&email, &event, &organizer); err != nil {
+	var cancelled bool
+	if err := tx.QueryRow(ctx, `select o.email, e.name, g.name, e.status = 'cancelled' from orders o join events e on e.id = o.event_id
+		join organizers g on g.id = o.organizer_id where o.id = $1 for update of o`, order).Scan(&email, &event, &organizer, &cancelled); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `select 1 from tickets where order_id = $1 and refund_id = $2 order by id for update`, order, id); err != nil {
@@ -286,7 +287,7 @@ func (s *Service) finishRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID
 			}
 		}
 		// No link in it: nothing in this job's payload is a key to anything.
-		subject, text := refundEmail(reason, event, organizer, amount)
+		subject, text := refundEmail(reason, cancelled, event, organizer, amount)
 		return jobs.Enqueue(ctx, tx, "send_email", map[string]string{"to": email, "subject": subject, "text": text})
 	case "failed", "canceled":
 		// A row we gave up on, or couldn't reach, becomes stripe_failed:
@@ -324,7 +325,9 @@ func (s *Service) failRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, 
 	if status == "succeeded" && failure != "stripe_failed" {
 		return nil
 	}
-	if _, err := tx.Exec(ctx, `update refunds set status = 'failed', failure = $2, updated_at = statement_timestamp() where id = $1`, id, failure); err != nil {
+	// A succeeded refund fails only on Stripe's word: the buyer's bank sent it back.
+	if _, err := tx.Exec(ctx, `update refunds set status = 'failed', failure = $2, returned_by_bank = $3, updated_at = statement_timestamp()
+		where id = $1`, id, failure, status == "succeeded"); err != nil {
 		return err
 	}
 	before := map[string]string{"status": status}
@@ -387,14 +390,18 @@ func RefundParked(s *Service) func(ctx context.Context, payload []byte, cause st
 	}
 }
 
-// refundEmail is what the buyer reads once the money is on its way back.
-func refundEmail(reason, event, organizer string, amount int64) (subject, text string) {
+// refundEmail is what the buyer reads once the money is on its way back. A
+// payment that arrived after the event was cancelled is refunded for that.
+func refundEmail(reason string, cancelled bool, event, organizer string, amount int64) (subject, text string) {
 	subject = "Your refund for " + event
-	switch reason {
-	case "late_payment":
+	switch {
+	case reason == "late_payment" && cancelled:
+		text = event + " was cancelled while your payment was on its way, so we couldn't give you tickets. We've refunded you in full: " +
+			dollars(amount) + " back to your card. It usually shows up in 5 to 10 days."
+	case reason == "late_payment":
 		text = "Sorry, we couldn't keep your tickets for " + event + ". By the time your payment reached us, they weren't available any more, " +
 			"so we've refunded you in full: " + dollars(amount) + " back to your card. It usually shows up in 5 to 10 days."
-	case "event_cancelled":
+	case reason == "event_cancelled":
 		text = event + " has been cancelled, and " + organizer + " has refunded you " + dollars(amount) +
 			". It goes back to the card you paid with and usually shows up in 5 to 10 days."
 	default:

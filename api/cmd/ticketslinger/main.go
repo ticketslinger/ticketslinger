@@ -122,6 +122,7 @@ func newWorker(pool *pgxpool.Pool, m mailer.Mailer, cfg config.Config, pay plugi
 	return &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{
 		"send_email":               jobs.SendEmail(m),
 		sales.OrderConfirmationJob: shop.OrderConfirmation(m),
+		sales.OrderLinksJob:        shop.OrderLinks(m),
 		sales.RefundJob:            sales.Refund(shop),
 		sales.CancelPaymentJob:     sales.CancelPayment(shop),
 		sales.SettleOrderJob:       sales.SettleOrder(shop),

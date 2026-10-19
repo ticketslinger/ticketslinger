@@ -807,6 +807,22 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StorefrontEvent" } } } }
         "404": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
+  /storefront/{organizer}/{eventSlug}/order-links:
+    post:
+      operationId: requestOrderLinks
+      security: []
+      description: "Anyone. Emails a fresh link to every order this address has for the event, and each old link stops working. The answer is 204 whether or not the address bought anything, and nothing is sent to an address with no orders. An order whose link was sent in the last 10 minutes keeps it. 422 bad_email (field email). When the server has Turnstile on, send a turnstile_token: a missing or refused one is 422 turnstile_failed, and 503 turnstile_unavailable means Cloudflare couldn't check it just now. 5 requests an hour per client address (an IPv6 /64 counts as one), then 429 rate_limited."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { name: eventSlug, in: path, required: true, schema: { type: string } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/OrderLinksRequest" } } } }
+      responses:
+        "204": { description: "Queued, or nothing to send: the two look the same." }
+        "400": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /checkouts:
     post:
       operationId: createCheckout
@@ -969,6 +985,12 @@ components:
         items: { type: array, items: { $ref: "#/components/schemas/CheckoutItem" }, description: "Each ticket type once. Up to 100 tickets in all (422 too_many_tickets), and each type's min_per_order to max_per_order (422 quantity_out_of_range)." }
         promo_code: { type: string, maxLength: 64, description: "Spaces around it and capitals don't matter." }
         turnstile_token: { $ref: "#/components/schemas/TurnstileToken" }
+    OrderLinksRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, maxLength: 254, description: "The address the tickets were bought with." }
+        turnstile_token: { $ref: "#/components/schemas/TurnstileToken" }
     QuoteTicket:
       type: object
       required: [ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, charge_cents, tax_included]
@@ -1038,16 +1060,19 @@ components:
         answers: { type: array, items: { $ref: "#/components/schemas/CheckoutAnswer" } }
     Order:
       type: object
-      required: [code, status, email, event, totals, tickets]
+      required: [code, status, email, event, totals, tickets, refunded_cents, returned_cents]
       properties:
         code: { type: string }
         status: { type: string, enum: [paid, cancelled, refunded, partially_refunded] }
         email: { type: string }
+        refunded_cents: { type: integer, format: int64, description: "What has gone back, or is on its way back, to the buyer's card: every refund that hasn't failed." }
+        returned_cents: { type: integer, format: int64, description: "Refunds that went through and that the buyer's bank then sent back to the organizer. Not counted in refunded_cents." }
         event:
           type: object
-          required: [name, starts_at, ends_at, timezone, venue_name, venue_address, organizer_name]
+          required: [name, status, starts_at, ends_at, timezone, venue_name, venue_address, organizer_name]
           properties:
             name: { type: string }
+            status: { type: string, enum: [live, ended, cancelled], description: "cancelled once the organizer has cancelled the event." }
             starts_at: { type: string, format: date-time }
             ends_at: { type: string, format: date-time }
             timezone: { type: string }
@@ -1066,13 +1091,14 @@ components:
         tickets: { type: array, items: { $ref: "#/components/schemas/OrderTicket" } }
     OrderTicket:
       type: object
-      required: [id, ticket_type_name, attendee_name, status, qr]
+      required: [id, ticket_type_name, attendee_name, status, refunded, qr]
       properties:
         id: { type: string, format: uuid }
         ticket_type_name: { type: string }
         attendee_name: { type: string, description: "Empty when the buyer didn't give one." }
         status: { type: string, enum: [valid, void] }
-        qr: { type: string, description: "What the ticket's QR code holds: 22 base64url characters. Whoever has it can get in, so show it only to the ticket's holder." }
+        refunded: { type: boolean, description: "true when it's void because it was refunded." }
+        qr: { type: [string, "null"], description: "What the ticket's QR code holds: 22 base64url characters. Whoever has it can get in, so show it only to the ticket's holder. null for a void ticket." }
     PaymentStart:
       type: object
       required: [kind, amount_cents]
@@ -1133,7 +1159,7 @@ components:
         refund_id: { type: [string, "null"], format: uuid, description: "The refund that covered this ticket; null when it hasn't been refunded, or cost nothing." }
     Refund:
       type: object
-      required: [id, amount_cents, fee_cents, fee_back, status, reason, failure, created_at]
+      required: [id, amount_cents, fee_cents, fee_back, status, reason, failure, returned_by_bank, created_at]
       properties:
         id: { type: string, format: uuid }
         amount_cents: { type: integer, format: int64, description: "What goes back to the buyer's card." }
@@ -1142,6 +1168,7 @@ components:
         status: { type: string, enum: [requested, succeeded, failed] }
         reason: { type: string, enum: [late_payment, organizer, event_cancelled] }
         failure: { type: [string, "null"], enum: [stripe_failed, no_access, gave_up, null], description: "Why it failed. stripe_failed: Stripe turned it down. no_access: we can't reach your Stripe account any more, so refund from your own Stripe dashboard. gave_up: we couldn't get an answer from Stripe after ten tries." }
+        returned_by_bank: { type: boolean, description: "true when it went through and the buyer's bank sent the money back (it's failed, with stripe_failed). The money is in your Stripe balance again." }
         created_at: { type: string, format: date-time }
     RefundOrderRequest:
       type: object
