@@ -6,13 +6,14 @@ import lighthouse from "lighthouse";
 /**
  * Gzip bytes of every script `url` loads. `topFrame` counts only scripts the top-level
  * document loads, first or third party; `all` adds the ones inside iframes (Turnstile's challenge).
+ * `own` is the part of `topFrame` served from `url`'s own origin.
  * `then` runs after load and before the quiet wait, for scripts a page only loads once used.
  */
 export async function scriptBytes(
   page: Page,
   url: string,
   then?: () => Promise<unknown>,
-): Promise<{ topFrame: number; all: number }> {
+): Promise<{ topFrame: number; own: number; all: number }> {
   const scripts: Response[] = [];
   let last = Date.now();
   const collect = (r: Response) => {
@@ -27,16 +28,20 @@ export async function scriptBytes(
   await then?.();
   while (Date.now() - last < 2_000) await page.waitForTimeout(250);
   page.off("response", collect);
+  const origin = new URL(url).origin;
   let topFrame = 0;
+  let own = 0;
   let all = 0;
   for (const r of scripts) {
     // A redirect has no body; the script it points at arrives as its own response.
     if (r.status() >= 300 && r.status() < 400) continue;
     const bytes = gzipSync(await r.body()).length;
     all += bytes;
-    if (r.request().frame() === page.mainFrame()) topFrame += bytes;
+    if (r.request().frame() !== page.mainFrame()) continue;
+    topFrame += bytes;
+    if (new URL(r.url()).origin === origin) own += bytes;
   }
-  return { topFrame, all };
+  return { topFrame, own, all };
 }
 
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];

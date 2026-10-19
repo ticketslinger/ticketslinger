@@ -168,13 +168,15 @@ test("real test-mode Stripe: a card, a 3D Secure card, a refund and a cancellati
       await cardFrame(shop);
     };
     if (weigh) {
-      // The checkout's JS with the Payment Element up, Stripe's loader included (D7).
+      // The checkout's JS with the Payment Element up. Stripe.js has to come from js.stripe.com
+      // (PCI) and is about 300 KB gzip by itself, so the budget gates our own JS only (D7);
+      // Stripe's share (thirdParty) and the totals are recorded, ungated.
       const js = await scriptBytes(shop, shop.url(), toCard);
-      console.log("js-bytes", js);
-      test.info().annotations.push({ type: "js-bytes", description: JSON.stringify(js) });
-      expect(js.topFrame).toBeGreaterThan(0);
-      // Soft: an over-budget checkout still fails the run, but the purchases below still get tested.
-      expect.soft(js.topFrame).toBeLessThanOrEqual(60 * 1024);
+      const weight = { ...js, thirdParty: js.topFrame - js.own };
+      console.log("js-bytes", weight);
+      test.info().annotations.push({ type: "js-bytes", description: JSON.stringify(weight) });
+      expect(js.own).toBeGreaterThan(0);
+      expect(js.own).toBeLessThanOrEqual(60 * 1024);
     } else await toCard();
     await payByCard(shop, number);
     if (threeDS) await complete3DS(shop);
