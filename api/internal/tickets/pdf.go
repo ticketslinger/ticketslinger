@@ -2,6 +2,7 @@ package tickets
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -38,6 +39,8 @@ type PDFOrder struct {
 
 // newDoc starts a US Letter document with both Noto Sans faces loaded.
 // It sets no document information dictionary, so no order data lands in metadata.
+// ponytail: both fonts are re-parsed on every PDF call (a few ms per order);
+// share one parsed font across documents if gopdf grows an API for it and volume ever matters.
 func newDoc() (*gopdf.GoPdf, error) {
 	pdf := &gopdf.GoPdf{}
 	pdf.Start(gopdf.Config{PageSize: *gopdf.PageSizeLetter})
@@ -52,6 +55,9 @@ func newDoc() (*gopdf.GoPdf, error) {
 
 // PDF renders one ticket per page.
 func PDF(o PDFOrder) ([]byte, error) {
+	if len(o.Tickets) == 0 {
+		return nil, errors.New("tickets: pdf: no tickets")
+	}
 	pdf, err := newDoc()
 	if err != nil {
 		return nil, fmt.Errorf("tickets: pdf: %w", err)

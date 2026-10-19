@@ -76,6 +76,12 @@ func TestPDFHasOnePagePerTicket(t *testing.T) {
 	}
 }
 
+func TestPDFRefusesAnOrderWithNoTickets(t *testing.T) {
+	if b, err := PDF(order()); err == nil {
+		t.Fatalf("got %d bytes and no error for an order with no tickets", len(b))
+	}
+}
+
 func TestFitCutsAtTheMargin(t *testing.T) {
 	pdf, err := newDoc()
 	if err != nil {
