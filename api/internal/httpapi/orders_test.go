@@ -296,3 +296,20 @@ func TestBuyerCanAskForTheEmailAgain(t *testing.T) {
 		t.Fatalf("61st request: %d %q, want 429", res.StatusCode, s.errorCode(res))
 	}
 }
+
+// A token past the cap is answered as a wrong one, on both order reads.
+func TestLongOrderTokenIs404(t *testing.T) {
+	s := newShop(t, nil)
+	_, code, _ := s.buyLinked(1, "long@example.com", "evt_long_paid")
+	body := func(res *http.Response) string {
+		b, _ := io.ReadAll(res.Body)
+		return string(b)
+	}
+	for _, path := range []string{"/v1/orders/" + code, "/v1/orders/" + code + "/tickets.pdf"} {
+		wrong := s.send("", "", "GET", path+"?token=wrong", "")
+		long := s.send("", "", "GET", path+"?token="+strings.Repeat("a", 201), "")
+		if wb, lb := body(wrong), body(long); wrong.StatusCode != 404 || long.StatusCode != 404 || wb != lb {
+			t.Fatalf("%s: wrong token %d %s; long token %d %s; want the same 404", path, wrong.StatusCode, wb, long.StatusCode, lb)
+		}
+	}
+}

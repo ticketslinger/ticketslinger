@@ -948,3 +948,33 @@ func TestConcurrentRefundsCantBothFit(t *testing.T) {
 		t.Fatalf("second insert: %v, want check_violation", err)
 	}
 }
+
+// A retry is held to the same cap as a new refund: a failed refund comes
+// back only while it still fits beside the refunds that haven't failed.
+func TestRetryRefundRespectsTheCap(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	ctx := context.Background()
+	order, _, _ := f.paidOrder(t, s, fake, 2, 1) // 5200
+	payment := f.id(t, `select id from payments where order_id = $1`, order)
+	insert := `insert into refunds (organizer_id, payment_id, amount_cents, fee_refunded, fee_cents, status, reason)
+		values ($1, $2, 3000, false, 0, 'requested', 'organizer') returning id`
+	a := f.id(t, insert, f.org, payment)
+	f.exec(t, `update refunds set status = 'failed', failure = 'gave_up' where id = $1`, a)
+	b := f.id(t, insert, f.org, payment)
+	retry := func() (retried bool) {
+		t.Helper()
+		asOwner(t, s, f, func(tx pgx.Tx) error { return tx.QueryRow(ctx, `select retry_refund($1)`, a).Scan(&retried) })
+		return retried
+	}
+	if retry() {
+		t.Fatal("retried a refund that no longer fits")
+	}
+	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'failed'`, a); n != 1 {
+		t.Fatal("the refund that didn't fit moved off failed")
+	}
+	f.exec(t, `update refunds set status = 'failed', failure = 'gave_up' where id = $1`, b)
+	if !retry() {
+		t.Fatal("a refund that fits again wasn't retried")
+	}
+}

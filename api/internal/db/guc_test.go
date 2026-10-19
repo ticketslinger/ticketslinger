@@ -1,0 +1,112 @@
+package db_test
+
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// gucAllowed are the only files that may set the app.* GUCs that
+// app_user() and app_organizer() trust (spec D12: Postgres can't restrict
+// who sets a custom GUC, so the code that does is kept this small).
+var gucAllowed = map[string]string{
+	"internal/db/scope.go":              "the scope helper: every request's user, key and organizer",
+	"internal/organizers/organizers.go": "create: a new organizer has no scope yet, so it sets app.organizer_id itself, with a bind parameter",
+	"internal/system/system.go":         "resetScope: ts_system clears the user and key and names the organizer, with a bind parameter",
+}
+
+var (
+	gucSet   = regexp.MustCompile(`(?i)set_config\('app\.|set\s+local\s+app\.`)
+	sqlVerbs = regexp.MustCompile(`(?i)select |update |insert |delete |set_config`)
+)
+
+// gucViolations walks the non-test Go files under root and lists every file
+// outside gucAllowed that sets an app.* GUC, and every fmt.Sprintf whose
+// format string looks like SQL (SQL is built with bind parameters only).
+func gucViolations(t *testing.T, root string) []string {
+	t.Helper()
+	var bad []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if _, ok := gucAllowed[rel]; !ok && gucSet.Match(src) {
+			bad = append(bad, rel+": sets an app.* GUC")
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, src, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) == 0 {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Sprintf" {
+				return true
+			}
+			if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "fmt" {
+				return true
+			}
+			if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if s, err := strconv.Unquote(lit.Value); err == nil && sqlVerbs.MatchString(s) {
+					bad = append(bad, fset.Position(call.Pos()).String()+": SQL built with fmt.Sprintf")
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bad
+}
+
+// Spec D12: only db/scope.go, organizers.Create and system.Run set the
+// GUCs, and no SQL is put together with fmt.Sprintf. A SQL injection is
+// what would cross tenants, so this is the guard on both.
+func TestOnlyScopeSetsTheGUCs(t *testing.T) {
+	root, err := filepath.Abs("../..") // api/
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bad := gucViolations(t, root); len(bad) > 0 {
+		t.Fatalf("GUC or SQL rule broken:\n%s", strings.Join(bad, "\n"))
+	}
+	for rel := range gucAllowed {
+		src, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil || !gucSet.Match(src) {
+			t.Errorf("%s is allowed to set the GUCs but no longer does (%v): drop it from the list", rel, err)
+		}
+	}
+
+	// The walk catches both, anywhere else.
+	scratch := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(scratch, "internal/other"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := "package other\n\nimport \"fmt\"\n\nconst q = `select set_config('app.x', $1, true)`\n\n" +
+		"func f(id string) string { return fmt.Sprintf(\"SELECT * FROM t WHERE id = '%s'\", id) }\n"
+	if err := os.WriteFile(filepath.Join(scratch, "internal/other/other.go"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if bad := gucViolations(t, scratch); len(bad) != 2 {
+		t.Fatalf("scratch file: %v, want the GUC and the Sprintf caught", bad)
+	}
+}

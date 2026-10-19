@@ -214,3 +214,17 @@ func TestNoOrderCodeOracle(t *testing.T) {
 		t.Fatalf("order_scope exists: %v, order_by_link exists: %v; want only order_by_link", scope != nil, link != nil)
 	}
 }
+
+// The refund job finds its rows by payload->>'refund_id'; the index keeps
+// that from scanning every job.
+func TestJobsRefundIndexExists(t *testing.T) {
+	pool := testdb.New(t)
+	var def string
+	if err := testdb.Owner(t, pool).QueryRow(context.Background(),
+		`select indexdef from pg_indexes where schemaname = 'public' and indexname = 'jobs_refund_id_idx'`).Scan(&def); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(def, "WHERE (kind = 'refund'::text)") || !strings.Contains(def, "refund_id") {
+		t.Fatalf("jobs_refund_id_idx = %s", def)
+	}
+}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
@@ -610,5 +611,16 @@ func TestTwoRunsOfOneRefundPayOnce(t *testing.T) {
 	}
 	if n := f.count(t, `select count(*) from jobs where kind = 'send_email'`); n != 1 {
 		t.Fatalf("%d emails, want 1", n)
+	}
+}
+
+// Only the cap trigger means "nothing left to refund"; any other check on
+// refunds is a bug and stays an error, not the buyer's answer.
+func TestOnlyTheCapTriggerMeansNotRefundable(t *testing.T) {
+	if err := sales.RefundDBErrorForTest(&pgconn.PgError{Code: "23514", ConstraintName: "refunds_within_payment"}); conflictCode(err) != "not_refundable" {
+		t.Fatalf("cap trigger: %v, want not_refundable", err)
+	}
+	if err := sales.RefundDBErrorForTest(&pgconn.PgError{Code: "23514", ConstraintName: "refunds_amount_cents_check"}); conflictCode(err) != "" {
+		t.Fatalf("another check: %v, want it passed through", err)
 	}
 }
