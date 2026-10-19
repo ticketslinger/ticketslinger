@@ -27,14 +27,20 @@ test("the event page stays small and fast", async ({ page, context }) => {
 
   // Turnstile waits for the buyer to start on the ticket form; nothing here touches it.
   const cloudflare: string[] = [];
+  const scripts: string[] = [];
   page.on("request", (r) => {
-    if (new URL(r.url()).hostname === "challenges.cloudflare.com") cloudflare.push(r.url());
+    const u = new URL(r.url());
+    if (u.hostname === "challenges.cloudflare.com") cloudflare.push(r.url());
+    if (r.resourceType() === "script") scripts.push(u.pathname);
   });
   const js = await scriptBytes(page, url);
   // Both figures, so the ledger shows the full weight too (D7).
   console.log("js-bytes", js);
   test.info().annotations.push({ type: "js-bytes", description: JSON.stringify(js) });
   expect(cloudflare).toEqual([]);
+  // The loader itself was weighed, so the budget can't pass on an empty page.
+  expect(scripts).toContain("/assets/turnstile.js");
+  expect(js.topFrame).toBeGreaterThan(0);
   expect(js.topFrame).toBeLessThanOrEqual(15 * 1024);
 
   const scores = await lighthouseScores(url, PERF_EVENT_URL ? 3 : 1);

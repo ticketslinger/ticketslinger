@@ -5,11 +5,17 @@ import { lazyCheck, type Turnstile } from "./turnstile";
 function fakeForm(token = "") {
   const field = { value: token };
   const box = { dataset: { sitekey: "1x00000000000000000000AA" } };
+  // Like the browser's: requestSubmit fires submit, and only an unprevented one sends the form.
+  // Capped, so a loop shows up as a count instead of a frozen test run.
   const form = Object.assign(new EventTarget(), {
     submitted: 0,
+    requested: 0,
     querySelector: (sel: string) => (sel === ".cf-turnstile" ? box : field),
     requestSubmit() {
-      form.submitted++;
+      if (++form.requested > 20) return;
+      const e = new Event("submit", { cancelable: true });
+      form.dispatchEvent(e);
+      if (!e.defaultPrevented) form.submitted++;
     },
   });
   return { form, field, box };
@@ -19,17 +25,19 @@ function fakeForm(token = "") {
 function fakeLoad(fail = false) {
   const calls = { load: 0, render: [] as unknown[] };
   let pass = () => {};
+  let error = () => {};
   const turnstile: Turnstile = {
     render(el, o) {
       calls.render.push([el, o.sitekey]);
       pass = () => o.callback("tok");
+      error = () => o["error-callback"]?.("110200");
     },
   };
   const load = () => {
     calls.load++;
     return fail ? Promise.reject(new Error("blocked")) : Promise.resolve(turnstile);
   };
-  return { calls, load, pass: () => pass() };
+  return { calls, load, pass: () => pass(), error: () => error() };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -68,9 +76,9 @@ test("a submit before the check holds the form, then sends it once the token arr
   await tick();
   expect(calls.load).toBe(1);
   expect(form.submitted).toBe(0);
-  field.value = "tok";
   pass();
   await tick();
+  expect(field.value).toBe("tok");
   expect(form.submitted).toBe(1);
 });
 
@@ -93,4 +101,52 @@ test("if Turnstile can't load, the form still goes, and the server asks for the 
   const again = submit();
   form.dispatchEvent(again);
   expect(again.defaultPrevented).toBe(false);
+});
+
+test("a token that expired after the first check waits for the next one, without looping", async () => {
+  const { form, field } = fakeForm();
+  const { load, pass } = fakeLoad();
+  lazyCheck(form as unknown as HTMLFormElement, load);
+  form.dispatchEvent(new Event("focusin"));
+  await tick();
+  field.value = "tok";
+  pass();
+  await tick();
+  field.value = "";
+  form.dispatchEvent(submit());
+  for (let i = 0; i < 5; i++) await tick();
+  expect(form.requested).toBe(0);
+  expect(form.submitted).toBe(0);
+  field.value = "tok";
+  pass();
+  await tick();
+  expect(form.submitted).toBe(1);
+});
+
+test("if the widget errors, the held form goes, and the server asks for the check", async () => {
+  const { form } = fakeForm();
+  const { load, error } = fakeLoad();
+  lazyCheck(form as unknown as HTMLFormElement, load);
+  form.dispatchEvent(submit());
+  await tick();
+  error();
+  await tick();
+  expect(form.submitted).toBe(1);
+});
+
+test("two submits before the check send the form once", async () => {
+  const { form, field } = fakeForm();
+  const { load, pass } = fakeLoad();
+  lazyCheck(form as unknown as HTMLFormElement, load);
+  const first = submit();
+  const second = submit();
+  form.dispatchEvent(first);
+  form.dispatchEvent(second);
+  expect(second.defaultPrevented).toBe(true);
+  await tick();
+  field.value = "tok";
+  pass();
+  await tick();
+  expect(form.requested).toBe(1);
+  expect(form.submitted).toBe(1);
 });
