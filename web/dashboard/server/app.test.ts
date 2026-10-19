@@ -154,10 +154,15 @@ test("client IP: X-Real-IP trusted only from a loopback peer", async () => {
 test("rejects path traversal", async () => {
   const api = fakeApi();
   const app = mk(api);
-  // Literal and %2e-encoded dot segments are normalised away by URL parsing (so they miss /api/ -> 404);
-  // encoded separators survive parsing and must be refused by us (400). None may reach the API.
+  // Literal and %2e-encoded dot segments are normalised away by URL parsing, so they miss /api/:
+  // a 404, or the SPA's index.html when a built dist/ is present. Either way, never a proxied answer.
+  // Encoded separators survive parsing and must be refused by us (400). None may reach the API.
   for (const p of ["/api/%2e%2e/auth/login", "/api/../auth/login"]) {
-    expect((await app.request(p)).status).toBe(404);
+    const res = await app.request(p);
+    expect([200, 404]).toContain(res.status);
+    const body = await res.text();
+    expect(body).not.toContain("session_token");
+    expect(body).not.toContain('"ok":true');
   }
   for (const p of ["/api/%2E%2E%2Fx", "/api/a%2f..%2fb", "/api/a%5C..%5Cb", "/api/%2e%2e%2fauth"]) {
     expect((await app.request(p)).status).toBe(400);

@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stripe/stripe-go/v87"
 
+	"github.com/ticketslinger/ticketslinger/api/internal/emails"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/payments"
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
@@ -690,5 +691,26 @@ func TestConfirmationEmailCarriesTheTickets(t *testing.T) {
 	f.must(t, s.OrderConfirmation(m)(ctx, payload))
 	if len(m.Sent) != 0 {
 		t.Errorf("sent %d emails for an order with no valid tickets", len(m.Sent))
+	}
+}
+
+// A failure before the send (here the template) shows on the order as a
+// failing send would, and the job is tried again, not left at queued.
+func TestPreSendFailureShowsFailing(t *testing.T) {
+	s, fake := newPaidService(t)
+	sales.SetTicketsEmailForTest(s, func(emails.TicketsData) (mailer.Message, error) {
+		return mailer.Message{}, errors.New("template broke")
+	})
+	f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500})
+	order, _, _ := f.paidOrder(t, s, fake, 1, 1)
+	m := &mailer.Memory{}
+	runOne(t, emailWorker(s, m))
+	f.wantMail(t, order, "failing", "unreachable", 1)
+	if n := f.count(t, `select count(*) from jobs where kind = 'order_confirmation' and attempts = 1 and run_at <> 'infinity'
+		and last_error like '%template broke%'`); n != 1 {
+		t.Fatal("the job wasn't failed and left to retry")
+	}
+	if len(m.Sent) != 0 {
+		t.Fatalf("%d emails sent", len(m.Sent))
 	}
 }

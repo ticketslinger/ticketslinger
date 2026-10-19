@@ -5,6 +5,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/ticketslinger/ticketslinger/api/internal/emails"
+	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 )
 
 var OrderToken = func(key []byte, order uuid.UUID) string { return orderToken(key, order, 0) }
@@ -24,3 +27,9 @@ var OrderTokenAt = orderToken
 var QueueTicketEmailForTest = queueTicketEmail
 
 var QueueAnswerForTest = queueAnswer
+
+var RefundDBErrorForTest = refundDBError
+
+func SetTicketsEmailForTest(s *Service, fn func(emails.TicketsData) (mailer.Message, error)) {
+	s.ticketsEmail = fn
+}

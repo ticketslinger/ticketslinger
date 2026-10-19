@@ -335,16 +335,25 @@ func (s *Service) OrderConfirmation(m mailer.Mailer) jobs.Handler {
 			}
 			return nil
 		})
-		if err != nil || len(d.Tickets) == 0 {
-			return err
+		if err == nil && len(d.Tickets) == 0 {
+			return nil
 		}
-		base := strings.TrimRight(s.StorefrontURL, "/")
-		d.When = when(starts, zone)
-		d.OrderURL = s.orderURL(d.Code, c.Order, version)
-		d.LostLinkURL = base + "/" + orgSlug + "/" + eventSlug + "/order-link"
-		msg, err := emails.Tickets(d)
+		var msg mailer.Message
+		if err == nil {
+			base := strings.TrimRight(s.StorefrontURL, "/")
+			d.When = when(starts, zone)
+			d.OrderURL = s.orderURL(d.Code, c.Order, version)
+			d.LostLinkURL = base + "/" + orgSlug + "/" + eventSlug + "/order-link"
+			build := s.ticketsEmail
+			if build == nil {
+				build = emails.Tickets
+			}
+			msg, err = build(d)
+		}
 		if err != nil {
-			return err
+			// Failing before the send is still failing: the order says so,
+			// as it would for a send that failed.
+			return errors.Join(err, s.recordSend(ctx, c, err))
 		}
 		sendErr := jobs.Deliver(ctx, m, msg)
 		if err := s.recordSend(ctx, c, sendErr); err != nil {

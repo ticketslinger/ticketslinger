@@ -20,6 +20,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
+	"github.com/ticketslinger/ticketslinger/api/internal/emails"
+	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 	"github.com/ticketslinger/ticketslinger/api/internal/pricing"
 	"github.com/ticketslinger/ticketslinger/api/internal/system"
@@ -36,6 +38,9 @@ type Service struct {
 	Direct        bool
 	StorefrontURL string // TS_STOREFRONT_URL: base for order links
 	SecretKey     []byte // TS_SECRET_KEY: order links are signed with a key derived from it
+	// ticketsEmail builds the ticket email; nil means emails.Tickets. Tests
+	// set it to make the step before the send fail.
+	ticketsEmail func(emails.TicketsData) (mailer.Message, error)
 }
 
 type Item struct {

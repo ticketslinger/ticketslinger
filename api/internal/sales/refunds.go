@@ -36,14 +36,20 @@ func requestRefund(ctx context.Context, tx pgx.Tx, org, payment uuid.UUID, amoun
 	var id uuid.UUID
 	if err := tx.QueryRow(ctx, `insert into refunds (organizer_id, payment_id, amount_cents, fee_refunded, fee_cents, status, reason, actor_user_id)
 		values ($1, $2, $3, $4, $5, 'requested', $6, $7) returning id`, org, payment, amount, feeBack, fee, reason, actor).Scan(&id); err != nil {
-		// refunds_within_payment (00034): more than the payment has left.
-		var pg *pgconn.PgError
-		if errors.As(err, &pg) && pg.Code == "23514" {
-			return id, errNotRefundable
-		}
-		return id, err
+		return id, refundDBError(err)
 	}
 	return id, jobs.Enqueue(ctx, tx, RefundJob, refundJob{Organizer: org, Refund: id})
+}
+
+// refundDBError maps the refunds_within_payment trigger (00034, named since
+// 00041), and only it, to errNotRefundable: more than the payment has left.
+// Any other check that fails is a bug, not the buyer's answer.
+func refundDBError(err error) error {
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && pg.Code == "23514" && pg.ConstraintName == "refunds_within_payment" {
+		return errNotRefundable
+	}
+	return err
 }
 
 type refundRow struct {

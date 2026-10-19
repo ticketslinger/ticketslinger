@@ -40,7 +40,9 @@ var (
 		Message: "Some of those tickets aren't in this order, or they're refunded already. Reload the order and pick again."}
 	errTooManyTickets = catalogue.ErrInvalid{Code: "too_many", Field: "ticket_ids",
 		Message: "Pick up to 100 tickets at a time, or leave the list out to refund the whole order."}
-	errNotFailed  = catalogue.ErrConflict{Code: "not_failed", Message: "Only a refund that failed can be sent again."}
+	errNotFailed = catalogue.ErrConflict{Code: "not_failed", Message: "Only a refund that failed can be sent again."}
+	errNoRoom    = catalogue.ErrConflict{Code: "no_room",
+		Message: "Other refunds on this order have taken what this one needed since it failed, so there isn't enough left to send it again."}
 	errFeeNoMoney = catalogue.ErrInvalid{Code: "fee_without_refund", Field: "refund_fee",
 		Message: "Those tickets cost nothing, so there's no payment to send our fee back through. Refund them with refund_fee false."}
 )
@@ -157,6 +159,10 @@ func RetryRefund(ctx context.Context, tx pgx.Tx, org, event, order, refund uuid.
 	var retried bool
 	if err := tx.QueryRow(ctx, `select retry_refund($1)`, refund).Scan(&retried); err != nil {
 		return RefundView{}, err
+	}
+	if !retried && failure != nil {
+		// It was failed under the order lock, so only the cap (00041) stopped it.
+		return RefundView{}, errNoRoom
 	}
 	if !retried {
 		return RefundView{}, errNotFailed

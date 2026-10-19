@@ -178,3 +178,19 @@ func TestPDFHasNoOrderMetadata(t *testing.T) {
 		}
 	}
 }
+
+// Venue, attendee and ticket type can each be empty; the page still prints.
+func TestPDFWithEmptyFields(t *testing.T) {
+	o := order("")
+	o.Venue, o.Tickets[0].Type = "", ""
+	b, err := PDF(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(b, []byte("%PDF-")) || !bytes.HasSuffix(bytes.TrimRight(b, " \r\n\t"), []byte("%%EOF")) {
+		t.Fatal("not a whole PDF")
+	}
+	if n := len(pageRe.FindAll(b, -1)); n != 1 {
+		t.Fatalf("pages = %d, want 1", n)
+	}
+}

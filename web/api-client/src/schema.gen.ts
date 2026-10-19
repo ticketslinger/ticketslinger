@@ -627,7 +627,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Sends a failed refund again: the same refund, for the same money, back to requested. Before it asks Stripe again, we check whether Stripe made the first one after all; if it did, we use that one instead of sending a second. Its tickets keep their seats until it goes through. 409 not_failed unless the refund failed. 404 for a refund that isn't this order's. */
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Sends a failed refund again: the same refund, for the same money, back to requested. Before it asks Stripe again, we check whether Stripe made the first one after all; if it did, we use that one instead of sending a second. Its tickets keep their seats until it goes through. 409 not_failed unless the refund failed. 409 no_room when other refunds on the order have since taken what this one needs. 404 for a refund that isn't this order's. */
         post: operations["retryRefund"];
         delete?: never;
         options?: never;

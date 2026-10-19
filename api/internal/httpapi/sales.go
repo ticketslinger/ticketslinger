@@ -651,12 +651,20 @@ func (s *server) PayCheckout(ctx context.Context, req PayCheckoutRequestObject) 
 	return out, nil
 }
 
+// maxOrderToken caps the order token read from a URL: a real one is far
+// shorter, so anything longer is answered as a wrong token without being
+// looked up.
+const maxOrderToken = 200
+
 // GetOrder counts the read against the caller's address, then shows the
 // order to whoever holds its token. privateAnswers sets the no-store and
 // no-referrer headers.
 func (s *server) GetOrder(ctx context.Context, req GetOrderRequestObject) (GetOrderResponseObject, error) {
 	if err := allow(ctx, s.orderLimit); err != nil {
 		return nil, err
+	}
+	if len(req.Params.Token) > maxOrderToken {
+		return nil, salesError(catalogue.ErrNotFound) // as a wrong token
 	}
 	o, err := s.Sales.Order(ctx, req.Code, req.Params.Token)
 	if err != nil {
@@ -691,6 +699,9 @@ func (s *server) GetOrder(ctx context.Context, req GetOrderRequestObject) (GetOr
 func (s *server) GetOrderPDF(ctx context.Context, req GetOrderPDFRequestObject) (GetOrderPDFResponseObject, error) {
 	if err := allow(ctx, s.orderLimit); err != nil {
 		return nil, err
+	}
+	if len(req.Params.Token) > maxOrderToken {
+		return nil, salesError(catalogue.ErrNotFound) // as a wrong token
 	}
 	pdf, name, err := s.Sales.OrderPDF(ctx, req.Code, req.Params.Token)
 	if err != nil {
