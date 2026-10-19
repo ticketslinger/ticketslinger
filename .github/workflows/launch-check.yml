@@ -1,0 +1,41 @@
+name: launch-check
+# Manual only: measures production. Lighthouse three times on a live event
+# page (median performance must be 1.0) and the page's JS weight (≤ 15 KB).
+on:
+  workflow_dispatch:
+    inputs:
+      event_url:
+        description: "A live event page, e.g. https://tickets.ticketslinger.com/<organizer>/<event>"
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency: { group: launch-check, cancel-in-progress: false }
+jobs:
+  lighthouse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with: { bun-version: 1.3.14 }
+      - run: bun install --frozen-lockfile
+      # Playwright and Lighthouse run on Node; lighthouse 13 needs 22.19 or later.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 22.x }
+      - run: cd e2e && bunx playwright install --with-deps chromium
+      # The URL reaches the shell only as an env var, never inside run:.
+      - run: |
+          case "$PERF_EVENT_URL" in https://*) ;; *) echo "event_url must be an https:// event page"; exit 1;; esac
+          cd e2e && bunx playwright test perf.spec.ts
+        env:
+          PERF_EVENT_URL: ${{ inputs.event_url }}
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: launch-check-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 30
