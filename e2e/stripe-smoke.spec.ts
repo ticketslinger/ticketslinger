@@ -2,7 +2,7 @@
 // that already takes charges, and webhooks through `stripe listen`. It skips
 // itself everywhere else.
 import { execFileSync } from "node:child_process";
-import { devices, expect, type Page, test } from "@playwright/test";
+import { devices, expect, type Frame, type Page, test } from "@playwright/test";
 import { signUpWithPasskey, virtualAuthenticator } from "./helpers";
 
 const SHOP = "http://localhost:3003";
@@ -31,12 +31,38 @@ async function stripe(path: string, account?: string) {
 
 test.skip(!ACCOUNT, "manual stripe-smoke workflow only");
 
+/**
+ * The frame holding the Payment Element's card form. Stripe mounts several
+ * iframes with the same title, so pick the one that actually has the Card tab
+ * or the card number field, rather than guessing at Stripe's frame names.
+ */
+async function cardFrame(shop: Page): Promise<Frame> {
+  let found: Frame | undefined;
+  await expect
+    .poll(
+      async () => {
+        for (const f of shop.frames()) {
+          const hit = f
+            .getByRole("button", { name: "Card", exact: true })
+            .or(f.locator('[name="number"]'));
+          if (await hit.count().catch(() => 0)) {
+            found = f;
+            return true;
+          }
+        }
+        return false;
+      },
+      { timeout: 15_000, message: "Stripe's card form never showed" },
+    )
+    .toBe(true);
+  return found as Frame;
+}
+
 /** The Payment Element's card form. A mouse click can land on a resizing iframe, so Pay gets a DOM click. */
 async function payByCard(shop: Page, number: string) {
-  const frame = shop.frameLocator('iframe[title*="Secure payment input frame"]');
+  const frame = await cardFrame(shop);
   const card = frame.getByRole("button", { name: "Card", exact: true });
   const cardNumber = frame.locator('[name="number"]');
-  // isVisible doesn't wait: first wait for either the accordion or the card form itself.
   await expect(card.or(cardNumber).first()).toBeVisible({ timeout: 15_000 });
   if (await card.isVisible()) await card.click();
   await cardNumber.fill(number);
