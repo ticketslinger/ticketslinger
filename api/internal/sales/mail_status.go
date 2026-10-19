@@ -28,9 +28,9 @@ type MailState struct {
 
 var (
 	errEmailOnItsWay = catalogue.ErrConflict{Code: "email_on_its_way",
-		Message: "We're still sending the last one. It'll get there; give it a few minutes."}
+		Message: "We're still trying to send the latest one. Give it a little while."}
 	errTooSoon = catalogue.ErrConflict{Code: "too_soon",
-		Message: "You asked us to send these less than 10 minutes ago. Wait until it's been 10 minutes, then try again."}
+		Message: "These were sent less than 10 minutes ago. Wait until it's been 10 minutes, then try again."}
 	errNoTickets = catalogue.ErrConflict{Code: "no_tickets",
 		Message: "This order has no valid tickets left, so there's nothing to send."}
 )

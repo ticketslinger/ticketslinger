@@ -221,13 +221,15 @@ func TestResendTicketEmail(t *testing.T) {
 				t.Fatalf("%d audit rows, want %d", audits, want)
 			}
 
-			if err := resend(s, f, order); conflictCode(err) != "email_on_its_way" {
+			var w catalogue.ErrConflict
+			if err := resend(s, f, order); !errors.As(err, &w) || w.Code != "email_on_its_way" ||
+				w.Message != "We're still trying to send the latest one. Give it a little while." {
 				t.Fatalf("again at once: %v, want email_on_its_way", err)
 			}
 			f.exec(t, `update orders set mail_status = 'sent', mail_requested_at = now() - interval '5 minutes' where id = $1`, order)
 			var c catalogue.ErrConflict
 			if err := resend(s, f, order); !errors.As(err, &c) || c.Code != "too_soon" ||
-				c.Message != "You asked us to send these less than 10 minutes ago. Wait until it's been 10 minutes, then try again." {
+				c.Message != "These were sent less than 10 minutes ago. Wait until it's been 10 minutes, then try again." {
 				t.Fatalf("5 minutes on: %v, want too_soon", err)
 			}
 			f.exec(t, `update orders set status = 'refunded', mail_requested_at = now() - interval '11 minutes' where id = $1`, order)
