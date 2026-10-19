@@ -257,7 +257,7 @@ func TestFreeOrderEmailsItsLink(t *testing.T) {
 	}
 	mail := m.Sent[0]
 	if mail.To != "buyer@example.com" || mail.Subject != "Your tickets for Gala" ||
-		!strings.HasPrefix(mail.Text, "You're going to Gala on ") || !strings.HasSuffix(mail.Text, ": "+got.OrderURL) {
+		!strings.HasPrefix(mail.Text, "You're going to Gala.") || !strings.Contains(mail.Text, "Open your order: "+got.OrderURL+"\n") {
 		t.Fatalf("email = %+v, want the link %s", mail, got.OrderURL)
 	}
 	// A partly refunded order still sends: its remaining tickets are the buyer's.
