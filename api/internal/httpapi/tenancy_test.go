@@ -50,6 +50,9 @@ var sessionOnly = map[string]string{
 	"refundOrder":        "a refund moves the organizer's money; a person decides",
 	"retryRefund":        "sending a refund again is a person's call too",
 	"cancelEvent":        "cancelling an event refunds everyone; a person decides",
+	"listMembers":        "who is on the team is for people, not integrations",
+	"addMember":          "giving someone access to the organizer is a person's call",
+	"removeMember":       "taking someone's access away is a person's call",
 }
 
 // Every secured operation not in userScoped, called by a signed-in mfa user
@@ -117,7 +120,14 @@ func seedCatalogue(h *harness, owner, slug, apiKey string) map[string]string {
 		select o.id::text, r.id::text from o, r`, event, slug).Scan(&order, &refund); err != nil {
 		h.t.Fatal(err)
 	}
-	return map[string]string{"organizer": slug, "apiKey": apiKey, "event": event, "ticketType": ticketType, "quota": quota, "promoCode": promoCode, "question": question, "challengeId": "0190a0a0-0000-7000-8000-000000000000",
+	// The owner's own user id: removing it is refused anyway, so a walk that
+	// got through would still change nothing.
+	var member string
+	if err := testdb.Owner(h.t, h.pool).QueryRow(context.Background(), `select m.user_id::text from memberships m
+			join organizers o on o.id = m.organizer_id where o.slug = $1 and m.role = 'owner'`, slug).Scan(&member); err != nil {
+		h.t.Fatal(err)
+	}
+	return map[string]string{"organizer": slug, "member": member, "apiKey": apiKey, "event": event, "ticketType": ticketType, "quota": quota, "promoCode": promoCode, "question": question, "challengeId": "0190a0a0-0000-7000-8000-000000000000",
 		"eventSlug": "gala", "token": "no-such-checkout-token-0000000000000000000", "order": order, "refund": refund, "code": "TS-00000", "q": "ab"}
 }
 

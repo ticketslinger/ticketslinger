@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/url"
 	"strings"
@@ -37,7 +38,9 @@ func TestCheckinRolesAndKeys(t *testing.T) {
 	_, qrs := s.doorTickets()
 	body := `{"qr":"` + qrs[0] + `","gate":"North"}`
 	_, writeKey := s.createKey(s.owner, "acme", "write")
-	for i, who := range []string{s.owner, s.member("admin@example.com", "admin"), s.member("door@example.com", "checkin"), writeKey} {
+	admin := s.member("admin@example.com", "admin")
+	door := s.member("door@example.com", "checkin")
+	for i, who := range []string{s.owner, admin, door, writeKey} {
 		r := s.must(s.do(who, "POST", s.checkinPath(""), body), 200)
 		want := "duplicate"
 		if i == 0 {
@@ -53,6 +56,31 @@ func TestCheckinRolesAndKeys(t *testing.T) {
 	}
 	if res := s.do(s.owner, "POST", "/v1/organizers/acme/events/"+uuid.NewString()+"/checkins", body); res.StatusCode != 404 {
 		t.Fatalf("unknown event: %d, want 404", res.StatusCode)
+	}
+
+	// Door staff don't see money (spec D22): the orders list and one order
+	// answer forbidden_role without a cent in the body; editors read both.
+	var order string
+	if err := testdb.Owner(t, s.pool).QueryRow(context.Background(), `select id::text from orders where email = 'buyer@example.com'`).Scan(&order); err != nil {
+		t.Fatal(err)
+	}
+	list := "/v1/organizers/acme/events/" + s.f["event"] + "/orders"
+	for _, path := range []string{list, s.orderPath(order)} {
+		res := s.do(door, "GET", path, "")
+		b, _ := io.ReadAll(res.Body)
+		if res.StatusCode != 403 || !strings.Contains(string(b), `"forbidden_role"`) {
+			t.Fatalf("door %s: %d %s, want 403 forbidden_role", path, res.StatusCode, b)
+		}
+		for _, money := range []string{"total_cents", "fee_cents", "refunded_cents", "charge_cents"} {
+			if strings.Contains(string(b), money) {
+				t.Fatalf("door %s: %s carries %s", path, b, money)
+			}
+		}
+		for _, who := range []string{s.owner, admin} {
+			if res := s.do(who, "GET", path, ""); res.StatusCode != 200 {
+				t.Fatalf("editor %s: %d, want 200", path, res.StatusCode)
+			}
+		}
 	}
 }
 

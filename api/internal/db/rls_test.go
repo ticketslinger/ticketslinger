@@ -704,3 +704,47 @@ func TestQuotaUsedIsNotPublic(t *testing.T) {
 		t.Fatalf("PUBLIC %v, ts_app %v, ts_system %v, %v", public, app, system, err)
 	}
 }
+
+// add_member and remove_member check ownership themselves, whatever the Go
+// handler does first: an admin gets 'forbidden', and no role but admin or
+// checkin gets in at all.
+func TestTeamFunctionsAreOwnersOnly(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	ua, oa := seedOrg(t, pool, "a@example.com", "org-a")
+	ub, _ := seedOrg(t, pool, "b@example.com", "org-b")
+	owner := testdb.Owner(t, pool)
+	if _, err := owner.Exec(ctx, `update users set email_verified_at = now();
+		insert into users(email, name, email_verified_at) values ('c@example.com', 'C', now())`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Exec(ctx, `insert into memberships(organizer_id, user_id, role) values ($1, $2, 'admin')`, oa, ub); err != nil {
+		t.Fatal(err)
+	}
+	call := func(user uuid.UUID, q string, args ...any) (string, error) {
+		var r string
+		err := db.WithOrganizer(ctx, pool, user, oa, func(tx pgx.Tx, _ string) error {
+			return tx.QueryRow(ctx, q, args...).Scan(&r)
+		})
+		return r, err
+	}
+	for q, args := range map[string][]any{
+		`select add_member('c@example.com', 'checkin')`: nil,
+		`select remove_member($1)`:                      {ua},
+	} {
+		if r, err := call(ub, q, args...); err != nil || r != "forbidden" {
+			t.Errorf("admin %s: %q %v, want forbidden", q, r, err)
+		}
+	}
+	var pgErr *pgconn.PgError
+	if _, err := call(ua, `select add_member('c@example.com', 'owner')`); !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		t.Fatalf("role owner: %v, want check_violation", err)
+	}
+	if r, err := call(ua, `select remove_member($1)`, ua); err != nil || r != "cannot_remove" {
+		t.Fatalf("owner removing themself: %q %v", r, err)
+	}
+	var n int
+	if err := owner.QueryRow(ctx, `select count(*) from memberships where organizer_id = $1`, oa).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("memberships: %d %v, want 2", n, err)
+	}
+}

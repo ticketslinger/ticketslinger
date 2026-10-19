@@ -13,12 +13,15 @@ const THING: Record<string, string> = {
   api_key: "API key",
   order: "Order",
   refund: "Refund",
+  member: "Team member",
 };
 const DONE: Record<string, string> = {
   created: "created",
   updated: "changed",
   deleted: "deleted",
   revoked: "revoked",
+  added: "added",
+  removed: "removed",
   reordered: "reordered",
   refunded: "refunded",
   retried: "sent again",

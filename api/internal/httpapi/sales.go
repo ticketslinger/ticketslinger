@@ -715,10 +715,14 @@ func (s *server) RequestTicketEmail(ctx context.Context, req RequestTicketEmailR
 	return RequestTicketEmail202Response{}, nil
 }
 
-// ListOrders shows buyers' emails to any member or key; nothing here logs them.
+// ordersRead keeps check-in staff out of orders: they carry what people paid
+// (spec D22). Door staff find guests with searchCheckinTickets instead.
+var ordersRead = Access{Roles: ownerAdmin}
+
+// ListOrders shows buyers' emails to owners, admins and keys; nothing here logs them.
 func (s *server) ListOrders(ctx context.Context, req ListOrdersRequestObject) (ListOrdersResponseObject, error) {
 	out := ListOrders200JSONResponse{}
-	err := s.inOrganizer(ctx, req.Organizer, catalogueRead, func(_ organizers.Organizer, tx pgx.Tx) error {
+	err := s.inOrganizer(ctx, req.Organizer, ordersRead, func(_ organizers.Organizer, tx pgx.Tx) error {
 		list, err := sales.ListOrders(ctx, tx, req.Event)
 		for _, o := range list {
 			out = append(out, OrderSummary{Id: o.ID, Code: o.Code, Email: o.Email, Status: OrderSummaryStatus(o.Status), TicketCount: o.TicketCount,
@@ -733,11 +737,11 @@ func (s *server) ListOrders(ctx context.Context, req ListOrdersRequestObject) (L
 	return out, nil
 }
 
-// GetOrderDetail shows the buyer's email and tickets to any member or key,
+// GetOrderDetail shows the buyer's email and tickets to owners, admins and keys,
 // as ListOrders does; nothing here logs them.
 func (s *server) GetOrderDetail(ctx context.Context, req GetOrderDetailRequestObject) (GetOrderDetailResponseObject, error) {
 	var d sales.OrderDetailView
-	err := s.inOrganizer(ctx, req.Organizer, catalogueRead, func(_ organizers.Organizer, tx pgx.Tx) (err error) {
+	err := s.inOrganizer(ctx, req.Organizer, ordersRead, func(_ organizers.Organizer, tx pgx.Tx) (err error) {
 		d, err = sales.OrderDetail(ctx, tx, req.Event, req.Order)
 		return err
 	})

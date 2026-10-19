@@ -250,6 +250,45 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/members:
+    get:
+      operationId: listMembers
+      description: Owners and admins only, from a signed-in session. Everyone on the organizer's team and their role. An API key gets 403 session_required.
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Member" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: addMember
+      description: "Owners only, from a signed-in session. Adds an existing, verified TicketSlinger account to the team as admin or checkin; nobody is emailed. 404 no_account when no verified account has that email (an unknown email and an unverified one get the same answer). 409 already_member when they're on the team already, in any role. 422 with field role for any role but admin or checkin: owners can't be made here."
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AddMember" } } } }
+      responses:
+        "201": { description: Added, content: { application/json: { schema: { $ref: "#/components/schemas/Member" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/members/{member}:
+    delete:
+      operationId: removeMember
+      description: "Owners only, from a signed-in session. Takes an admin or check-in member off the team; they lose access at once. 409 cannot_remove for an owner or for yourself. 404 when they aren't on the team."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { name: member, in: path, required: true, schema: { type: string, format: uuid }, description: The member's user_id. }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "204": { description: Removed }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/payments:
     get:
       operationId: getPayments
@@ -560,18 +599,19 @@ paths:
   /organizers/{organizer}/events/{event}/orders:
     get:
       operationId: listOrders
-      description: Any member, or any API key. The event's orders, newest first. Orders still waiting for payment aren't listed. email is the buyer's address.
+      description: Owners and admins, or any API key; check-in staff get 403 forbidden_role, because orders show what people paid. The event's orders, newest first. Orders still waiting for payment aren't listed. email is the buyer's address.
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/OrderSummary" } } } } }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/orders/{order}:
     get:
       operationId: getOrderDetail
-      description: Any member, or any API key. One order with every ticket it ever had (refunded ones show as void, with the refund that covered them) and its refunds, newest first. email is the buyer's address.
+      description: Owners and admins, or any API key; check-in staff get 403 forbidden_role, as for listOrders. One order with every ticket it ever had (refunded ones show as void, with the refund that covered them) and its refunds, newest first. email is the buyer's address.
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
@@ -579,6 +619,7 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OrderDetail" } } } }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/orders/{order}/refunds:
     post:
@@ -1438,6 +1479,20 @@ components:
         actor_name: { type: [string, "null"], description: "The person's name if they are still a member of this organizer, or the API key's name. Null for former members." }
         actor_email: { type: [string, "null"], description: "The person's email if they are still a member of this organizer. Null for API keys and former members." }
         at: { type: string, format: date-time }
+    AddMember:
+      type: object
+      required: [email, role]
+      properties:
+        email: { type: string, format: email, maxLength: 254, x-go-type: string, description: "The email of their TicketSlinger account (422 invalid_email when it isn't one address)." }
+        role: { type: string, enum: [admin, checkin], description: "admin runs events, refunds and reports; checkin scans tickets and finds guests." }
+    Member:
+      type: object
+      required: [user_id, name, email, role]
+      properties:
+        user_id: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string }
+        role: { type: string, enum: [owner, admin, checkin] }
     CreateApiKey:
       type: object
       required: [name, scope]

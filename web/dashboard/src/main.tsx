@@ -21,6 +21,7 @@ import { Security } from "./routes/Security";
 import { SignIn } from "./routes/SignIn";
 import { SignUp } from "./routes/SignUp";
 import { StripeCallback } from "./routes/StripeCallback";
+import { Team } from "./routes/Team";
 import { VerifyEmail } from "./routes/VerifyEmail";
 import { type Me, match, NotFound, navigate, safeNext, usePath } from "./ui";
 import "./styles.css";
@@ -58,6 +59,7 @@ const ORGANIZER: [string, Section, (org: Org, me: Me, p: Record<string, string>)
     (org, _, p) => <OrderDetail org={org} eventId={p.id ?? ""} orderId={p.order ?? ""} />,
   ],
   ["/o/:slug/payments", "payments", (org) => <Payments org={org} />],
+  ["/o/:slug/team", "team", (org) => <Team org={org} />],
   ["/o/:slug/api-keys", "api-keys", (org) => <ApiKeys org={org} />],
   ["/o/:slug/audit", "audit", (org, me) => <Audit org={org} me={me} />],
 ];
