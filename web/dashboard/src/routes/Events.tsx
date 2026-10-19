@@ -110,6 +110,47 @@ const TABS: { path: string; label: string; editorsOnly?: boolean }[] = [
 /** The event's tabs this member may open. */
 export const eventTabs = (org: Org) => TABS.filter((t) => !t.editorsOnly || canEdit(org));
 
+function PublicLink({ org, event }: { org: Org; event: Event }) {
+  const [origin, setOrigin] = useState("");
+  const [copied, setCopied] = useState("");
+  useEffect(() => {
+    storefrontUrl().then(setOrigin);
+  }, []);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(""), 4000);
+    return () => clearTimeout(t);
+  }, [copied]);
+  const url = publicEventUrl(origin, org.slug, event.slug);
+  const state = publicLinkState(event.status, url);
+  if (state === "draft")
+    return <p className="muted">Your public link shows up here once the event is live.</p>;
+  if (state === "none") return null;
+  return (
+    <div className="row">
+      <p>
+        Share this link: <code>{url}</code>
+      </p>
+      <button
+        type="button"
+        className="inline secondary"
+        onClick={() => {
+          setCopied("");
+          (navigator.clipboard?.writeText(url) ?? Promise.reject()).then(
+            () => setCopied("Copied."),
+            () => setCopied("Copying didn't work here. Select the link and copy it yourself."),
+          );
+        }}
+      >
+        Copy link
+      </button>
+      <span className="success" role="status">
+        {copied}
+      </span>
+    </div>
+  );
+}
+
 export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: string }) {
   const path = { organizer: org.slug, event: id };
   const {
@@ -123,11 +164,6 @@ export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: s
   const remove = useAction();
   // null until asked; false after "Keep it", so focus can go back to the first button.
   const [confirming, setConfirming] = useState<boolean | null>(null);
-  const [origin, setOrigin] = useState("");
-  const [copied, setCopied] = useState("");
-  useEffect(() => {
-    storefrontUrl().then(setOrigin);
-  }, []);
 
   const setStatus = (to: "draft" | "live") =>
     status.run(async () => {
@@ -162,40 +198,7 @@ export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: s
           <p className="muted">
             {formatWhen(event.starts_at, event.timezone)} · {event.timezone.replaceAll("_", " ")}
           </p>
-          {(() => {
-            const url = publicEventUrl(origin, org.slug, event.slug);
-            const state = publicLinkState(event.status, url);
-            if (state === "draft")
-              return (
-                <p className="muted">Your public link shows up here once the event is live.</p>
-              );
-            if (state === "none") return null;
-            return (
-              <div className="row">
-                <p>
-                  Share this link: <code>{url}</code>
-                </p>
-                <button
-                  type="button"
-                  className="inline secondary"
-                  onClick={() =>
-                    (navigator.clipboard?.writeText(url) ?? Promise.reject()).then(
-                      () => setCopied("Copied."),
-                      () =>
-                        setCopied(
-                          "Copying didn't work here. Select the link and copy it yourself.",
-                        ),
-                    )
-                  }
-                >
-                  Copy link
-                </button>
-                <span className="success" role="status">
-                  {copied}
-                </span>
-              </div>
-            );
-          })()}
+          <PublicLink event={event} org={org} />
           {canEdit(org) && (event.status === "draft" || event.status === "live") && (
             <div className="status-box">
               {event.status === "draft" ? (
