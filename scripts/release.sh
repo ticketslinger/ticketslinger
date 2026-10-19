@@ -23,5 +23,8 @@ bun build "$root/web/storefront/server/index.ts" --target=bun --minify --outfile
 bun build "$root/web/dashboard/server/index.ts" --target=bun --minify --outfile "$dir/dashboard/server.js"
 
 echo "$tag" >"$dir/VERSION"
-tar -czf "$out/$name.tar.gz" -C "$dir" .
+# Owned by root and stamped with the commit time (GNU tar), so the archive carries
+# nothing of the machine that built it.
+tar --owner=0 --group=0 --numeric-owner --sort=name --mtime="@$(git -C "$root" log -1 --format=%ct)" \
+  -czf "$out/$name.tar.gz" -C "$dir" .
 (cd "$out" && sha256sum "$name.tar.gz" >SHA256SUMS)
