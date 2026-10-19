@@ -198,4 +198,12 @@ func TestResendWebhookMovesTheStatus(t *testing.T) {
 	if st := status(order); st != "complained" {
 		t.Fatalf("a late bounced undid the complaint: %s", st)
 	}
+
+	// Resend suppresses an address that bounced before: that email never
+	// arrives either, so it reads as a bounce.
+	sup := s.buyPaid(1, "s@example.com", "evt_s")
+	s.must(post("email.suppressed", sup, true), 200)
+	if st := status(sup); st != "bounced" {
+		t.Fatalf("suppressed: %s", st)
+	}
 }
