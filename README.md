@@ -10,6 +10,23 @@ make test     # Go tests (with -race), then bun test
 
 `make dev-db-down` throws the database away.
 
+## Run it on your own server (Docker Compose)
+
+One Linux box, Docker, and a reverse proxy you already trust. Compose runs Postgres, applies the migrations, then starts the API, the storefront and the dashboard.
+
+```sh
+cp deploy/.env.example deploy/.env    # fill it in; the comments say what each line is
+docker compose -f deploy/compose.yaml up -d --build
+```
+
+The three services use host networking and listen on `127.0.0.1` only (API 3000, storefront 3001, dashboard 3002). Your reverse proxy on the same machine terminates TLS, sends each hostname to its port, and sets `X-Real-IP` to the visitor's address. That header is how rate limits tell buyers apart, and it's only trusted from the loopback peer. Host networking works on Linux only, so Docker Desktop on macOS or Windows won't run this file.
+
+The API won't start without `TS_TURNSTILE_SECRET` (and the widget needs `TS_TURNSTILE_SITEKEY`). `TS_ALLOW_NO_TURNSTILE=1` switches the bot check off entirely: fine for a trial, never for a public site. `TS_MAIL` is required for any URL that isn't `http://localhost`.
+
+Port 5432 on `127.0.0.1` has to be free. If another Postgres already listens there, the services would talk to it instead of the container, silently.
+
+Set the database passwords before the first `up`: the roles are created then, once. Postgres is published on `127.0.0.1:5432` and nowhere else.
+
 ## Selling with your own Stripe account (self-hosting)
 
 Running ticketslinger yourself? Buyers can pay straight into your own Stripe account, and no platform fee comes off the top. There's nothing for your organizers to connect: set four variables and paid tickets can go on sale.

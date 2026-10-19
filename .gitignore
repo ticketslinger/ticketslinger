@@ -7,3 +7,4 @@ coverage.out
 playwright-report/
 test-results/
 /api/ticketslinger
+!deploy/.env.example
