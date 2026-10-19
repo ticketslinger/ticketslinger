@@ -127,7 +127,7 @@ func unreachable() error {
 }
 
 // smtpError keeps only a reply's code: its text can quote addresses. A 5xx
-// before RCPT is about this server's settings (its name, TS_MAIL_FROM), so
+// before RCPT is about the relay's settings (TLS, its name, TS_MAIL_FROM), so
 // it waits for a fix instead of dropping the email.
 func (s *SMTP) smtpError(ctx context.Context, stage string, err error) error {
 	te, ok := errors.AsType[*textproto.Error](err)
@@ -137,7 +137,7 @@ func (s *SMTP) smtpError(ctx context.Context, stage string, err error) error {
 	e := &Error{Provider: "smtp", Kind: Retry, Code: strconv.Itoa(te.Code), Problem: "unreachable"}
 	switch {
 	case te.Code < 500:
-	case stage == "greeting" || stage == "ehlo" || stage == "mail":
+	case stage == "greeting" || stage == "ehlo" || stage == "starttls" || stage == "mail":
 		return s.fail(ctx, &Error{Provider: "smtp", Kind: Retry, Code: e.Code, Problem: "config"})
 	case stage == "rcpt":
 		e.Kind, e.Problem = Permanent, "bad_address"

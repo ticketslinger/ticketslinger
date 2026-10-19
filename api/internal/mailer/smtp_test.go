@@ -114,6 +114,10 @@ func (f *fakeSMTP) serve(c net.Conn) {
 				say("250-fake\r\n250 AUTH PLAIN")
 			}
 		case "STARTTLS":
+			if r := answer(verb, "220 go ahead"); r != "220 go ahead" {
+				say(r)
+				continue
+			}
 			say("220 go ahead")
 			tc := tls.Server(c, f.tlsConfig)
 			if tc.Handshake() != nil {
@@ -431,6 +435,7 @@ func TestSMTPMapsReplies(t *testing.T) {
 		{"GREETING", "554 5.7.1 no service for you", Retry, "554", "config"},
 		{"EHLO", "550 5.7.1 bad HELO name", Retry, "550", "config"},
 		{"MAIL", "550 5.7.1 sender not allowed", Retry, "550", "config"},
+		{"STARTTLS", "502 5.5.1 not here after all", Retry, "502", "config"},
 		{"RCPT", "452 4.2.2 mailbox full", Retry, "452", "unreachable"},
 		{"AUTH", "535 5.7.8 bad credentials for relay hunter2-SECRET", Retry, "535", "config"},
 	} {
