@@ -1,5 +1,5 @@
-// The event page's only script of ours. Turnstile's api.js is about 28 KB gzipped, so it waits
-// until the buyer starts on the ticket form instead of riding on the first load (spec §3).
+// The only script of ours on the event and order-link pages. Turnstile's api.js is about 28 KB
+// gzipped, so it waits until the buyer starts on the form instead of riding on the first load (spec §3).
 // The token still travels in cf-turnstile-response, and the API checks it as before.
 
 export type Turnstile = {
@@ -105,6 +105,7 @@ function load(): Promise<Turnstile> {
 }
 
 if (typeof document !== "undefined") {
-  const form = document.querySelector<HTMLFormElement>("form.buy");
+  // The form holding the check: the ticket form, or the order-link form.
+  const form = document.querySelector(".cf-turnstile")?.closest("form");
   if (form) lazyCheck(form, load);
 }
