@@ -118,7 +118,7 @@ func seedCatalogue(h *harness, owner, slug, apiKey string) map[string]string {
 		h.t.Fatal(err)
 	}
 	return map[string]string{"organizer": slug, "apiKey": apiKey, "event": event, "ticketType": ticketType, "quota": quota, "promoCode": promoCode, "question": question, "challengeId": "0190a0a0-0000-7000-8000-000000000000",
-		"eventSlug": "gala", "token": "no-such-checkout-token-0000000000000000000", "order": order, "refund": refund, "code": "TS-00000"}
+		"eventSlug": "gala", "token": "no-such-checkout-token-0000000000000000000", "order": order, "refund": refund, "code": "TS-00000", "q": "ab"}
 }
 
 // walk calls every secured operation with token and checks the status (and
@@ -151,6 +151,9 @@ func walk(t *testing.T, h *harness, token string, fixture map[string]string, wan
 				}
 				return v
 			})
+			// Without its required query parameters the generated wrapper
+			// answers 400 before the handler can say 404.
+			url += requiredQuery(t, op, fixture)
 			res := h.do(token, method, "/v1"+url, `{}`)
 			if got := h.errorCode(res); res.StatusCode != status || (code != "" && got != code) {
 				t.Errorf("%s %s (%s): got %d %q, want %d %q", method, url, id, res.StatusCode, got, status, code)
@@ -168,6 +171,25 @@ func walk(t *testing.T, h *harness, token string, fixture map[string]string, wan
 	if checked == 0 {
 		t.Fatal("no operations checked; the walk is broken")
 	}
+}
+
+// requiredQuery is "?name=value&..." for op's required query parameters,
+// each value from fixture. The generated wrapper reads them, as it does path
+// parameters, before any middleware runs.
+func requiredQuery(t *testing.T, op *openapi3.Operation, fixture map[string]string) string {
+	t.Helper()
+	q, sep := "", "?"
+	for _, p := range op.Parameters {
+		if p.Value.In == "query" && p.Value.Required {
+			v, ok := fixture[p.Value.Name]
+			if !ok {
+				t.Errorf("%s: no fixture for query parameter %s", opID(op), p.Value.Name)
+			}
+			q += sep + p.Value.Name + "=" + v
+			sep = "&"
+		}
+	}
+	return q
 }
 
 func TestAdminRoutesNeedMFA(t *testing.T) {

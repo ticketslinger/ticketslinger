@@ -58,6 +58,7 @@ func TestSecuredOperationsReject401BeforeBody(t *testing.T) {
 			n++
 			// Every path parameter in the spec is a uuid.
 			p := regexp.MustCompile(`\{[^}]*\}`).ReplaceAllString(path, "0197a2b4-0000-7000-8000-000000000000")
+			p += requiredQuery(t, op, map[string]string{"q": "ab"})
 			req, _ := http.NewRequest(method, srv.URL+"/v1"+p, nil)
 			res, err := clientFor(t, srv.URL).Do(req)
 			if err != nil {
