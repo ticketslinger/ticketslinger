@@ -8,6 +8,7 @@ import { Orders } from "./Orders";
 import { canEdit, type Org } from "./Organizer";
 import { Promos } from "./Promos";
 import { Questions } from "./Questions";
+import { Report } from "./Report";
 import { Tickets } from "./Tickets";
 
 const STATUS: Record<Event["status"], string> = {
@@ -101,6 +102,7 @@ const TABS: { path: string; label: string; editorsOnly?: boolean }[] = [
   { path: "/questions", label: "Questions" },
   // Orders show what people paid, which check-in staff don't see (spec D22).
   { path: "/orders", label: "Orders", editorsOnly: true },
+  { path: "/report", label: "Report", editorsOnly: true },
   { path: "/checkin", label: "Check-in" },
 ];
 
@@ -201,6 +203,7 @@ export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: s
           {tab === "/promo-codes" && <Promos org={org} event={event} />}
           {tab === "/questions" && <Questions org={org} event={event} />}
           {tab === "/orders" && <Orders org={org} event={event} />}
+          {tab === "/report" && <Report org={org} event={event} />}
 
           {tab === "" && canEdit(org) && (
             <CancelEvent org={org} event={event} onCancelled={setEvent} />

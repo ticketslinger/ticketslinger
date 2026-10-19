@@ -59,6 +59,11 @@ const ORGANIZER: [string, Section, (org: Org, me: Me, p: Record<string, string>)
     (org, _, p) => <EventPage org={org} id={p.id ?? ""} tab="/orders" />,
   ],
   [
+    "/o/:slug/events/:id/report",
+    "events",
+    (org, _, p) => <EventPage org={org} id={p.id ?? ""} tab="/report" />,
+  ],
+  [
     "/o/:slug/events/:id/checkin",
     "events",
     (org, _, p) => (

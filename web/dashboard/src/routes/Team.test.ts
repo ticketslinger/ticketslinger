@@ -30,6 +30,8 @@ test("check-in staff get no Orders tab; editors do", () => {
   const tabs = (role: Org["role"]) =>
     eventTabs({ id: "o", name: "Acme", slug: "acme", role }).map((t) => t.label);
   expect(tabs("checkin")).not.toContain("Orders");
+  expect(tabs("checkin")).not.toContain("Report");
+  expect(tabs("admin")).toContain("Report");
   expect(tabs("admin")).toContain("Orders");
   expect(tabs("owner")).toContain("Orders");
   for (const role of ["owner", "admin", "checkin"] as const)
