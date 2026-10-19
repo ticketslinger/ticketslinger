@@ -32,4 +32,6 @@ test("check-in staff get no Orders tab; editors do", () => {
   expect(tabs("checkin")).not.toContain("Orders");
   expect(tabs("admin")).toContain("Orders");
   expect(tabs("owner")).toContain("Orders");
+  for (const role of ["owner", "admin", "checkin"] as const)
+    expect(tabs(role)).toContain("Check-in");
 });

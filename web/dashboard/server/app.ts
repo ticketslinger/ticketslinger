@@ -36,10 +36,13 @@ const DROP_RES = new Set([
   "connection",
 ]);
 
-const CSP = "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'";
+// 'wasm-unsafe-eval' lets the scanner compile its QR decoder (our own /assets/*.wasm)
+// where the browser has no BarcodeDetector. It allows WebAssembly only, not eval().
+const BASE = "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'";
+const CSP = `${BASE}; script-src 'self' 'wasm-unsafe-eval'`;
 // The HTML shell also loads and frames Turnstile when it's on.
 const TURNSTILE = "https://challenges.cloudflare.com";
-const SHELL_CSP = `${CSP}; script-src 'self' ${TURNSTILE}; frame-src ${TURNSTILE}; connect-src 'self' ${TURNSTILE}`;
+const SHELL_CSP = `${BASE}; script-src 'self' 'wasm-unsafe-eval' ${TURNSTILE}; frame-src ${TURNSTILE}; connect-src 'self' ${TURNSTILE}`;
 
 const err = (c: Context, status: 400 | 403 | 404 | 413 | 502, code: string, message: string) =>
   c.json({ error: { code, message } }, status);

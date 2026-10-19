@@ -101,6 +101,7 @@ const TABS: { path: string; label: string; editorsOnly?: boolean }[] = [
   { path: "/questions", label: "Questions" },
   // Orders show what people paid, which check-in staff don't see (spec D22).
   { path: "/orders", label: "Orders", editorsOnly: true },
+  { path: "/checkin", label: "Check-in" },
 ];
 
 /** The event's tabs this member may open. */

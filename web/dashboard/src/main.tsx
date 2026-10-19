@@ -1,7 +1,9 @@
 import {
   Fragment,
+  lazy,
   type ReactNode,
   StrictMode,
+  Suspense,
   useCallback,
   useEffect,
   useRef,
@@ -25,6 +27,9 @@ import { Team } from "./routes/Team";
 import { VerifyEmail } from "./routes/VerifyEmail";
 import { type Me, match, NotFound, navigate, safeNext, usePath } from "./ui";
 import "./styles.css";
+
+// The scanner and its decoder load only when someone opens it.
+const Checkin = lazy(() => import("./routes/Checkin").then((m) => ({ default: m.Checkin })));
 
 const PUBLIC = new Set(["/signin", "/signup"]);
 
@@ -52,6 +57,15 @@ const ORGANIZER: [string, Section, (org: Org, me: Me, p: Record<string, string>)
     "/o/:slug/events/:id/orders",
     "events",
     (org, _, p) => <EventPage org={org} id={p.id ?? ""} tab="/orders" />,
+  ],
+  [
+    "/o/:slug/events/:id/checkin",
+    "events",
+    (org, _, p) => (
+      <Suspense fallback={<p className="muted">Loading…</p>}>
+        <Checkin org={org} id={p.id ?? ""} />
+      </Suspense>
+    ),
   ],
   [
     "/o/:slug/events/:id/orders/:order",
