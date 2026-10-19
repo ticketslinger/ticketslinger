@@ -1,6 +1,8 @@
 import type { components } from "@ticketslinger/api-client";
+import { useState } from "react";
 import { api, must } from "../api";
 import { formatCents } from "../money";
+import { formatDay } from "../time";
 import { ErrorText, useLoad } from "../ui";
 import type { Event } from "./EventForm";
 import type { Org } from "./Organizer";
@@ -23,6 +25,40 @@ export const exportHref = (
   kind: "orders.csv" | "attendees.csv" | "checkins.csv",
 ) => `/api/organizers/${slug}/events/${eventId}/exports/${kind}`;
 
+/** True when nothing has sold and no money has moved, so the figures would all read zero. */
+export const isEmpty = (r: EventReport) => r.gross_cents === 0 && r.orders === 0 && r.sold === 0;
+
+/** Says why the Orders tab can list fewer orders than this figure. */
+export const ordersNote = (n: number) =>
+  `${n} ${n === 1 ? "order" : "orders"}, refunded ones included. The Orders tab lists only the ones still standing.`;
+
+/** The file name in a Content-Disposition header, or the fallback. */
+export function fileName(header: string | null, fallback: string): string {
+  const m = /filename="([^"\\]+)"/.exec(header ?? "") ?? /filename=([^;\s]+)/.exec(header ?? "");
+  return m?.[1] ?? fallback;
+}
+
+async function download(href: string, kind: string): Promise<string | null> {
+  try {
+    const res = await fetch(href);
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+      return body?.error?.message || "Something went wrong on our side. Try again in a moment.";
+    }
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName(res.headers.get("Content-Disposition"), kind);
+    document.body.append(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    return null;
+  } catch {
+    return "Couldn't reach the server. Check your connection and try again.";
+  }
+}
+
 const DOWNLOADS = [
   ["orders.csv", "Download orders (CSV)"],
   ["attendees.csv", "Download attendees (CSV)"],
@@ -38,14 +74,15 @@ export function Report({ org, event }: { org: Org; event: Event }) {
     ),
   );
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const empty = data ? isEmpty(data) : false;
+
   return (
     <>
       <ErrorText>{error?.message}</ErrorText>
       {!data && !error && <p className="muted">Loading…</p>}
-      {data && data.gross_cents === 0 && data.orders === 0 && data.sold === 0 && (
-        <p>{EMPTY_REPORT}</p>
-      )}
-      {data && (data.gross_cents !== 0 || data.orders !== 0 || data.sold !== 0) && (
+      {data && empty && <p>{EMPTY_REPORT}</p>}
+      {data && !empty && (
         <>
           <dl>
             {figures(data).map(([label, value]) => (
@@ -59,10 +96,7 @@ export function Report({ org, event }: { org: Org; event: Event }) {
             Stripe takes its processing fees from your Stripe balance, so they aren't in these
             figures. Your Stripe dashboard shows them.
           </p>
-          <p>
-            {data.orders} {data.orders === 1 ? "order" : "orders"}, refunded ones included. The
-            Orders tab lists only the ones still standing.
-          </p>
+          <p>{ordersNote(data.orders)}</p>
 
           <h3>By ticket</h3>
           <Table
@@ -79,7 +113,7 @@ export function Report({ org, event }: { org: Org; event: Event }) {
             head={["Day", "Orders", "Tickets", "Sales"]}
             rows={data.sales_by_day.map((d) => [
               d.day,
-              d.day,
+              formatDay(d.day),
               d.orders,
               d.tickets,
               formatCents(d.gross_cents),
@@ -97,13 +131,19 @@ export function Report({ org, event }: { org: Org; event: Event }) {
           />
         </>
       )}
+      <ErrorText>{saveError}</ErrorText>
       <p>
         {DOWNLOADS.map(([kind, label]) => (
-          <span key={kind}>
-            <a href={exportHref(org.slug, event.id, kind)} download>
-              {label}
-            </a>{" "}
-          </span>
+          <button
+            key={kind}
+            type="button"
+            onClick={async () => {
+              setSaveError(null);
+              setSaveError(await download(exportHref(org.slug, event.id, kind), kind));
+            }}
+          >
+            {label}
+          </button>
         ))}
       </p>
     </>

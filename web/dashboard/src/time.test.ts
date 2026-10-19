@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { fromLocalInput, toLocalInput } from "./time";
+import { formatDay, fromLocalInput, toLocalInput } from "./time";
 
 const NY = "America/New_York";
 
@@ -44,4 +44,8 @@ test("a half-hour gap moves forward by half an hour", () => {
 test("a time repeated by the autumn change means its first occurrence", () => {
   // 01:30 happens in EDT (05:30Z) and again in EST (06:30Z).
   expect(fromLocalInput("2026-11-01T01:30", NY)).toBe("2026-11-01T05:30:00.000Z");
+});
+
+test("formatDay keeps the calendar day whatever the browser zone", () => {
+  expect(formatDay("2026-10-19")).toContain("19");
 });

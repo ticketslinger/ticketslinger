@@ -62,6 +62,15 @@ export function formatWhen(iso: string, tz: string): string {
   }).format(new Date(iso));
 }
 
+/** "2026-10-19" (already a calendar day in the event's zone) as a friendly date. */
+export function formatDay(day: string): string {
+  const [y = 0, m = 1, d = 1] = day.split("-").map(Number);
+  // Noon UTC is the same calendar day in every zone, so the browser zone can't shift it.
+  return new Intl.DateTimeFormat(undefined, { timeZone: "UTC", dateStyle: "medium" }).format(
+    new Date(Date.UTC(y, m - 1, d, 12)),
+  );
+}
+
 /** Every zone this browser knows, with a short list if it can't say. */
 export function timeZones(): string[] {
   try {

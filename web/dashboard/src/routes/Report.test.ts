@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { components } from "@ticketslinger/api-client";
-import { EMPTY_REPORT, exportHref, figures } from "./Report";
+import { EMPTY_REPORT, exportHref, figures, fileName, isEmpty, ordersNote } from "./Report";
 
 type EventReport = components["schemas"]["EventReport"];
 
@@ -45,4 +45,24 @@ test("download links go through the dashboard proxy", () => {
     "/api/organizers/acme/events/e1/exports/attendees.csv",
     "/api/organizers/acme/events/e1/exports/checkins.csv",
   ]);
+});
+
+test("empty means no sales, no orders, no money", () => {
+  expect(isEmpty({ ...fixture, gross_cents: 0, orders: 0, sold: 0 })).toBe(true);
+  expect(isEmpty(fixture)).toBe(false);
+  expect(isEmpty({ ...fixture, gross_cents: 0, orders: 0, sold: 1 })).toBe(false);
+});
+
+test("the orders note says refunded ones are included", () => {
+  expect(ordersNote(10)).toBe(
+    "10 orders, refunded ones included. The Orders tab lists only the ones still standing.",
+  );
+  expect(ordersNote(1)).toStartWith("1 order, refunded");
+});
+
+test("the saved file name comes from Content-Disposition", () => {
+  expect(fileName('attachment; filename="acme-night-orders.csv"', "x")).toBe(
+    "acme-night-orders.csv",
+  );
+  expect(fileName(null, "orders.csv")).toBe("orders.csv");
 });
