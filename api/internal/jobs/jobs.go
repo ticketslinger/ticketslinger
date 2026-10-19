@@ -288,6 +288,34 @@ func SendEmail(m mailer.Mailer) Handler {
 		if err := json.Unmarshal(payload, &p); err != nil {
 			return err
 		}
-		return m.Send(ctx, p.To, p.Subject, p.Text)
+		return Deliver(ctx, m, mailer.Message{To: p.To, Subject: p.Subject, Text: p.Text})
 	}
+}
+
+// now is Deliver's clock; tests pin it.
+var now = time.Now
+
+// Deliver is the one way a job sends email. Inside a job, a message without
+// a key gets "ts-job-<job id>", so every retry of the job is the same email
+// to the provider. A provider's Permanent answer parks the job at once; a
+// DailyQuota answer waits for the next 00:05 UTC without spending an attempt.
+func Deliver(ctx context.Context, m mailer.Mailer, msg mailer.Message) error {
+	if id := ID(ctx); id != "" && msg.IdempotencyKey == "" {
+		msg.IdempotencyKey = "ts-job-" + id
+	}
+	err := m.Send(ctx, msg)
+	if e, ok := errors.AsType[*mailer.Error](err); ok {
+		switch e.Kind {
+		case mailer.Permanent:
+			return Permanent(err)
+		case mailer.DailyQuota:
+			t := now().UTC()
+			next := time.Date(t.Year(), t.Month(), t.Day(), 0, 5, 0, 0, time.UTC)
+			if !next.After(t) {
+				next = next.AddDate(0, 0, 1)
+			}
+			return Delay(next, err)
+		}
+	}
+	return err
 }
