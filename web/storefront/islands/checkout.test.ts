@@ -195,6 +195,7 @@ test("back from the bank, Stripe's own word on the payment sets the page", () =>
     // Nothing unknown is ever read as nothing charged.
     expect(afterReturn(undefined, lapsed)).toEqual(waiting);
     expect(afterReturn("requires_capture", lapsed)).toEqual(waiting);
+    expect(afterReturn("requires_confirmation", lapsed)).toEqual(waiting);
     for (const unpaid of ["requires_payment_method", "requires_action"]) {
       expect(afterReturn(unpaid, lapsed)).toEqual(
         lapsed ? { kind: "over", message: DECLINED_LATE } : { kind: "details" },

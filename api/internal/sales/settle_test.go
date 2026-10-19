@@ -3,6 +3,7 @@ package sales_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
@@ -87,14 +88,28 @@ func TestAbandonedButPaidIsConfirmed(t *testing.T) {
 	}
 }
 
+// cancelCounter counts cancel calls: Stripe can, now and then, cancel an
+// intent that's still processing, so the fake refusing isn't proof enough.
+type cancelCounter struct {
+	*payments.Fake
+	n *atomic.Int32
+}
+
+func (c cancelCounter) CancelPaymentIntent(ctx context.Context, account, intent, key string) error {
+	c.n.Add(1)
+	return c.Fake.CancelPaymentIntent(ctx, account, intent, key)
+}
+
 func TestProcessingPaymentIsLeftToFinish(t *testing.T) {
 	s, fake := newPaidService(t)
+	var cancels atomic.Int32
+	s.Payments = cancelCounter{fake, &cancels}
 	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
 	c, pi := abandoned(t, s, f, fake)
 	fake.SetIntentStatus(pi.ID, "processing")
 	drain(t, s, &mailer.Memory{})
-	if fake.Cancelled(pi.ID) {
-		t.Fatal("a processing intent was cancelled")
+	if n := cancels.Load(); n != 0 || fake.Cancelled(pi.ID) {
+		t.Fatalf("a processing intent was cancelled (%d cancel calls)", n)
 	}
 	if _, _, st := f.orderOf(t, c.ID); st != "pending" {
 		t.Fatalf("order %s, want pending", st)

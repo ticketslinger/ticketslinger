@@ -35,6 +35,10 @@ type settleJob struct {
 // else: the intent is cancelled at Stripe, so it can never be charged, and the
 // order cancelled here. An order with no payment at all is just cancelled.
 // Organizers never saw the order, so nothing is audited.
+// ponytail: a settle job that gives up (parked after MaxAttempts failures,
+// about 17 h of backoff, or ended by a definite refusal on the status read)
+// leaves the order pending until a webhook arrives; upgrade path is a Parked
+// handler that clears settle_queued_at so the sweep queues it again.
 func SettleOrder(s *Service) jobs.Handler { return s.settler(false) }
 
 // CancelPayment handles CancelPaymentJob the same way, and audits the
