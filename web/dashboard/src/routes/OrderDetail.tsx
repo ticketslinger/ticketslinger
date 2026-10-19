@@ -42,7 +42,8 @@ const WHY: Record<NonNullable<Refund["failure"]>, string> = {
   stripe_failed: "Stripe couldn't send it.",
   no_access:
     "We can't reach that Stripe account any more. Refund this one from your Stripe dashboard.",
-  gave_up: "Stripe kept saying no, so we stopped trying.",
+  gave_up:
+    "We couldn't get this through to Stripe, so we stopped trying. Try again, or refund it from your Stripe dashboard.",
 };
 
 /** Why a failed refund failed, in the organizer's terms. */

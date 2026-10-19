@@ -61,7 +61,7 @@ func TestOwnerRefundsOneTicket(t *testing.T) {
 	}
 	for _, o := range s.jsonList(s.do(s.owner, "GET", "/v1/organizers/acme/events/"+s.f["event"]+"/orders", "")) {
 		if o := o.(map[string]any); o["id"] == order && (o["ticket_count"] != float64(1) || o["refunded_cents"] != float64(2600) ||
-			o["fee_refunded_cents"] != float64(100) || o["status"] != "partially_refunded") {
+			o["fee_refunded_cents"] != float64(0) || o["status"] != "partially_refunded") { // the fee goes back when the job runs
 			t.Fatalf("listed %v", o)
 		}
 	}

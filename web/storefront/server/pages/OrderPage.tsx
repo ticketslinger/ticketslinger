@@ -7,25 +7,36 @@ import { Layout } from "./Layout";
 type Order = components["schemas"]["Order"];
 
 // The refund rows decide what the buyer reads; the order's status only when there are none
-// (free tickets give nothing back).
+// (free tickets give nothing back). refunded_cents counts refunds still on their way too.
 export function orderStatus(order: Order): string {
   const e = order.event;
   const cancelled = e.status === "cancelled";
+  const total = order.totals.total_cents;
   if (order.status === "cancelled") {
+    // A free order voided: there was never a payment to give back.
+    if (total === 0) {
+      return cancelled
+        ? `${e.name} was cancelled, so these tickets won't get you in any more.`
+        : "These tickets were cancelled.";
+    }
     return cancelled
       ? `${e.name} was cancelled while your payment was on its way, so we couldn't give you tickets. We're refunding you in full.`
       : "Your payment arrived after the last tickets had gone, so this order was cancelled. We're refunding you in full.";
   }
   const back = formatCents(order.refunded_cents);
-  if (order.refunded_cents > 0 && order.refunded_cents < order.totals.total_cents) {
-    return `Part of this order was refunded: ${back} went back to your card.`;
+  const going = order.tickets.some((t) => t.status === "valid");
+  const fee = order.totals.fee_cents;
+  if (order.refunded_cents > 0 && !going && fee > 0 && order.refunded_cents + fee === total) {
+    return `You're getting everything back except the ${formatCents(fee)} service fee: ${back} is on its way to your card.`;
+  }
+  if (order.refunded_cents > 0 && order.refunded_cents < total) {
+    return `Part of this order was refunded: ${back} is on its way back to your card.`;
   }
   if (order.refunded_cents > 0) {
     return cancelled
-      ? `${e.name} was cancelled, so this order was refunded in full: ${back} back to your card.`
-      : `This order was refunded in full: ${back} back to your card.`;
+      ? `${e.name} was cancelled, so this order was refunded in full: ${back} is on its way back to your card.`
+      : `This order was refunded in full: ${back} is on its way back to your card.`;
   }
-  const going = order.tickets.some((t) => t.status === "valid");
   if (order.returned_cents > 0 || going) return going ? "You're going." : "";
   if (order.status === "partially_refunded") return "Part of this order was refunded.";
   return cancelled

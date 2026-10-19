@@ -11,6 +11,16 @@ import type { Org } from "./Organizer";
 export const canCancel = (typed: string, name: string) =>
   typed.trim() !== "" && typed.trim() === name.trim();
 
+/** What the confirm dialog warns of. */
+export const CANCEL_WARNING =
+  "Everyone holding a ticket that still works gets their money back, our service fee included. Refunds you've already made stay as they are, and any that failed still need a Try again from the order. Every ticket stops working and nobody can buy from now on. This can't be undone.";
+
+/** The result: `orders` counts only the orders a refund was made for (free ones get nothing back). */
+export const cancelledText = (orders: number, amountCents: number) =>
+  orders === 0
+    ? "Cancelled. There was nothing left to refund."
+    : `Cancelled. We're refunding ${orders} order${orders === 1 ? "" : "s"}, ${formatCents(amountCents)} in all.`;
+
 /** The danger button on a live event's Details tab, its confirm dialog, and the result afterwards. */
 export function CancelEvent({
   org,
@@ -50,9 +60,7 @@ export function CancelEvent({
         ),
       );
       setOpen(false);
-      setDone(
-        `Cancelled. We're refunding ${r.orders} order${r.orders === 1 ? "" : "s"}, ${formatCents(r.amount_cents)} in all.`,
-      );
+      setDone(cancelledText(r.orders, r.amount_cents));
       onCancelled(r.event);
     });
 
@@ -75,10 +83,7 @@ export function CancelEvent({
           busy={action.busy || !canCancel(typed, event.name)}
           submitLabel="Cancel the event and refund everyone"
         >
-          <p>
-            Everyone who bought a ticket gets their money back, our service fee included, and every
-            ticket stops working. Nobody can buy from now on. This can't be undone.
-          </p>
+          <p>{CANCEL_WARNING}</p>
           <Field
             id="confirm-name"
             label="Type the event's name to confirm"

@@ -80,7 +80,7 @@ test("an organizer refunds one ticket, then cancels the event", async ({
   await expect.poll(async () => (await fetch(mail)).ok, { timeout: 15_000 }).toBe(true);
   await shop.goto(await (await fetch(mail)).text());
   await expect(
-    shop.getByText("Part of this order was refunded: $25.00 went back to your card."),
+    shop.getByText("Part of this order was refunded: $25.00 is on its way back to your card."),
   ).toBeVisible();
   const tickets = shop.locator(".order-tickets li");
   await expect(tickets.filter({ hasText: "Ada" })).toContainText("Refunded");

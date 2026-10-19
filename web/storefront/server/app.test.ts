@@ -1125,7 +1125,9 @@ test("the order page says what was refunded, from the refund rows", async () => 
   part.refunded_cents = 2345;
   part.tickets[0] = { ...part.tickets[0], status: "void", refunded: true, qr: null };
   let html = await show(part);
-  expect(html).toContain("Part of this order was refunded: $23.45 went back to your card.");
+  expect(html).toContain(
+    "Part of this order was refunded: $23.45 is on its way back to your card.",
+  );
   expect(html).toContain("Refunded");
   expect(html).not.toContain("x".repeat(22));
   expect(html).not.toContain("<img");
@@ -1136,12 +1138,23 @@ test("the order page says what was refunded, from the refund rows", async () => 
   full.refunded_cents = 4690;
   full.tickets = full.tickets.map((t) => ({ ...t, status: "void", refunded: true, qr: null }));
   html = await show(full);
-  expect(html).toContain("This order was refunded in full: $46.90 back to your card.");
+  expect(html).toContain(
+    "This order was refunded in full: $46.90 is on its way back to your card.",
+  );
+
+  // Every ticket refunded, our fee kept: not "part of this order".
+  const kept = structuredClone(full);
+  kept.refunded_cents = 4500;
+  html = await show(kept);
+  expect(html).toContain(
+    "You're getting everything back except the $1.90 service fee: $45.00 is on its way to your card.",
+  );
+  expect(html).not.toContain("Part of this order");
 
   full.event.status = "cancelled";
   html = await show(full);
   expect(html).toContain(
-    "Spring Gala was cancelled, so this order was refunded in full: $46.90 back to your card.",
+    "Spring Gala was cancelled, so this order was refunded in full: $46.90 is on its way back to your card.",
   );
   expect(html).not.toContain("arrived after the last tickets");
 
@@ -1154,6 +1167,25 @@ test("the order page says what was refunded, from the refund rows", async () => 
   html = await show(late);
   expect(html).toContain("Spring Gala was cancelled while your payment was on its way");
   expect(html).not.toContain("arrived after the last tickets");
+
+  // A free order voided, by the organizer or by the event's cancellation: no money moved.
+  const zero = structuredClone(order);
+  zero.status = "cancelled";
+  zero.totals = {
+    subtotal_cents: 0,
+    discount_cents: 0,
+    tax_cents: 0,
+    fee_cents: 0,
+    total_cents: 0,
+  };
+  zero.tickets = zero.tickets.map((t) => ({ ...t, status: "void", refunded: false, qr: null }));
+  html = await show(zero);
+  expect(html).toContain("These tickets were cancelled.");
+  expect(html).not.toContain("refunding");
+  zero.event.status = "cancelled";
+  html = await show(zero);
+  expect(html).toContain("Spring Gala was cancelled, so these tickets won't get you in any more.");
+  expect(html).not.toContain("refunding");
 
   // Voided without a refund (a free ticket) reads Cancelled.
   const free = structuredClone(order);

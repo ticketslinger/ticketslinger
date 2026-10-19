@@ -52,6 +52,13 @@ test("a refund the buyer's bank sent back tells the organizer to contact the buy
   );
 });
 
+test("a refund we gave up on says we couldn't reach Stripe, not that Stripe said no", () => {
+  const r = { status: "failed", failure: "gave_up", returned_by_bank: false } as Refund;
+  expect(failureText(r)).toBe(
+    "We couldn't get this through to Stripe, so we stopped trying. Try again, or refund it from your Stripe dashboard.",
+  );
+});
+
 test("a refund the bank sent back can't be retried from here", () => {
   const r = { status: "failed", failure: "stripe_failed", returned_by_bank: true } as Refund;
   expect(retryable(r)).toBe(false);

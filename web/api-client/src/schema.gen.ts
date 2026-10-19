@@ -1148,7 +1148,7 @@ export interface components {
             refunded_cents: number;
             /**
              * Format: int64
-             * @description How much of our fee goes back with those refunds.
+             * @description How much of our fee has gone back so far (counted once Stripe has returned it).
              */
             fee_refunded_cents: number;
         };
@@ -1228,7 +1228,7 @@ export interface components {
         };
         CancelEventResult: {
             event: components["schemas"]["Event"];
-            /** @description Paid orders refunded. */
+            /** @description Orders a refund was made for (a free order is voided with nothing to send back). */
             orders: number;
             /**
              * Format: int64

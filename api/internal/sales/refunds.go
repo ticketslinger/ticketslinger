@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
@@ -35,6 +36,11 @@ func requestRefund(ctx context.Context, tx pgx.Tx, org, payment uuid.UUID, amoun
 	var id uuid.UUID
 	if err := tx.QueryRow(ctx, `insert into refunds (organizer_id, payment_id, amount_cents, fee_refunded, fee_cents, status, reason, actor_user_id)
 		values ($1, $2, $3, $4, $5, 'requested', $6, $7) returning id`, org, payment, amount, feeBack, fee, reason, actor).Scan(&id); err != nil {
+		// refunds_within_payment (00034): more than the payment has left.
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.Code == "23514" {
+			return id, errNotRefundable
+		}
 		return id, err
 	}
 	return id, jobs.Enqueue(ctx, tx, RefundJob, refundJob{Organizer: org, Refund: id})
