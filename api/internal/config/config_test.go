@@ -226,6 +226,7 @@ func TestMailConfig(t *testing.T) {
 	const prod = "https://tickets.ticketslinger.com"
 	for _, c := range []struct {
 		name, url, mail, key, from, apiURL, hook, alert string
+		host, port, user, pass                          string
 		want, wantErr                                   string
 	}{
 		{name: "local default", url: "http://localhost:3000", want: "log"},
@@ -246,6 +247,15 @@ func TestMailConfig(t *testing.T) {
 		{name: "bad alert address", url: prod, mail: "resend", key: "re_abc", alert: "nobody", wantErr: "TS_MAIL_ALERT_TO must be an address like you@example.com"},
 		{name: "alert address", url: prod, mail: "resend", key: "re_abc", alert: "james@example.com", want: "resend"},
 		{name: "unknown provider", url: prod, mail: "sendgrid", wantErr: "TS_MAIL must be resend, smtp or log"},
+		{name: "smtp", url: prod, mail: "smtp", host: "smtp.example.com", user: "relay", pass: "hunter2-SECRET", want: "smtp"},
+		{name: "smtp on 465 without auth", url: prod, mail: "smtp", host: "smtp.example.com", port: "465", want: "smtp"},
+		{name: "smtp without host", url: prod, mail: "smtp", user: "relay", pass: "hunter2-SECRET", wantErr: "TS_SMTP_HOST is required with TS_MAIL=smtp"},
+		{name: "smtp port zero", url: prod, mail: "smtp", host: "smtp.example.com", port: "0", pass: "hunter2-SECRET", wantErr: "TS_SMTP_PORT must be a port number from 1 to 65535"},
+		{name: "smtp port too big", url: prod, mail: "smtp", host: "smtp.example.com", port: "65536", wantErr: "TS_SMTP_PORT must be a port number from 1 to 65535"},
+		{name: "smtp port not a number", url: prod, mail: "smtp", host: "smtp.example.com", port: "submission", wantErr: "TS_SMTP_PORT must be a port number from 1 to 65535"},
+		{name: "smtp password alone", url: prod, mail: "smtp", host: "smtp.example.com", pass: "hunter2-SECRET", wantErr: "TS_SMTP_USERNAME and TS_SMTP_PASSWORD go together"},
+		{name: "smtp username alone", url: prod, mail: "smtp", host: "smtp.example.com", user: "relay", wantErr: "TS_SMTP_USERNAME and TS_SMTP_PASSWORD go together"},
+		{name: "smtp bad from", url: prod, mail: "smtp", host: "smtp.example.com", user: "relay", pass: "hunter2-SECRET", from: "nobody", wantErr: "TS_MAIL_FROM must be an address"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("TS_DATABASE_URL", "postgres://x")
@@ -256,27 +266,32 @@ func TestMailConfig(t *testing.T) {
 			t.Setenv("TS_RESEND_API_URL", c.apiURL)
 			t.Setenv("TS_RESEND_WEBHOOK_SECRET", c.hook)
 			t.Setenv("TS_MAIL_ALERT_TO", c.alert)
+			t.Setenv("TS_SMTP_HOST", c.host)
+			t.Setenv("TS_SMTP_PORT", c.port)
+			t.Setenv("TS_SMTP_USERNAME", c.user)
+			t.Setenv("TS_SMTP_PASSWORD", c.pass)
 			cfg, err := Load()
 			if c.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 					t.Fatalf("err %v, want %q", err, c.wantErr)
 				}
-				if c.key != "" && strings.Contains(err.Error(), c.key) {
-					t.Fatalf("error %q repeats the key", err)
+				if c.key != "" && strings.Contains(err.Error(), c.key) || c.pass != "" && strings.Contains(err.Error(), c.pass) {
+					t.Fatalf("error %q repeats a secret", err)
 				}
 				return
 			}
-			if err != nil || cfg.Mail != c.want || cfg.ResendAPIKey != c.key || cfg.ResendWebhookSecret != c.hook || cfg.MailAlertTo != c.alert {
+			if err != nil || cfg.Mail != c.want || cfg.ResendAPIKey != c.key || cfg.ResendWebhookSecret != c.hook || cfg.MailAlertTo != c.alert ||
+				cfg.SMTPHost != c.host || cfg.SMTPUsername != c.user || cfg.SMTPPassword != c.pass {
 				t.Fatalf("cfg %+v err %v, want TS_MAIL %s", cfg, err, c.want)
 			}
 		})
 	}
 	t.Setenv("TS_DATABASE_URL", "postgres://x")
 	t.Setenv("TS_PUBLIC_URL", "")
-	for _, k := range []string{"TS_MAIL", "TS_MAIL_FROM", "TS_RESEND_API_URL", "TS_RESEND_API_KEY", "TS_RESEND_WEBHOOK_SECRET", "TS_MAIL_ALERT_TO"} {
+	for _, k := range []string{"TS_MAIL", "TS_MAIL_FROM", "TS_RESEND_API_URL", "TS_RESEND_API_KEY", "TS_RESEND_WEBHOOK_SECRET", "TS_MAIL_ALERT_TO", "TS_SMTP_PORT"} {
 		t.Setenv(k, "")
 	}
-	if cfg, err := Load(); err != nil || cfg.MailFrom != "TicketSlinger <tickets@ticketslinger.com>" || cfg.ResendAPIURL != "https://api.resend.com" {
+	if cfg, err := Load(); err != nil || cfg.MailFrom != "TicketSlinger <tickets@ticketslinger.com>" || cfg.ResendAPIURL != "https://api.resend.com" || cfg.SMTPPort != 587 {
 		t.Fatalf("defaults: %+v %v", cfg, err)
 	}
 }

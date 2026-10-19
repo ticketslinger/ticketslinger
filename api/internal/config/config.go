@@ -44,13 +44,17 @@ type Config struct {
 	// Cloudflare Turnstile on sign-up, repeated failed sign-ins and checkouts. Off when the secret is unset.
 	TurnstileSecret    string // TS_TURNSTILE_SECRET
 	TurnstileVerifyURL string // TS_TURNSTILE_VERIFY_URL, Cloudflare's siteverify by default
-	// Mail is TS_MAIL: "resend", or "log" (only on a local TS_PUBLIC_URL).
+	// Mail is TS_MAIL: "resend", "smtp", or "log" (only on a local TS_PUBLIC_URL).
 	Mail                string
 	MailFrom            string // TS_MAIL_FROM, parsed with net/mail
 	MailAlertTo         string // TS_MAIL_ALERT_TO: quota warnings; optional
 	ResendAPIKey        string // TS_RESEND_API_KEY: re_
 	ResendAPIURL        string // TS_RESEND_API_URL: https://, or http on localhost for tests
 	ResendWebhookSecret string // TS_RESEND_WEBHOOK_SECRET: whsec_; optional
+	SMTPHost            string // TS_SMTP_HOST: required with TS_MAIL=smtp
+	SMTPPort            int    // TS_SMTP_PORT: 587 by default; 465 is implicit TLS
+	SMTPUsername        string // TS_SMTP_USERNAME and TS_SMTP_PASSWORD: both or neither
+	SMTPPassword        string
 }
 
 func Load() (Config, error) {
@@ -77,7 +81,11 @@ func Load() (Config, error) {
 		ResendAPIKey:        os.Getenv("TS_RESEND_API_KEY"),
 		ResendAPIURL:        env("TS_RESEND_API_URL", "https://api.resend.com"),
 		ResendWebhookSecret: os.Getenv("TS_RESEND_WEBHOOK_SECRET"),
+		SMTPHost:            os.Getenv("TS_SMTP_HOST"),
+		SMTPUsername:        os.Getenv("TS_SMTP_USERNAME"),
+		SMTPPassword:        os.Getenv("TS_SMTP_PASSWORD"),
 	}
+	c.SMTPPort, _ = strconv.Atoi(env("TS_SMTP_PORT", "587")) // not a number: 0, refused with TS_MAIL=smtp
 	for _, cidr := range strings.Split(env("TS_TRUSTED_PROXIES", "127.0.0.1/32,::1/128"), ",") {
 		if cidr = strings.TrimSpace(cidr); cidr == "" {
 			continue
@@ -201,7 +209,7 @@ func checkDirect(c Config) error {
 
 // checkMail picks the mailer and checks its settings. The log mailer sends
 // nothing, so it is only allowed where nobody is waiting for real email: a
-// local http TS_PUBLIC_URL. Errors never repeat a key.
+// local http TS_PUBLIC_URL. Errors never repeat a key or password.
 func checkMail(c *Config) error {
 	u, err := url.Parse(c.PublicURL)
 	local := err == nil && u.Scheme == "http" && IsLocalHost(u.Hostname())
@@ -218,6 +226,15 @@ func checkMail(c *Config) error {
 	case "resend":
 		if !strings.HasPrefix(c.ResendAPIKey, "re_") {
 			return errors.New("TS_RESEND_API_KEY must be set with TS_MAIL=resend and start with re_")
+		}
+	case "smtp":
+		switch {
+		case c.SMTPHost == "":
+			return errors.New("TS_SMTP_HOST is required with TS_MAIL=smtp")
+		case c.SMTPPort < 1 || c.SMTPPort > 65535:
+			return errors.New("TS_SMTP_PORT must be a port number from 1 to 65535")
+		case (c.SMTPUsername == "") != (c.SMTPPassword == ""):
+			return errors.New("TS_SMTP_USERNAME and TS_SMTP_PASSWORD go together")
 		}
 	default:
 		return errors.New("TS_MAIL must be resend, smtp or log")
