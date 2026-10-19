@@ -1,0 +1,26 @@
+name: mail-smoke
+# Manual only, never a required check: it sends real email and spends free-tier
+# quota. It writes only to Resend's test address, delivered@resend.dev.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency: { group: mail-smoke, cancel-in-progress: false }
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: api/go.mod, cache-dependency-path: api/go.sum }
+      # The key reaches only the steps that need it.
+      - name: Refuse to run without the key
+        env:
+          TS_RESEND_SMOKE_KEY: ${{ secrets.RESEND_SMOKE_API_KEY }}
+        run: test -n "$TS_RESEND_SMOKE_KEY" || { echo "add the RESEND_SMOKE_API_KEY secret"; exit 1; }
+      - name: Send a ticket email
+        env:
+          TS_RESEND_SMOKE_KEY: ${{ secrets.RESEND_SMOKE_API_KEY }}
+        run: cd api && go test ./internal/mailer/ -run TestResendSmoke -count=1 -v
