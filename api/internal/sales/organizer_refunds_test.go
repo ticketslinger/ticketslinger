@@ -731,7 +731,8 @@ func TestCancelEventStopsPaymentsInFlight(t *testing.T) {
 	}
 	for _, token := range []string{open.Token, c.Token} {
 		var conflict catalogue.ErrConflict
-		if _, err := s.Pay(ctx, token, sales.Details{Email: "late@example.com"}); !errors.As(err, &conflict) || conflict.Code != "event_cancelled" {
+		if _, err := s.Pay(ctx, token, sales.Details{Email: "late@example.com"}); !errors.As(err, &conflict) || conflict.Code != "event_cancelled" ||
+			conflict.Message != "This event has been cancelled, so it isn't selling tickets any more. If you'd already paid, we're refunding you in full." {
 			t.Fatalf("paying on a cancelled event: %v, want event_cancelled", err)
 		}
 	}

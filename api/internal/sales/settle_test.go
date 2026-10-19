@@ -206,3 +206,29 @@ func TestPayRacingACancellationStopsItsIntent(t *testing.T) {
 		t.Fatalf("get checkout: %v, want event_cancelled", err)
 	}
 }
+
+// cancelledElsewhere is Stripe after someone else cancelled the intent under
+// another key: our cancel then gets payment_intent_unexpected_state.
+type cancelledElsewhere struct{ *payments.Fake }
+
+func (c cancelledElsewhere) CancelPaymentIntent(ctx context.Context, account, intent, key string) error {
+	c.SetIntentStatus(intent, "canceled")
+	return c.Fake.CancelPaymentIntent(ctx, account, intent, key)
+}
+
+// Cancelled already, under a key that isn't ours: Stripe refuses our cancel,
+// and reading the intent again shows the job is done.
+func TestCancelRefusedBecauseItWasCancelled(t *testing.T) {
+	s, fake := newPaidService(t)
+	s.Payments = cancelledElsewhere{fake}
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	c, _ := abandoned(t, s, f, fake)
+	fake.FailCall("CancelPaymentIntent", &plugin.ProviderError{Op: "cancel payment intent", Refused: true, Status: 400, Code: "payment_intent_unexpected_state"})
+	drain(t, s, &mailer.Memory{})
+	if _, _, st := f.orderOf(t, c.ID); st != "cancelled" {
+		t.Fatalf("order %s, want cancelled", st)
+	}
+	if n := f.count(t, `select count(*) from jobs`); n != 0 {
+		t.Fatalf("%d jobs left", n)
+	}
+}

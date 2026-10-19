@@ -301,6 +301,31 @@ func TestSystemCanLockButNotResizeQuotas(t *testing.T) {
 	}
 }
 
+// Pay locks its event FOR SHARE while storing an intent (00032), so ts_system
+// has UPDATE (updated_at) on events; WITH CHECK (false) keeps every write out.
+func TestSystemCanLockButNotEditEvents(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	a, live, _ := seedOrganizer(t, pool, "org-a")
+	err := system.Run(ctx, pool, a, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `select 1 from events where id = $1 for share`, live)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("lock event: %v", err)
+	}
+	for _, q := range []string{`update events set updated_at = now()`, `update events set status = 'cancelled'`} {
+		err = system.Run(ctx, pool, a, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, q)
+			return err
+		})
+		var pg *pgconn.PgError
+		if !errors.As(err, &pg) || pg.Code != "42501" {
+			t.Errorf("system %q: %v, want 42501", q, err)
+		}
+	}
+}
+
 // The system appends audit rows of its own, for the organizer it acts for,
 // naming nobody; it still can't read the log.
 func TestSystemAppendsOnlyItsOwnAuditRows(t *testing.T) {
