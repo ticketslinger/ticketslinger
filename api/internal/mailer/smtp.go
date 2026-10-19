@@ -41,6 +41,12 @@ func (s *SMTP) Send(ctx context.Context, m Message) error {
 	if err != nil {
 		return s.fail(ctx, &Error{Provider: "smtp", Kind: Retry, Code: "from", Problem: "config"})
 	}
+	// One bare address, or nothing is sent: no retry can fix a malformed one.
+	to, err := mail.ParseAddress(m.To)
+	if err != nil {
+		return &Error{Provider: "smtp", Kind: Permanent, Code: "to", Problem: "bad_address"}
+	}
+	m.To = to.Address
 	ctx, cancel := context.WithTimeout(ctx, smtpTimeout)
 	defer cancel()
 	cfg := s.TLS
@@ -90,7 +96,7 @@ func (s *SMTP) Send(ctx context.Context, m Message) error {
 	if err := c.Mail(from.Address); err != nil {
 		return smtpError("mail", err)
 	}
-	if err := c.Rcpt(clean(m.To)); err != nil {
+	if err := c.Rcpt(m.To); err != nil {
 		return smtpError("rcpt", err)
 	}
 	w, err := c.Data()

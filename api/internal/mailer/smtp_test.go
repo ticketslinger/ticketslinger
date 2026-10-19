@@ -344,6 +344,19 @@ func TestSMTPStripsHeaderInjection(t *testing.T) {
 	}
 }
 
+func TestSMTPRefusesAMalformedRecipient(t *testing.T) {
+	f := newFakeSMTP(t, false, true, nil)
+	m := testMessage("Hi")
+	m.To = "buyer@example.com\r\nBcc: x@evil.test"
+	err := f.client().Send(context.Background(), m)
+	if e, ok := errors.AsType[*Error](err); !ok || e.Kind != Permanent || e.Problem != "bad_address" || err.Error() != "smtp: to" {
+		t.Fatalf("err %#v, want Permanent bad_address", err)
+	}
+	if cmds, _ := f.got(); len(cmds) != 0 {
+		t.Fatalf("talked to the server: %v", cmds)
+	}
+}
+
 func TestSMTPMapsReplies(t *testing.T) {
 	for _, c := range []struct {
 		verb, reply string
