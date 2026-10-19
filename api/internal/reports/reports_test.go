@@ -21,12 +21,15 @@ func TestReportFigures(t *testing.T) {
 	f := seed(t)
 	f.sales(t)
 	r := f.report(t)
-	// Gross 4,600 + 5,500 + 2,600; B's refund of 2,500 (C's failed one isn't
-	// money back); our fee 3 × 150 less the 50 that went back; B's tax.
-	if r.GrossCents != 12700 || r.RefundedCents != 2500 || r.PlatformFeeCents != 400 || r.TaxCents != 400 || r.NetCents != 12700-2500-400 {
+	// Over the order list's orders (A, B, C and the late payment L; not the
+	// abandoned X): gross 4,600 + 5,500 + 2,500 + 2,600; refunded B's 2,500,
+	// C's requested 1,000 and L's 2,600 (C's failed 100 isn't money back); our
+	// fee 4 × 100 less what has gone back, B's 50 and L's 100 (C's 30 is still
+	// to come); B's tax; four orders.
+	if r.GrossCents != 15200 || r.RefundedCents != 6100 || r.PlatformFeeCents != 250 || r.TaxCents != 400 || r.NetCents != 8850 {
 		t.Fatalf("money: %+v", r)
 	}
-	if r.Orders != 3 || r.Sold != 4 || r.CheckedIn != 1 {
+	if r.Orders != 4 || r.Sold != 4 || r.CheckedIn != 1 {
 		t.Fatalf("counts: orders %d sold %d checked in %d", r.Orders, r.Sold, r.CheckedIn)
 	}
 	wantTypes := []reports.TypeLine{{ID: f.general, Name: "General", Sold: 3, CheckedIn: 1}, {ID: f.vip, Name: "VIP", Sold: 1}}
@@ -36,8 +39,8 @@ func TestReportFigures(t *testing.T) {
 	if len(r.Quotas) != 1 || r.Quotas[0].Name != "Hall" || r.Quotas[0].Size != 10 || r.Quotas[0].Remaining != 10-r.Sold {
 		t.Fatalf("quotas: %+v", r.Quotas)
 	}
-	// Denver dates, not the UTC ones (1 and 2 March).
-	wantDays := []reports.DayLine{{Day: "2026-02-28", Orders: 2, Tickets: 3, GrossCents: 10100}, {Day: "2026-03-01", Orders: 1, Tickets: 1, GrossCents: 2600}}
+	// Denver dates, not the UTC ones (1 and 2 March); L counts on the day it was placed.
+	wantDays := []reports.DayLine{{Day: "2026-02-28", Orders: 2, Tickets: 3, GrossCents: 10100}, {Day: "2026-03-01", Orders: 2, Tickets: 1, GrossCents: 5100}}
 	if !reflect.DeepEqual(r.SalesByDay, wantDays) {
 		t.Fatalf("sales by day: %+v", r.SalesByDay)
 	}
@@ -99,7 +102,7 @@ func TestCSVColumns(t *testing.T) {
 	f := seed(t)
 	_, ticketsA := f.sales(t)
 	cases := map[string]string{
-		"orders.csv":    "Order,Status,Email,Tickets,Subtotal,Discount,Tax,Service fee,Total,Refunded,Promo code,Placed,Paid",
+		"orders.csv":    "Order,Status,Email,Tickets bought,Subtotal,Discount,Tax,Service fee,Fee paid by,Total,Refunded,Promo code,Placed,Paid",
 		"attendees.csv": "Order,Ticket,Ticket type,Attendee,Email,Status,Checked in,Dietary needs,T-shirt",
 		"checkins.csv":  "Time,Result,Method,Ticket,Ticket type,Attendee,Order,Gate,By",
 	}
@@ -114,17 +117,23 @@ func TestCSVColumns(t *testing.T) {
 			t.Errorf("%s header: %s", kind, h)
 		}
 	}
-	// Orders, newest first: C, B, A. Money as dollars, times in Denver.
+	// Orders, newest first: L, C, B, A. Money as dollars, times in Denver.
 	orders := got["orders.csv"]
-	if len(orders) != 4 {
+	if len(orders) != 5 {
 		t.Fatalf("orders: %q", orders)
 	}
-	wantA := []string{"TS-AAAAA", "paid", "a@example.com", "2", "50.00", "5.00", "0.00", "1.00", "46.00", "0.00", "EARLY", "2026-02-28T18:28:00-07:00", "2026-02-28T18:30:00-07:00"}
-	if !reflect.DeepEqual(orders[3], wantA) {
-		t.Errorf("order A: %q", orders[3])
+	wantA := []string{"TS-AAAAA", "paid", "a@example.com", "2", "50.00", "5.00", "0.00", "1.00", "buyer", "46.00", "0.00", "EARLY", "2026-02-28T18:28:00-07:00", "2026-02-28T18:30:00-07:00"}
+	if !reflect.DeepEqual(orders[4], wantA) {
+		t.Errorf("order A: %q", orders[4])
 	}
-	if b := orders[2]; b[0] != "TS-BBBBB" || b[9] != "25.00" || b[10] != "" {
+	if b := orders[3]; b[0] != "TS-BBBBB" || b[10] != "25.00" || b[11] != "" {
 		t.Errorf("order B: %q", b)
+	}
+	if c := orders[2]; c[0] != "TS-CCCCC" || c[8] != "you" || c[9] != "25.00" || c[10] != "10.00" {
+		t.Errorf("order C: %q", c)
+	}
+	if l := orders[1]; l[0] != "TS-PPPPP" || l[1] != "cancelled" || l[3] != "0" || l[10] != "26.00" || l[13] != "" {
+		t.Errorf("order L: %q", l)
 	}
 	// Attendees: the order-scope answer is on both of A's tickets, the
 	// ticket-scope one only on its own.
@@ -154,7 +163,8 @@ func TestCSVColumns(t *testing.T) {
 
 func TestCSVDefusesFormulas(t *testing.T) {
 	f := seed(t)
-	o, ts := f.order(t, "TS-DDDDD", "@x.test", "2026-03-01T01:30:00Z", 2500, 0, 0, 100, 2600, nil, f.general, `=HYPERLINK("x")`, "-")
+	o, ts := f.order(t, sale{code: "TS-DDDDD", email: "@x.test", placed: "2026-03-01T01:28:00Z", paid: true,
+		subtotal: 2500, fee: 100, total: 2600, ticketType: f.general, names: []string{`=HYPERLINK("x")`, "-"}})
 	f.answer(t, o, nil, f.dietary, "+SUM(A1)")
 	f.answer(t, o, &ts[0], f.tshirt, "\tL")
 	_, b := f.csv(t, "attendees.csv")
@@ -187,4 +197,25 @@ func TestUnknownKind(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// An API key isn't handed members' emails: a person's check-in reads "Team
+// member" in its export.
+func TestCheckinsByForKeys(t *testing.T) {
+	f := seed(t)
+	f.sales(t)
+	key := f.id(t, `insert into api_keys(organizer_id, name, key_hash, prefix, scope) values ($1, 'Reader', '\x02', 'read0000', 'read') returning id`, f.org)
+	ctx := context.Background()
+	var buf bytes.Buffer
+	err := db.WithPrincipal(ctx, f.app, db.Principal{KeyID: key, KeyOrg: f.org, KeyScope: "read"}, f.org, func(tx pgx.Tx, _ string) error {
+		_, err := reports.WriteCSV(ctx, tx, f.event, "checkins.csv", &buf)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := rows(t, buf.Bytes())
+	if got[1][8] != "Team member" || got[2][8] != "API key abcd1234" || strings.Contains(buf.String(), "owner@example.com") {
+		t.Fatalf("by: %q", got)
+	}
 }

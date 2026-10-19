@@ -93,28 +93,29 @@ func str(s *string) string {
 	return *s
 }
 
-// writeOrders lists the orders the order list shows (paid, or confirmed
-// free), newest first. Tickets counts every ticket the order bought; Refunded
-// adds up every refund that hasn't failed.
+// writeOrders lists the orders the order list shows, newest first. Tickets
+// bought counts every ticket the order bought; Fee paid by says whether the
+// buyer paid the service fee on top or it came out of the organizer's share
+// (then Total doesn't include it); Refunded adds up every refund that hasn't
+// failed.
 func writeOrders(ctx context.Context, tx pgx.Tx, event uuid.UUID, zone *time.Location, cw *csv.Writer) error {
-	if err := row(cw, "Order", "Status", "Email", "Tickets", "Subtotal", "Discount", "Tax", "Service fee", "Total", "Refunded", "Promo code", "Placed", "Paid"); err != nil {
+	if err := row(cw, "Order", "Status", "Email", "Tickets bought", "Subtotal", "Discount", "Tax", "Service fee", "Fee paid by", "Total", "Refunded",
+		"Promo code", "Placed", "Paid"); err != nil {
 		return err
 	}
-	var code, status, email, promo string
+	var code, status, email, payer, promo string
 	var tickets int
 	var subtotal, discount, tax, fee, total, refunded int64
 	var placed time.Time
 	var paid *time.Time
 	rows, _ := tx.Query(ctx, `select o.code, o.status, o.email::text, (select count(*) from tickets t where t.order_id = o.id),
-			o.subtotal_cents, o.discount_cents, o.tax_cents, o.fee_cents, o.total_cents,
+			o.subtotal_cents, o.discount_cents, o.tax_cents, o.fee_cents, case o.fee_mode when 'pass' then 'buyer' else 'you' end, o.total_cents,
 			coalesce((select sum(r.amount_cents) from refunds r join payments p on p.id = r.payment_id where p.order_id = o.id and r.status <> 'failed'), 0)::bigint,
 			coalesce(pc.code, ''), o.created_at, o.paid_at
-		from orders o left join promo_codes pc on pc.id = o.promo_code_id
-		where o.event_id = $1 and o.status <> 'pending'
-		  and (o.paid_at is not null or exists (select 1 from payments p where p.order_id = o.id and p.status = 'succeeded'))
+		from (`+listed+`) o left join promo_codes pc on pc.id = o.promo_code_id
 		order by o.created_at desc, o.id desc`, event)
-	_, err := pgx.ForEachRow(rows, []any{&code, &status, &email, &tickets, &subtotal, &discount, &tax, &fee, &total, &refunded, &promo, &placed, &paid}, func() error {
-		return row(cw, code, status, email, strconv.Itoa(tickets), money(subtotal), money(discount), money(tax), money(fee), money(total),
+	_, err := pgx.ForEachRow(rows, []any{&code, &status, &email, &tickets, &subtotal, &discount, &tax, &fee, &payer, &total, &refunded, &promo, &placed, &paid}, func() error {
+		return row(cw, code, status, email, strconv.Itoa(tickets), money(subtotal), money(discount), money(tax), money(fee), payer, money(total),
 			money(refunded), promo, when(&placed, zone), when(paid, zone))
 	})
 	return err
@@ -171,8 +172,10 @@ func writeAttendees(ctx context.Context, tx pgx.Tx, event uuid.UUID, zone *time.
 }
 
 // writeCheckins is every scan and manual check-in, oldest first. By is the
-// member's email (blank for a former member, or when a read API key exports,
-// since the member directory answers only owners and admins), or the key.
+// member's email, the key's prefix, or "Team member" where the directory
+// won't name them: a former member, or any member when an API key exports
+// (the directory answers only signed-in owners and admins, so keys never get
+// members' emails).
 func writeCheckins(ctx context.Context, tx pgx.Tx, event uuid.UUID, zone *time.Location, cw *csv.Writer) error {
 	if err := row(cw, "Time", "Result", "Method", "Ticket", "Ticket type", "Attendee", "Order", "Gate", "By"); err != nil {
 		return err
@@ -182,7 +185,7 @@ func writeCheckins(ctx context.Context, tx pgx.Tx, event uuid.UUID, zone *time.L
 	var ticket *uuid.UUID
 	var typeName, attendee, code, gate, by *string
 	rows, _ := tx.Query(ctx, `select c.at, c.result, c.method, c.ticket_id, tt.name, t.attendee_name, o.code, c.gate,
-			coalesce(d.email::text, 'API key ' || k.prefix)
+			coalesce(d.email::text, 'API key ' || k.prefix, case when c.actor_user_id is not null then 'Team member' end)
 		from checkins c
 		left join tickets t on t.id = c.ticket_id
 		left join ticket_types tt on tt.id = t.ticket_type_id

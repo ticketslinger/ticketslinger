@@ -2,6 +2,7 @@ package reports_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"testing"
@@ -45,13 +46,21 @@ func seed(t *testing.T) fixture {
 	return f
 }
 
-// sales adds three paid orders on two Denver evenings that cross UTC
-// midnight: A (two General, promo EARLY, one checked in) and B (one VIP,
-// partly refunded: 2,500 back with 50 of our fee) on 28 February, C (one
-// General, a failed refund) on 1 March. It returns A's order and tickets.
+// sales adds A and B on 28 February and C and L on 1 March, Denver evenings
+// that cross UTC midnight:
+//   - A: two General, promo EARLY, one checked in.
+//   - B: one VIP, partly refunded: 2,500 back with 50 of our fee.
+//   - C: one General, fee absorbed; a failed refund of 100, and a requested
+//     refund of 1,000 whose 30 of our fee hasn't gone back yet.
+//   - L: a late payment: cancelled before it paid, so no paid_at and no
+//     tickets, its payment succeeded anyway and went back in full.
+//   - X: abandoned, its payment failed. The order list leaves it out.
+//
+// Our fee on each payment is the order's fee_cents. It returns A and its tickets.
 func (f fixture) sales(t *testing.T) (orderA uuid.UUID, ticketsA []uuid.UUID) {
 	t.Helper()
-	orderA, ticketsA = f.order(t, "TS-AAAAA", "a@example.com", "2026-03-01T01:30:00Z", 5000, 500, 0, 100, 4600, &f.promo, f.general, "Ada", "Bea")
+	orderA, ticketsA = f.order(t, sale{code: "TS-AAAAA", email: "a@example.com", placed: "2026-03-01T01:28:00Z", paid: true,
+		subtotal: 5000, discount: 500, fee: 100, total: 4600, promo: &f.promo, ticketType: f.general, names: []string{"Ada", "Bea"}})
 	f.exec(t, `update tickets set checked_in_at = '2026-03-05T02:10:00Z' where id = $1`, ticketsA[0])
 	// Scanned in by the owner at North, then again by a scanner app's key.
 	key := f.id(t, `insert into api_keys(organizer_id, name, key_hash, prefix, scope) values ($1, 'Scanner', '\x01', 'abcd1234', 'write') returning id`, f.org)
@@ -61,35 +70,57 @@ func (f fixture) sales(t *testing.T) (orderA uuid.UUID, ticketsA []uuid.UUID) {
 	f.exec(t, `update promo_codes set used_count = 1 where id = $1`, f.promo)
 	f.answer(t, orderA, nil, f.dietary, "Vegan")
 	f.answer(t, orderA, &ticketsA[0], f.tshirt, "M")
-	orderB, _ := f.order(t, "TS-BBBBB", "b@example.com", "2026-03-01T05:00:00Z", 5000, 0, 400, 100, 5500, nil, f.vip, "Cy")
-	f.exec(t, `update orders set status = 'partially_refunded' where id = $1`, orderB)
+	orderB, _ := f.order(t, sale{code: "TS-BBBBB", email: "b@example.com", placed: "2026-03-01T04:58:00Z", paid: true, status: "partially_refunded",
+		subtotal: 5000, tax: 400, fee: 100, total: 5500, ticketType: f.vip, names: []string{"Cy"}})
 	f.refund(t, orderB, 2500, 50, "succeeded")
-	orderC, _ := f.order(t, "TS-CCCCC", "c@example.com", "2026-03-02T03:00:00Z", 2500, 0, 0, 100, 2600, nil, f.general, "Dee")
+	orderC, _ := f.order(t, sale{code: "TS-CCCCC", email: "c@example.com", placed: "2026-03-02T02:58:00Z", paid: true, absorb: true,
+		subtotal: 2500, fee: 100, total: 2500, ticketType: f.general, names: []string{"Dee"}})
 	f.refund(t, orderC, 100, 0, "failed")
+	f.refund(t, orderC, 1000, 30, "requested")
+	orderL, _ := f.order(t, sale{code: "TS-PPPPP", email: "l@example.com", placed: "2026-03-02T04:00:00Z", status: "cancelled",
+		subtotal: 2500, fee: 100, total: 2600})
+	f.refund(t, orderL, 2600, 100, "succeeded")
+	f.order(t, sale{code: "TS-XXXXX", email: "x@example.com", placed: "2026-03-02T05:00:00Z", status: "cancelled", payment: "failed",
+		subtotal: 7000, fee: 100, total: 7100})
 	return orderA, ticketsA
 }
 
-// order adds a paid order with a succeeded payment carrying 150 of our fee,
-// and one ticket of ticketType per attendee name.
-func (f fixture) order(t *testing.T, code, email, paidAt string, subtotal, discount, tax, fee, total int64, promo *uuid.UUID,
-	ticketType uuid.UUID, names ...string) (uuid.UUID, []uuid.UUID) {
+// sale is one order to seed. Its payment (succeeded unless payment says
+// otherwise) carries the order's fee_cents as our fee; a paid one was paid
+// two minutes after it was placed.
+type sale struct {
+	code, email, placed, status, payment string
+	paid, absorb                         bool
+	subtotal, discount, tax, fee, total  int64
+	promo                                *uuid.UUID
+	ticketType                           uuid.UUID
+	names                                []string
+}
+
+func (f fixture) order(t *testing.T, s sale) (uuid.UUID, []uuid.UUID) {
 	t.Helper()
+	status, mode, payment := cmp.Or(s.status, "paid"), "pass", cmp.Or(s.payment, "succeeded")
+	if s.absorb {
+		mode = "absorb"
+	}
 	o := f.id(t, `insert into orders(organizer_id, event_id, code, email, status, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents,
 			fee_mode, promo_code_id, quote, details, created_at, paid_at)
-		values ($1, $2, $3, $4, 'paid', $5, $6, $7, $8, $9, 'pass', $10, '{}', '{}', $11::timestamptz - interval '2 minutes', $11) returning id`,
-		f.org, f.event, code, email, subtotal, discount, tax, fee, total, promo, paidAt)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, '{}', '{}', $13, case when $14 then $13::timestamptz + interval '2 minutes' end) returning id`,
+		f.org, f.event, s.code, s.email, status, s.subtotal, s.discount, s.tax, s.fee, s.total, mode, s.promo, s.placed, s.paid)
 	f.exec(t, `insert into payments(organizer_id, order_id, provider, stripe_account_id, payment_intent_id, client_secret, amount_cents, application_fee_cents, status)
-		values ($1, $2, 'test', 'acct_test', 'pi_' || $3, 'secret_' || $3, $4, 150, 'succeeded')`, f.org, o, code, max(total, 50))
-	ids := make([]uuid.UUID, len(names))
-	for i, name := range names {
+		values ($1, $2, 'test', 'acct_test', 'pi_' || $3, 'secret_' || $3, $4, $5, $6)`, f.org, o, s.code, max(s.total, 50), s.fee, payment)
+	ids := make([]uuid.UUID, len(s.names))
+	for i, name := range s.names {
 		secret := make([]byte, 16)
 		_, _ = rand.Read(secret)
 		ids[i] = f.id(t, `insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, charge_cents, attendee_name, secret)
-			values ($1, $2, $3, $4, 0, 0, 0, 0, 0, $5, $6) returning id`, f.org, f.event, o, ticketType, name, secret)
+			values ($1, $2, $3, $4, 0, 0, 0, 0, 0, $5, $6) returning id`, f.org, f.event, o, s.ticketType, name, secret)
 	}
 	return o, ids
 }
 
+// refund adds a refund of order's payment. Our fee on a succeeded one has
+// gone back; on a requested one it hasn't yet.
 func (f fixture) refund(t *testing.T, order uuid.UUID, amount, fee int64, status string) {
 	t.Helper()
 	f.exec(t, `insert into refunds(organizer_id, payment_id, amount_cents, fee_refunded, status, reason, fee_cents, fee_refunded_at, failure)

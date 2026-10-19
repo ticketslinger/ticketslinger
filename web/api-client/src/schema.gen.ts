@@ -727,7 +727,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Owners and admins, or any API key; check-in members get 403 forbidden_role. The event's sales, refunds and our fee, from live data. Money counts paid orders; refunded_cents counts every refund that hasn't failed, and platform_fee_cents is our fee on succeeded payments less the fee that has gone back. net_cents = gross_cents - refunded_cents - platform_fee_cents, before Stripe's processing fees. */
+        /** @description Owners and admins, or any API key; check-in members get 403 forbidden_role. The event's sales, refunds and our fee, from live data in one snapshot. Money counts the orders listOrders lists (paid, confirmed free, or paid late after being cancelled), so the totals match it; refunded_cents counts every refund that hasn't failed, and platform_fee_cents is our fee on succeeded payments less the fee that has gone back. net_cents = gross_cents - refunded_cents - platform_fee_cents, before Stripe's processing fees. */
         get: operations["getEventReport"];
         put?: never;
         post?: never;
@@ -1396,7 +1396,7 @@ export interface components {
             currency: "USD";
             /**
              * Format: int64
-             * @description Paid orders' totals.
+             * @description Totals of the orders listOrders lists.
              */
             gross_cents: number;
             /**
@@ -1411,7 +1411,7 @@ export interface components {
             platform_fee_cents: number;
             /**
              * Format: int64
-             * @description Paid orders' tax.
+             * @description Tax on the orders listOrders lists.
              */
             tax_cents: number;
             /**
@@ -1419,7 +1419,7 @@ export interface components {
              * @description gross_cents - refunded_cents - platform_fee_cents, before Stripe's processing fees.
              */
             net_cents: number;
-            /** @description Paid orders. */
+            /** @description The orders listOrders lists. */
             orders: number;
             /** @description Valid tickets. */
             sold: number;
@@ -1428,7 +1428,7 @@ export interface components {
             /** @description In position order. */
             ticket_types: components["schemas"]["ReportTicketType"][];
             quotas: components["schemas"]["ReportQuota"][];
-            /** @description By the day orders were paid, in the event's time zone, oldest first. */
+            /** @description By the day orders were paid (a late payment by the day it was placed), in the event's time zone, oldest first. */
             sales_by_day: components["schemas"]["ReportDay"][];
             promo_codes: components["schemas"]["ReportPromoCode"][];
         };
@@ -1461,7 +1461,7 @@ export interface components {
             max_uses: number | null;
             /**
              * Format: int64
-             * @description Discount given on paid orders.
+             * @description Discount given on the orders listOrders lists.
              */
             discount_cents: number;
         };
