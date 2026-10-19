@@ -74,14 +74,16 @@ const form = (fields: Record<string, string>, ip = "203.0.113.9") => ({
   headers: { "x-real-ip": ip },
 });
 
-test("event page is server-rendered with no script of our own", async () => {
+test("event page is server-rendered; its one script of ours is the Turnstile loader", async () => {
   const { a } = app(() => Response.json(event));
   const res = await a.request("/acme/gala");
   const html = await res.text();
   expect(res.status).toBe(200);
   expect(html).toContain("Spring Gala");
   expect(html).toContain("$25.00");
-  expect(html).not.toMatch(/<script[^>]+src="\/assets\//);
+  expect(html.match(/<script[^>]*>/g)).toEqual([
+    '<script type="module" src="/assets/turnstile.js">',
+  ]);
   expect(html).not.toMatch(/style="/);
   // The quantity picker can't offer more than are left.
   expect(html).toContain('<option value="3">3</option>');
@@ -545,6 +547,12 @@ for (const [status, code, text] of messages) {
     expect(html).toContain("cf-turnstile");
   });
 }
+
+test("/favicon.ico answers 204, so browsers log no 404", async () => {
+  const { a } = app(() => new Response(null, { status: 500 }));
+  const res = await a.request("/favicon.ico");
+  expect(res.status).toBe(204);
+});
 
 test("the API being down is a plain error page", async () => {
   const { a } = app(() => {

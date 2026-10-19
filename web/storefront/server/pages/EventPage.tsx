@@ -154,11 +154,8 @@ export function EventPage(p: EventPageProps) {
                 {p.siteKey && (
                   <>
                     <div class="cf-turnstile" data-sitekey={p.siteKey} />
-                    <script
-                      src="https://challenges.cloudflare.com/turnstile/v0/api.js"
-                      async
-                      defer
-                    />
+                    {/* Loads Turnstile once the buyer starts on this form. */}
+                    <script type="module" src="/assets/turnstile.js" />
                   </>
                 )}
                 {event.fee_mode === "pass" && (
