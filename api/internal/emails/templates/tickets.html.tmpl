@@ -1,0 +1,15 @@
+{{define "body"}}<h1 style="font-size:24px; line-height:1.3; margin:0 0 16px;">You're going to {{.Event}}.</h1>
+<p>{{.When}}{{with .Venue}}, {{.}}{{end}}.</p>
+<p>Bring the codes below to the door, on your phone or on paper. Each one lets one person in, once.</p>
+{{range .Shown}}<div style="margin:24px 0;">
+<p style="margin:0 0 8px;"><strong>Ticket {{.N}} of {{$.Count}}: {{.Type}}</strong>{{with .Attendee}}<br>{{.}}{{end}}</p>
+<img src="cid:qr-{{.N}}" alt="QR code for ticket {{.N}}, {{.Type}}" width="264" height="264" style="display:block; width:264px; height:264px;">
+</div>
+{{end}}{{if .Over}}<p>All {{.Count}} tickets are in the attached PDF, one to a page, and on your order page. That's a lot easier to scroll than {{.Count}} codes in one email.</p>
+{{else}}<p>They're in the attached PDF too, one to a page, if you'd rather print them.</p>
+{{end}}<p style="margin:24px 0;"><a href="{{.OrderURL}}" style="display:inline-block; padding:12px 20px; background:#1d4ed8; color:#ffffff; text-decoration:underline; border-radius:6px; font-weight:bold;">Open your order</a></p>
+<p>That link is the only key to your tickets. Keep it to yourself: anyone who has it can see them.</p>
+<p>Lose this email? Ask for a fresh link at <a href="{{.LostLinkURL}}" style="color:#1d4ed8;">{{.LostLinkURL}}</a>.</p>
+<hr style="border:0; border-top:1px solid #d4d4d4; margin:32px 0 16px;">
+<p style="font-size:14px; color:#404040;">{{.Organizer}} sold you these tickets through TicketSlinger. Something wrong with them? Reply to this email and a person will read it.</p>
+{{end}}

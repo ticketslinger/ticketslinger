@@ -66,6 +66,16 @@ test("an organizer connects Stripe, a buyer pays on a phone, and the order shows
   await expect
     .poll(async () => (await fetch(buyerMail)).text(), { timeout: 15_000 })
     .toBe(shop.url());
+  // It carries both QR codes inline and a two-page PDF of them.
+  const code = /\/orders\/(TS-[0-9A-Z]{5})/.exec(shop.url())?.[1];
+  const summary = await fetch(
+    `${API}/__test/last-email-summary?to=${encodeURIComponent(`buyer-${stamp}@example.com`)}`,
+  );
+  expect(await summary.json()).toMatchObject({
+    inline: 2,
+    attachments: [`tickets-${code}.pdf`],
+    pdf_pages: 2,
+  });
 
   // A free ticket needs no payment at all.
   await shop.goto(`${SHOP}/${slug}/spring-social`);

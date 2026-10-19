@@ -119,3 +119,37 @@ func (m *Memory) LastLink(to string) string {
 	}
 	return ""
 }
+
+// Summary is the shape of a message, for the e2e: never its links or codes.
+type Summary struct {
+	Subject     string   `json:"subject"`
+	Inline      int      `json:"inline"`
+	Attachments []string `json:"attachments"`
+	PDFPages    int      `json:"pdf_pages"`
+}
+
+var pageRe = regexp.MustCompile(`/Type\s*/Page\b`)
+
+// Summary describes the newest message sent to to; false when there is none.
+func (m *Memory) Summary(to string) (Summary, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := len(m.Sent) - 1; i >= 0; i-- {
+		if m.Sent[i].To != to {
+			continue
+		}
+		s := Summary{Subject: m.Sent[i].Subject, Attachments: []string{}}
+		for _, p := range m.Sent[i].Parts {
+			if p.ContentID != "" {
+				s.Inline++
+				continue
+			}
+			s.Attachments = append(s.Attachments, p.Filename)
+			if p.ContentType == "application/pdf" {
+				s.PDFPages += len(pageRe.FindAll(p.Data, -1))
+			}
+		}
+		return s, true
+	}
+	return Summary{}, false
+}

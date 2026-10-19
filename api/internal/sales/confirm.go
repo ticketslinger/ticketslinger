@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
+	"github.com/ticketslinger/ticketslinger/api/internal/emails"
 	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/pricing"
@@ -287,31 +290,54 @@ type confirmation struct {
 	Organizer uuid.UUID `json:"organizer_id"`
 }
 
-// OrderConfirmation handles OrderConfirmationJob. It reads the order as
-// ts_system for the named organizer and sends outside the transaction. An
-// order that is gone or not paid sends nothing. Delivery is at least once,
-// as for every job.
+// OrderConfirmation handles OrderConfirmationJob. It reads the order and
+// its valid tickets as ts_system for the named organizer and sends outside
+// the transaction. An order that is gone or not paid sends nothing, and so
+// does one with no valid ticket left: there's nothing to bring to the door,
+// and the refund email already told the buyer why. Delivery is at least
+// once, as for every job.
 func (s *Service) OrderConfirmation(m mailer.Mailer) jobs.Handler {
 	return func(ctx context.Context, payload []byte) error {
 		var c confirmation
 		if err := json.Unmarshal(payload, &c); err != nil {
 			return err
 		}
-		var email, code, name, zone string
+		d := emails.TicketsData{OrderID: c.Order, OrganizerID: c.Organizer}
+		var zone, orgSlug, eventSlug string
 		var starts time.Time
 		var version int
 		err := system.Run(ctx, s.Pool, c.Organizer, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx, `select o.email, o.code, e.name, e.timezone, e.starts_at, o.link_version
-				from orders o join events e on e.id = o.event_id where o.id = $1 and o.status in ('paid', 'partially_refunded')`, c.Order).
-				Scan(&email, &code, &name, &zone, &starts, &version)
+			if err := tx.QueryRow(ctx, `select o.email::text, o.code, e.name, e.timezone, e.starts_at, e.venue_name, g.name, g.slug, e.slug, o.link_version
+				from orders o join events e on e.id = o.event_id join organizers g on g.id = o.organizer_id
+				where o.id = $1 and o.status in ('paid', 'partially_refunded')`, c.Order).
+				Scan(&d.To, &d.Code, &d.Event, &zone, &starts, &d.Venue, &d.Organizer, &orgSlug, &eventSlug, &version); err != nil {
+				return err
+			}
+			rows, _ := tx.Query(ctx, `select tt.name, t.attendee_name, t.secret from tickets t join ticket_types tt on tt.id = t.ticket_type_id
+				where t.order_id = $1 and t.status = 'valid' order by t.id`, c.Order)
+			var t emails.Ticket
+			var secret []byte
+			_, err := pgx.ForEachRow(rows, []any{&t.Type, &t.Attendee, &secret}, func() error {
+				t.QR = base64.RawURLEncoding.EncodeToString(secret)
+				d.Tickets = append(d.Tickets, t)
+				return nil
+			})
+			return err
 		})
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && len(d.Tickets) == 0 {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		return jobs.Deliver(ctx, m, mailer.Message{To: email, Subject: "Your tickets for " + name, Text: "You're going to " + name + " on " + when(starts, zone) +
-			". Your tickets are here, and this link is the only key to them, so keep it to yourself: " + s.orderURL(code, c.Order, version)})
+		base := strings.TrimRight(s.StorefrontURL, "/")
+		d.When = when(starts, zone)
+		d.OrderURL = s.orderURL(d.Code, c.Order, version)
+		d.LostLinkURL = base + "/" + orgSlug + "/" + eventSlug + "/order-link"
+		msg, err := emails.Tickets(d)
+		if err != nil {
+			return err
+		}
+		return jobs.Deliver(ctx, m, msg)
 	}
 }
