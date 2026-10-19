@@ -679,6 +679,20 @@ func TestDeliverMapsKinds(t *testing.T) {
 	}
 }
 
+func TestDailyQuotaWaitsForTheNext0005UTC(t *testing.T) {
+	d := time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)
+	for _, c := range []struct{ at, want time.Time }{
+		{d.Add(23*time.Hour + 59*time.Minute), d.Add(24*time.Hour + 5*time.Minute)},
+		{d.Add(4 * time.Minute), d.Add(5 * time.Minute)},
+		{d.Add(5 * time.Minute), d.Add(24*time.Hour + 5*time.Minute)},
+		{d.Add(6 * time.Minute), d.Add(24*time.Hour + 5*time.Minute)},
+	} {
+		if got := jobs.DailyQuotaUntil(t, c.at); !got.Equal(c.want) {
+			t.Errorf("at %s: %s, want %s", c.at.Format("15:04"), got, c.want)
+		}
+	}
+}
+
 func quotaSubjects(t *testing.T, pool *pgxpool.Pool) (subs []string) {
 	t.Helper()
 	rows, err := pool.Query(context.Background(), `select payload->>'subject' from jobs where kind = 'send_email' order by id`)
@@ -706,7 +720,7 @@ func TestQuotaAlertsOncePerThreshold(t *testing.T) {
 		t.Fatalf("below every threshold: %d rows", n)
 	}
 	watch(ctx, 10, 2400)
-	want := []string{"TicketSlinger has sent 2,400 of its 3,000 emails this month"}
+	want := []string{"Your Resend account has sent 2,400 of its 3,000 emails this month"}
 	if got := quotaSubjects(t, pool); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("got %q", got)
 	}
@@ -716,7 +730,7 @@ func TestQuotaAlertsOncePerThreshold(t *testing.T) {
 	}
 	watch(ctx, 80, 2860)
 	got := quotaSubjects(t, pool)
-	if len(got) != 3 || got[1] != "TicketSlinger has sent 2,860 of its 3,000 emails this month" || got[2] != "TicketSlinger has sent 80 of today's 100 emails" {
+	if len(got) != 3 || got[1] != "Your Resend account has sent 2,860 of its 3,000 emails this month" || got[2] != "Your Resend account has sent 80 of today's 100 emails" {
 		t.Fatalf("got %q", got)
 	}
 	if n := count(t, pool, `select count(*) from mail_alerts where key in ('month-2400-2026-10','month-2850-2026-10','day-80-2026-10-18')`); n != 3 {
@@ -742,8 +756,8 @@ func TestQuotaAlertCopy(t *testing.T) {
 	if err := pool.QueryRow(context.Background(), `select payload->>'text' from jobs order by id desc limit 1`).Scan(&d); err != nil {
 		t.Fatal(err)
 	}
-	wantM := "Resend's free plan stops at 3,000 emails a month (and 100 a day), and this server has sent 2,860 this month. On the free plan, ticket emails past the limit wait until the quota resets, so if sales are still coming, upgrade before then: Resend Pro is $20 a month for 50,000. Already on a paid plan? You can ignore this."
-	wantD := "Resend's free plan allows 100 emails a day, counted in UTC, and this server has sent 80 today. On the free plan, ticket emails past that wait for midnight UTC and then go out by themselves. If this keeps happening on sale days, Resend Pro ($20 a month) has no daily cap. Already on a paid plan? You can ignore this."
+	wantM := "Resend's free plan stops at 3,000 emails a month (and 100 a day), and your Resend account has sent 2,860 this month. On the free plan, ticket emails past the limit stop going out: each one keeps trying for most of a day, then gives up and has to be sent again from its order once the quota resets or you upgrade. If sales are still coming, upgrade before then: Resend Pro is $20 a month for 50,000. Already on a paid plan? You can ignore this."
+	wantD := "Resend's free plan allows 100 emails a day, counted in UTC, and your Resend account has sent 80 today. On the free plan, ticket emails past that wait for midnight UTC and then go out by themselves. If this keeps happening on sale days, Resend Pro ($20 a month) has no daily cap. Already on a paid plan? You can ignore this."
 	if m != wantM || d != wantD {
 		t.Fatalf("monthly %q\ndaily %q", m, d)
 	}

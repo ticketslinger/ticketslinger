@@ -221,13 +221,15 @@ func TestResendTicketEmail(t *testing.T) {
 				t.Fatalf("%d audit rows, want %d", audits, want)
 			}
 
-			if err := resend(s, f, order); conflictCode(err) != "email_on_its_way" {
+			var w catalogue.ErrConflict
+			if err := resend(s, f, order); !errors.As(err, &w) || w.Code != "email_on_its_way" ||
+				w.Message != "We're still trying to send the latest one. Give it a little while." {
 				t.Fatalf("again at once: %v, want email_on_its_way", err)
 			}
 			f.exec(t, `update orders set mail_status = 'sent', mail_requested_at = now() - interval '5 minutes' where id = $1`, order)
 			var c catalogue.ErrConflict
 			if err := resend(s, f, order); !errors.As(err, &c) || c.Code != "too_soon" ||
-				c.Message != "You asked us to send these less than 10 minutes ago. Wait until it's been 10 minutes, then try again." {
+				c.Message != "These were sent less than 10 minutes ago. Wait until it's been 10 minutes, then try again." {
 				t.Fatalf("5 minutes on: %v, want too_soon", err)
 			}
 			f.exec(t, `update orders set status = 'refunded', mail_requested_at = now() - interval '11 minutes' where id = $1`, order)
@@ -272,5 +274,46 @@ func TestOldMailEventsAreIgnored(t *testing.T) {
 	f.wantMail(t, order, "complained", "", 0)
 	if err := s.MailEvent(context.Background(), f.org, order, "sent", requested.Add(time.Second)); err == nil {
 		t.Fatal("a kind Resend doesn't send was accepted")
+	}
+}
+
+// A job the queue gave up on whose status write was lost (the handler's and
+// the parked hook's both) leaves the order queued with nothing on its way:
+// sending again must still work, for the organizer and for the buyer.
+func TestParkedEmailWithAStuckStatusCanBeSentAgain(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500})
+	ctx := context.Background()
+	stuck := func(n int) uuid.UUID { // the only job left: this order's
+		order, _, _ := f.paidOrder(t, s, fake, 1, n)
+		w := emailWorker(s, nil)
+		w.Handlers[sales.OrderConfirmationJob] = func(context.Context, []byte) error { return errors.New("status write lost") }
+		parked := w.Parked[sales.OrderConfirmationJob]
+		w.Parked[sales.OrderConfirmationJob] = func(ctx context.Context, payload []byte, cause string) {
+			gone, cancel := context.WithCancel(ctx)
+			cancel() // its update fails
+			parked(gone, payload, cause)
+		}
+		f.exec(t, `delete from jobs where not (kind = 'order_confirmation' and payload->>'order_id' = $1)`, order.String())
+		for f.count(t, `select count(*) from jobs where run_at = 'infinity'`) == 0 {
+			f.exec(t, `update jobs set run_at = now()`)
+			runOne(t, w)
+		}
+		f.wantMail(t, order, "queued", "", 0)
+		f.exec(t, `update orders set mail_requested_at = now() - interval '11 minutes' where id = $1`, order)
+		return order
+	}
+
+	order := stuck(1)
+	f.must(t, db.WithOrganizer(ctx, s.Pool, f.user, f.org, func(tx pgx.Tx, _ string) error {
+		_, err := sales.ResendTicketEmail(ctx, tx, f.org, f.event, order, audit.Actor{User: f.user})
+		return err
+	}))
+	f.wantMail(t, order, "queued", "", 0)
+
+	order = stuck(2)
+	f.must(t, s.RequestTicketEmail(ctx, f.str(t, `select code from orders where id = $1`, order), sales.OrderToken(s.SecretKey, order)))
+	if n := f.count(t, `select count(*) from jobs where kind = 'order_confirmation' and payload->>'order_id' = $1 and run_at <> 'infinity'`, order.String()); n != 1 {
+		t.Fatalf("%d live jobs after the buyer's request, want 1", n)
 	}
 }

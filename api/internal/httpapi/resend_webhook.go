@@ -56,6 +56,9 @@ func (s *server) resendWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	err = json.Unmarshal(body, &ev)
 	kind, ok := strings.CutPrefix(ev.Type, "email.")
+	if kind == "suppressed" { // Resend never tried: an address that bounced before
+		kind = "bounced"
+	}
 	if err != nil || !ok || (kind != "delivered" && kind != "bounced" && kind != "complained") {
 		writeJSON(w, http.StatusOK, map[string]bool{"received": true}) // not one we act on
 		return

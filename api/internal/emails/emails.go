@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	texttemplate "text/template"
+	"unicode"
 
 	"github.com/google/uuid"
 
@@ -66,7 +67,7 @@ func Tickets(d TicketsData) (mailer.Message, error) {
 		Count   int
 		Over    bool
 		Shown   []shown
-	}{TicketsData: d, Subject: "Your tickets for " + d.Event, Count: len(d.Tickets), Over: len(d.Tickets) > InlineLimit}
+	}{TicketsData: d, Subject: subject("Your tickets for " + d.Event), Count: len(d.Tickets), Over: len(d.Tickets) > InlineLimit}
 	var parts []mailer.Part
 	for i, t := range d.Tickets[:min(len(d.Tickets), InlineLimit)] {
 		png, err := tickets.PNG(t.QR)
@@ -97,6 +98,17 @@ func pdfTickets(ts []Ticket) []tickets.PDFTicket {
 	return out
 }
 
+// subject maps control characters to spaces: SMTP would split the header on
+// a CR or LF that Resend sends as is, and a subject must read the same either way.
+func subject(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
 type segment struct {
 	Text string
 	Link bool
@@ -106,7 +118,8 @@ var linkRe = regexp.MustCompile(`https?://\S+`)
 
 // Plain wraps plain text in the layout: each blank-line paragraph is a <p>,
 // each line break a <br>, each http(s) URL a link to itself.
-func Plain(to, subject, text string) mailer.Message {
+func Plain(to, subj, text string) mailer.Message {
+	subject := subject(subj)
 	var paras [][][]segment
 	for _, p := range strings.Split(strings.TrimSpace(text), "\n\n") {
 		var lines [][]segment

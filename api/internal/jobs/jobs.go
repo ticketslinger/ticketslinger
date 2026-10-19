@@ -329,8 +329,8 @@ func Deliver(ctx context.Context, m mailer.Mailer, msg mailer.Message) error {
 // threshold and period (insert wins) keeps it to once. Failures are logged,
 // never returned: an alert must not fail the ticket email that triggered it.
 func QuotaWatch(pool *pgxpool.Pool, alertTo string, now func() time.Time) func(ctx context.Context, daily, monthly int) {
-	const monthlyBody = "Resend's free plan stops at 3,000 emails a month (and 100 a day), and this server has sent %s this month. On the free plan, ticket emails past the limit wait until the quota resets, so if sales are still coming, upgrade before then: Resend Pro is $20 a month for 50,000. Already on a paid plan? You can ignore this."
-	const dailyBody = "Resend's free plan allows 100 emails a day, counted in UTC, and this server has sent %s today. On the free plan, ticket emails past that wait for midnight UTC and then go out by themselves. If this keeps happening on sale days, Resend Pro ($20 a month) has no daily cap. Already on a paid plan? You can ignore this."
+	const monthlyBody = "Resend's free plan stops at 3,000 emails a month (and 100 a day), and your Resend account has sent %s this month. On the free plan, ticket emails past the limit stop going out: each one keeps trying for most of a day, then gives up and has to be sent again from its order once the quota resets or you upgrade. If sales are still coming, upgrade before then: Resend Pro is $20 a month for 50,000. Already on a paid plan? You can ignore this."
+	const dailyBody = "Resend's free plan allows 100 emails a day, counted in UTC, and your Resend account has sent %s today. On the free plan, ticket emails past that wait for midnight UTC and then go out by themselves. If this keeps happening on sale days, Resend Pro ($20 a month) has no daily cap. Already on a paid plan? You can ignore this."
 	return func(ctx context.Context, daily, monthly int) {
 		t := now().UTC() // the month key assumes Resend's quota resets on the UTC calendar month
 		check := func(period string, used, at int, key, subject, body string) {
@@ -360,10 +360,10 @@ func QuotaWatch(pool *pgxpool.Pool, alertTo string, now func() time.Time) func(c
 		for _, at := range []int{2400, 2850} {
 			n := commas(monthly)
 			check("month", monthly, at, fmt.Sprintf("month-%d-%s", at, t.Format("2006-01")),
-				"TicketSlinger has sent "+n+" of its 3,000 emails this month", fmt.Sprintf(monthlyBody, n))
+				"Your Resend account has sent "+n+" of its 3,000 emails this month", fmt.Sprintf(monthlyBody, n))
 		}
 		check("day", daily, 80, "day-80-"+t.Format("2006-01-02"),
-			"TicketSlinger has sent "+commas(daily)+" of today's 100 emails", fmt.Sprintf(dailyBody, commas(daily)))
+			"Your Resend account has sent "+commas(daily)+" of today's 100 emails", fmt.Sprintf(dailyBody, commas(daily)))
 	}
 }
 
