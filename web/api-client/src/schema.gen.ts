@@ -693,7 +693,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Any member, or any API key. Finds up to 20 of the event's tickets by attendee name or buyer email (any part, any case) or by order code (with or without TS-), valid tickets first, then by name. 422 (field q) if q is over 120 characters, or under 2 once spaces around it are dropped. */
+        /** @description Any member, or any API key. Finds up to 20 of the event's tickets by attendee name or buyer email (any part, any case) or by order code (with or without TS-), valid tickets first, then by name. The email only finds tickets; it never comes back. 422 (field q) if q is over 120 characters, or under 2 once spaces around it are dropped. 429 rate_limited after 600 searches in a minute from one caller at one event. */
         get: operations["searchCheckinTickets"];
         put?: never;
         post?: never;
@@ -1364,8 +1364,6 @@ export interface components {
             id: string;
             ticket_type_name: string;
             attendee_name: string;
-            /** @description The buyer's address. */
-            email: string;
             order_code: string;
             /** @enum {string} */
             status: "valid" | "void";
@@ -3622,6 +3620,7 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            429: components["responses"]["Error"];
         };
     };
     getCheckinSummary: {

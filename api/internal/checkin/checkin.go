@@ -26,9 +26,9 @@ type Result struct {
 }
 
 type Ticket struct {
-	ID                                                     uuid.UUID
-	TicketTypeName, AttendeeName, Email, OrderCode, Status string
-	CheckedInAt                                            *time.Time
+	ID                                              uuid.UUID
+	TicketTypeName, AttendeeName, OrderCode, Status string
+	CheckedInAt                                     *time.Time
 }
 
 // Input is one check-in: a scanned QR text or a ticket picked by hand
@@ -106,11 +106,11 @@ func record(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, in Input, meth
 	return r, err
 }
 
-const view = `SELECT t.id, tt.name, t.attendee_name, o.email::text, o.code, t.status, t.checked_in_at
+const view = `SELECT t.id, tt.name, t.attendee_name, o.code, t.status, t.checked_in_at
 	FROM tickets t JOIN ticket_types tt ON tt.id = t.ticket_type_id JOIN orders o ON o.id = t.order_id`
 
 func scanTicket(row pgx.CollectableRow) (t Ticket, err error) {
-	err = row.Scan(&t.ID, &t.TicketTypeName, &t.AttendeeName, &t.Email, &t.OrderCode, &t.Status, &t.CheckedInAt)
+	err = row.Scan(&t.ID, &t.TicketTypeName, &t.AttendeeName, &t.OrderCode, &t.Status, &t.CheckedInAt)
 	return t, err
 }
 

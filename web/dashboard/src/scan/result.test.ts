@@ -6,7 +6,6 @@ const ticket = {
   id: "0192f0a0-0000-7000-8000-000000000001",
   ticket_type_name: "General admission",
   attendee_name: "Ana Ruiz",
-  email: "ana@example.com",
   order_code: "TS-7KQ2MX",
   status: "valid" as const,
   checked_in_at: "2027-03-02T02:42:00Z",

@@ -17,11 +17,12 @@ import (
 var (
 	checkinWrite = Access{Roles: []string{"owner", "admin", "checkin"}, Write: true}
 
-	errQROrTicket   = &apiError{422, "qr_or_ticket", "Send either qr or ticket_id."}
-	errInvalidQR    = invalidField("invalid_qr", "qr", "Send the text the scanner read: 1 to 200 characters.")
-	errInvalidGate  = invalidField("invalid_gate", "gate", "Keep the gate's name to 40 characters.")
-	errInvalidQuery = invalidField("invalid_q", "q", "Search with 2 to 120 characters: a name, an email or an order code.")
-	errTooManyScans = retryError{&apiError{429, "rate_limited", "That's a lot of scans in one minute. Give it a moment, then scan again."}, "60"}
+	errQROrTicket      = &apiError{422, "qr_or_ticket", "Send either qr or ticket_id."}
+	errInvalidQR       = invalidField("invalid_qr", "qr", "Send the text the scanner read: 1 to 200 characters.")
+	errInvalidGate     = invalidField("invalid_gate", "gate", "Keep the gate's name to 40 characters.")
+	errInvalidQuery    = invalidField("invalid_q", "q", "Search with 2 to 120 characters: a name, an email or an order code.")
+	errTooManyScans    = retryError{&apiError{429, "rate_limited", "That's a lot of scans in one minute. Give it a moment, then scan again."}, "60"}
+	errTooManySearches = retryError{&apiError{429, "rate_limited", "That's a lot of searches in one minute. Give it a moment, then try again."}, "60"}
 )
 
 // inEvent runs fn in the caller's organizer once RLS has found event there,
@@ -85,6 +86,11 @@ func (s *server) SearchCheckinTickets(ctx context.Context, req SearchCheckinTick
 		if utf8.RuneCountInString(req.Params.Q) > 120 || utf8.RuneCountInString(strings.TrimSpace(req.Params.Q)) < 2 {
 			return errInvalidQuery
 		}
+		// Search hands out names and order codes: this bounds paging through them.
+		a := actorFrom(ctx)
+		if !s.searchLimit.Allow(a.User.String()+a.Key.String()+req.Event.String(), time.Now()) {
+			return errTooManySearches
+		}
 		list, err := checkin.Search(ctx, tx, req.Event, req.Params.Q)
 		for _, t := range list {
 			out = append(out, toCheckinTicket(t))
@@ -111,6 +117,6 @@ func (s *server) GetCheckinSummary(ctx context.Context, req GetCheckinSummaryReq
 
 // toCheckinTicket carries no money: check-in staff never see what anyone paid.
 func toCheckinTicket(t checkin.Ticket) CheckinTicket {
-	return CheckinTicket{Id: t.ID, TicketTypeName: t.TicketTypeName, AttendeeName: t.AttendeeName, Email: t.Email,
+	return CheckinTicket{Id: t.ID, TicketTypeName: t.TicketTypeName, AttendeeName: t.AttendeeName,
 		OrderCode: t.OrderCode, Status: CheckinTicketStatus(t.Status), CheckedInAt: nullOf(t.CheckedInAt)}
 }
