@@ -44,6 +44,47 @@ func Attempt(ctx context.Context) int {
 	return n
 }
 
+type idKey struct{}
+
+// ID is the running job's own id (a uuid as text) inside a Handler; "" outside one.
+func ID(ctx context.Context) string {
+	s, _ := ctx.Value(idKey{}).(string)
+	return s
+}
+
+type permanentError struct{ error }
+
+func (e permanentError) Unwrap() error { return e.error }
+
+// Permanent marks err as one no retry can fix: the job is parked at once,
+// with err as its last_error and the Parked hook's cause.
+// Permanent(nil) is nil.
+func Permanent(err error) error {
+	if err == nil {
+		return nil
+	}
+	return permanentError{err}
+}
+
+type delayError struct {
+	error
+	until time.Time
+}
+
+func (e delayError) Unwrap() error { return e.error }
+
+// Delay asks for the job to run again at until (never more than 25 hours
+// out) without spending an attempt, for a provider that said "not now". It
+// holds only while the job is under 72 hours old; after that it is an
+// ordinary failure.
+// Delay(until, nil) is nil.
+func Delay(until time.Time, err error) error {
+	if err == nil {
+		return nil
+	}
+	return delayError{err, until}
+}
+
 type Worker struct {
 	Pool     *pgxpool.Pool
 	Handlers map[string]Handler
@@ -133,12 +174,20 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	herr := w.handle(context.WithValue(ctx, attemptKey{}, attempts), kind, payload)
+	herr := w.handle(context.WithValue(context.WithValue(ctx, attemptKey{}, attempts), idKey{}, id), kind, payload)
 	// A shutdown mid-job must still record the outcome.
 	rec := context.WithoutCancel(ctx)
 	if herr != nil && ctx.Err() != nil {
 		// Cancelled, not broken: hand the job back as if never claimed.
 		_, err = w.Pool.Exec(rec, `update jobs set attempts = attempts - 1, run_at = now(), locked_until = null where id = $1`, id)
+	} else if perm := (permanentError{}); errors.As(herr, &perm) {
+		slog.ErrorContext(ctx, "jobs: failed for good", "kind", kind, "id", id, "attempt", attempts, "parked", true, "err", herr)
+		_, err = w.Pool.Exec(rec, `update jobs set attempts = $3, run_at = 'infinity', last_error = left($2, 2000), locked_until = null where id = $1`, id, herr.Error(), MaxAttempts)
+		if err == nil {
+			w.park(rec, kind, payload, herr.Error())
+		}
+	} else if del := (delayError{}); errors.As(herr, &del) && w.delay(rec, id, del.until, herr.Error(), &err) {
+		slog.WarnContext(ctx, "jobs: delayed", "kind", kind, "id", id, "attempt", attempts, "err", herr)
 	} else if herr != nil {
 		log := slog.WarnContext
 		if attempts >= MaxAttempts {
@@ -156,6 +205,15 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		err = fmt.Errorf("jobs: record outcome: %w", err)
 	}
 	return true, err
+}
+
+// delay reschedules a young job without counting the try; false if the job
+// is too old, which leaves it to the ordinary failure path.
+func (w *Worker) delay(ctx context.Context, id string, until time.Time, cause string, err *error) bool {
+	tag, e := w.Pool.Exec(ctx, `update jobs set run_at = greatest(least($2, now() + interval '25 hours'), now() + interval '1 second'), attempts = attempts - 1,
+		last_error = left($3, 2000), locked_until = null where id = $1 and created_at > now() - interval '72 hours'`, id, until, cause)
+	*err = e
+	return e != nil || tag.RowsAffected() == 1
 }
 
 // park tells kind's Parked hook, if it has one, that the queue gave up.
@@ -184,8 +242,8 @@ const sweepBatch = 1000
 
 // Sweep deletes expired sessions, webauthn challenges, email tokens,
 // idempotency keys and Stripe link states, failed sign-in counts untouched
-// for a day, and old abandoned checkouts, a batch at a time, and queues a
-// settle for every abandoned order. Every step runs; the errors come back joined.
+// for a day, old abandoned checkouts, and parked jobs after 30 days, a batch
+// at a time, and queues a settle for every abandoned order. Every step runs; the errors come back joined.
 func Sweep(ctx context.Context, pool *pgxpool.Pool) error {
 	var errs []error
 	for _, q := range []string{
@@ -193,6 +251,7 @@ func Sweep(ctx context.Context, pool *pgxpool.Pool) error {
 		`delete from webauthn_challenges where id in (select id from webauthn_challenges where expires_at < now() limit $1)`,
 		`delete from email_tokens where token_hash in (select token_hash from email_tokens where expires_at < now() limit $1)`,
 		`delete from idempotency_keys where (scope, key) in (select scope, key from idempotency_keys where expires_at < now() limit $1)`,
+		`delete from jobs where id in (select id from jobs where run_at = 'infinity' and created_at < now() - interval '30 days' limit $1)`,
 		`delete from login_failures where (account, ip) in (select account, ip from login_failures where updated_at < now() - interval '1 day' limit $1)`,
 	} {
 		for {
