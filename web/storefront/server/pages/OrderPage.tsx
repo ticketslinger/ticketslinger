@@ -6,16 +6,36 @@ import { Layout } from "./Layout";
 
 type Order = components["schemas"]["Order"];
 
-const STATUS: Record<Order["status"], string> = {
-  paid: "You're going.",
-  cancelled:
-    "Your payment arrived after the last tickets had gone, so this order was cancelled. We're refunding you in full.",
-  refunded: "This order was refunded in full.",
-  partially_refunded: "Part of this order was refunded.",
-};
+// The refund rows decide what the buyer reads; the order's status only when there are none
+// (free tickets give nothing back).
+export function orderStatus(order: Order): string {
+  const e = order.event;
+  const cancelled = e.status === "cancelled";
+  if (order.status === "cancelled") {
+    return cancelled
+      ? `${e.name} was cancelled while your payment was on its way, so we couldn't give you tickets. We're refunding you in full.`
+      : "Your payment arrived after the last tickets had gone, so this order was cancelled. We're refunding you in full.";
+  }
+  const back = formatCents(order.refunded_cents);
+  if (order.refunded_cents > 0 && order.refunded_cents < order.totals.total_cents) {
+    return `Part of this order was refunded: ${back} went back to your card.`;
+  }
+  if (order.refunded_cents > 0) {
+    return cancelled
+      ? `${e.name} was cancelled, so this order was refunded in full: ${back} back to your card.`
+      : `This order was refunded in full: ${back} back to your card.`;
+  }
+  const going = order.tickets.some((t) => t.status === "valid");
+  if (order.returned_cents > 0 || going) return going ? "You're going." : "";
+  if (order.status === "partially_refunded") return "Part of this order was refunded.";
+  return cancelled
+    ? `${e.name} was cancelled, so these tickets won't get you in any more.`
+    : "This order was refunded in full.";
+}
 
 export function OrderPage({ order }: { order: Order }) {
   const e = order.event;
+  const status = orderStatus(order);
   return (
     <Layout title={`Order ${order.code} · ${e.name}`}>
       <p class="organizer">{e.organizer_name}</p>
@@ -25,7 +45,13 @@ export function OrderPage({ order }: { order: Order }) {
         {e.venue_name}
         {e.venue_address && <span class="address">{e.venue_address}</span>}
       </p>
-      <p class="order-status">{STATUS[order.status]}</p>
+      {status && <p class="order-status">{status}</p>}
+      {order.returned_cents > 0 && (
+        <p class="notice">
+          Your bank sent {formatCents(order.returned_cents)} of your refund back, so it's with{" "}
+          {e.organizer_name} again. Get in touch with them to sort out another way to get it to you.
+        </p>
+      )}
       <p>
         Order {order.code} · {formatCents(order.totals.total_cents)} · sent to {order.email}
       </p>
@@ -37,7 +63,7 @@ export function OrderPage({ order }: { order: Order }) {
                 Ticket {i + 1}: {t.ticket_type_name}
               </h2>
               <p>{t.attendee_name || "No name given"}</p>
-              {t.status === "void" && <p class="status">No longer valid</p>}
+              {t.status === "void" && <p class="status">{t.refunded ? "Refunded" : "Cancelled"}</p>}
             </li>
           ))}
         </ul>

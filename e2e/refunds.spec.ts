@@ -79,10 +79,32 @@ test("an organizer refunds one ticket, then cancels the event", async ({
   const mail = `${API}/__test/last-email?to=${encodeURIComponent(email)}`;
   await expect.poll(async () => (await fetch(mail)).ok, { timeout: 15_000 }).toBe(true);
   await shop.goto(await (await fetch(mail)).text());
-  await expect(shop.getByText("Part of this order was refunded.")).toBeVisible();
+  await expect(
+    shop.getByText("Part of this order was refunded: $25.00 went back to your card."),
+  ).toBeVisible();
   const tickets = shop.locator(".order-tickets li");
-  await expect(tickets.filter({ hasText: "Ada" })).toContainText("No longer valid");
-  await expect(tickets.filter({ hasText: "Grace" })).not.toContainText("No longer valid");
+  await expect(tickets.filter({ hasText: "Ada" })).toContainText("Refunded");
+  await expect(tickets.filter({ hasText: "Grace" })).not.toContainText("Refunded");
+
+  // Lost the email? Ask for the link again: the new one opens the order, the old one doesn't.
+  const old = shop.url();
+  await shop.goto(`${SHOP}/${slug}/spring-social`);
+  await shop.getByRole("link", { name: "Already bought? Get your ticket link again" }).click();
+  await shop.getByLabel("Email").fill(email);
+  await expect(shop.locator('input[name="cf-turnstile-response"]')).not.toHaveValue("", {
+    timeout: 15_000,
+  });
+  await shop.getByRole("button", { name: "Send my link" }).click();
+  await expect(
+    shop.getByText(
+      "Done. If that address bought tickets for Spring Social, the link is on its way.",
+    ),
+  ).toBeVisible();
+  await expect.poll(async () => (await fetch(mail)).text(), { timeout: 15_000 }).not.toBe(old);
+  await shop.goto(await (await fetch(mail)).text());
+  await expect(tickets.filter({ hasText: "Grace" })).toBeVisible();
+  await shop.goto(old);
+  await expect(shop.getByText("That link doesn't open an order.")).toBeVisible();
   await buyer.close();
 
   // Cancel the event: the name has to match, and the fee goes back too.

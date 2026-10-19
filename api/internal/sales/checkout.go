@@ -500,6 +500,7 @@ func (s *Service) GetCheckout(ctx context.Context, token string) (Checkout, erro
 		var p promo
 		var promoID, orderID *uuid.UUID
 		var feeMode, event string
+		var version int
 		if err := tx.QueryRow(ctx, `select c.id, c.organizer_id, c.event_id,
 				-- The hold is over and the payment was stopped: nothing was charged.
 				case when exists (select 1 from payments y where y.order_id = o.id and y.status = 'cancelled') then 'cancelled'
@@ -508,11 +509,11 @@ func (s *Service) GetCheckout(ctx context.Context, token string) (Checkout, erro
 					when c.status = 'paying' and exists (select 1 from payments y where y.order_id = o.id) then 'paying'
 					else 'expired' end,
 				c.expires_at, c.promo_code_id, coalesce(p.code, ''), coalesce(p.kind, ''), coalesce(p.value, 0), e.fee_mode,
-				o.id, coalesce(o.code, ''), e.status
+				o.id, coalesce(o.code, ''), e.status, coalesce(o.link_version, 0)
 			from checkouts c join events e on e.id = c.event_id left join promo_codes p on p.id = c.promo_code_id
 			left join orders o on o.checkout_id = c.id
 			where c.token_hash = $1`, HashToken(token)).Scan(&out.ID, &out.OrganizerID, &out.EventID, &out.Status, &out.ExpiresAt,
-			&promoID, &p.code, &p.kind, &p.value, &feeMode, &orderID, &out.OrderCode, &event); errors.Is(err, pgx.ErrNoRows) {
+			&promoID, &p.code, &p.kind, &p.value, &feeMode, &orderID, &out.OrderCode, &event, &version); errors.Is(err, pgx.ErrNoRows) {
 			return catalogue.ErrNotFound // purged since checkout_scope looked
 		} else if err != nil {
 			return err
@@ -522,8 +523,11 @@ func (s *Service) GetCheckout(ctx context.Context, token string) (Checkout, erro
 		}
 		if out.Status != "completed" {
 			out.OrderCode = "" // pending: not the buyer's yet
-		} else if orderID != nil {
-			out.OrderURL = s.orderURL(out.OrderCode, *orderID)
+		} else if orderID != nil && version == 0 {
+			// The checkout's address never expires, so it hands out only the
+			// first link. Once the buyer asks for a new one, it goes by email
+			// alone: otherwise this address would outlive every rotation.
+			out.OrderURL = s.orderURL(out.OrderCode, *orderID, 0)
 		}
 		var pp *promo
 		if promoID != nil {

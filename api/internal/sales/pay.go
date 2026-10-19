@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -119,7 +120,7 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 			if _, err := s.confirmOrder(ctx, tx, org, order.ID); err != nil {
 				return err
 			}
-			free = PaymentStart{Kind: "free", OrderCode: order.Code, OrderURL: s.orderURL(order.Code, order.ID)}
+			free = PaymentStart{Kind: "free", OrderCode: order.Code, OrderURL: s.orderURL(order.Code, order.ID, 0)}
 		}
 		return nil
 	})
@@ -468,17 +469,21 @@ func upsertPendingOrder(ctx context.Context, tx pgx.Tx, org uuid.UUID, c lockedC
 	return o, errors.New("sales: no free order code after 5 tries")
 }
 
-// orderToken is the buyer's key to their order page: an HMAC of the order id
-// under a key derived from TS_SECRET_KEY, so the email and the buyer's own
-// browser get the same link without the token being stored anywhere. 43
-// base64url characters.
-func orderToken(key []byte, order uuid.UUID) string {
+// orderToken is the buyer's key to their order page: an HMAC under a key
+// derived from TS_SECRET_KEY, so the email and the buyer's own browser get
+// the same link without the token being stored anywhere. version 0 is the
+// order id alone, as every link sent before rotation existed; each new link
+// adds its version. 43 base64url characters.
+func orderToken(key []byte, order uuid.UUID, version int) string {
 	mac := hmac.New(sha256.New, auth.DeriveKey(key, "order-link"))
 	mac.Write(order[:])
+	if version > 0 {
+		mac.Write(binary.BigEndian.AppendUint32(nil, uint32(version)))
+	}
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
 // orderURL is the buyer's link to their order.
-func (s *Service) orderURL(code string, order uuid.UUID) string {
-	return strings.TrimRight(s.StorefrontURL, "/") + "/orders/" + code + "?t=" + orderToken(s.SecretKey, order)
+func (s *Service) orderURL(code string, order uuid.UUID, version int) string {
+	return strings.TrimRight(s.StorefrontURL, "/") + "/orders/" + code + "?t=" + orderToken(s.SecretKey, order, version)
 }

@@ -78,7 +78,7 @@ func TestSecuredOperationsReject401BeforeBody(t *testing.T) {
 // `security: []` to anything else fails here, so it can't slip in unreviewed.
 func TestPublicOperationsAreExactlyThese(t *testing.T) {
 	want := []string{"beginPasskeyLogin", "createCheckout", "finishPasskeyLogin", "getCheckout", "getHealth", "getOrder", "getStorefrontEvent",
-		"login", "payCheckout", "signup", "verifyEmail"}
+		"login", "payCheckout", "requestOrderLinks", "signup", "verifyEmail"}
 	spec, err := httpapi.GetSwagger()
 	if err != nil {
 		t.Fatal(err)

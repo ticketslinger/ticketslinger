@@ -190,13 +190,14 @@ type RefundView struct {
 	FeeBack               bool
 	Status, Reason        string
 	Failure               *string
+	ReturnedByBank        bool // it went through, then the buyer's bank sent it back
 	CreatedAt             time.Time
 }
 
-const refundColumns = `r.id, r.amount_cents, r.fee_cents, r.fee_refunded, r.status, r.reason, r.failure, r.created_at`
+const refundColumns = `r.id, r.amount_cents, r.fee_cents, r.fee_refunded, r.status, r.reason, r.failure, r.returned_by_bank, r.created_at`
 
 func scanRefund(r pgx.CollectableRow) (v RefundView, err error) {
-	err = r.Scan(&v.ID, &v.AmountCents, &v.FeeCents, &v.FeeBack, &v.Status, &v.Reason, &v.Failure, &v.CreatedAt)
+	err = r.Scan(&v.ID, &v.AmountCents, &v.FeeCents, &v.FeeBack, &v.Status, &v.Reason, &v.Failure, &v.ReturnedByBank, &v.CreatedAt)
 	return v, err
 }
 

@@ -725,6 +725,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/storefront/{organizer}/{eventSlug}/order-links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Anyone. Emails a fresh link to every order this address has for the event, and each old link stops working. The answer is 204 whether or not the address bought anything, and nothing is sent to an address with no orders. An order whose link was sent in the last 10 minutes keeps it. 422 bad_email (field email). When the server has Turnstile on, send a turnstile_token: a missing or refused one is 422 turnstile_failed, and 503 turnstile_unavailable means Cloudflare couldn't check it just now. 5 requests an hour per client address (an IPv6 /64 counts as one), then 429 rate_limited. */
+        post: operations["requestOrderLinks"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/checkouts": {
         parameters: {
             query?: never;
@@ -749,7 +766,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Whoever has the token. status is expired once the hold has run out with no payment started. Once a payment exists, a card may already be charged, so it stays paying past the hold until Stripe's answer settles it. cancelled: the hold is over and the payment was stopped, so nothing was charged (we stop a payment still unfinished an hour after its hold ran out). 409 event_cancelled once the organizer has cancelled the event. Answers come with Cache-Control: no-store. A completed checkout carries order_code and order_url, the buyer's link to their tickets. event carries what the checkout page needs: the event's names, the cart's ticket type names and the questions asked of them. */
+        /** @description Whoever has the token. status is expired once the hold has run out with no payment started. Once a payment exists, a card may already be charged, so it stays paying past the hold until Stripe's answer settles it. cancelled: the hold is over and the payment was stopped, so nothing was charged (we stop a payment still unfinished an hour after its hold ran out). 409 event_cancelled once the organizer has cancelled the event. Answers come with Cache-Control: no-store. A completed checkout carries order_code and order_url, the buyer's link to their tickets, until the buyer asks for a new link (requestOrderLinks): from then on order_url is left out, and the link goes by email only. event carries what the checkout page needs: the event's names, the cart's ticket type names and the questions asked of them. */
         get: operations["getCheckout"];
         put?: never;
         post?: never;
@@ -903,6 +920,11 @@ export interface components {
             promo_code?: string;
             turnstile_token?: components["schemas"]["TurnstileToken"];
         };
+        OrderLinksRequest: {
+            /** @description The address the tickets were bought with. */
+            email: string;
+            turnstile_token?: components["schemas"]["TurnstileToken"];
+        };
         QuoteTicket: {
             /** Format: uuid */
             ticket_type_id: string;
@@ -961,7 +983,7 @@ export interface components {
             quote: components["schemas"]["Quote"];
             /** @description Once completed. */
             order_code?: string;
-            /** @description Once completed: the buyer's link to their tickets. */
+            /** @description Once completed: the buyer's link to their tickets. Left out once the buyer has asked for a new link, which goes by email only. */
             order_url?: string;
             event?: components["schemas"]["CheckoutEvent"];
         };
@@ -1002,8 +1024,23 @@ export interface components {
             /** @enum {string} */
             status: "paid" | "cancelled" | "refunded" | "partially_refunded";
             email: string;
+            /**
+             * Format: int64
+             * @description What has gone back, or is on its way back, to the buyer's card: every refund that hasn't failed.
+             */
+            refunded_cents: number;
+            /**
+             * Format: int64
+             * @description Refunds that went through and that the buyer's bank then sent back to the organizer. Not counted in refunded_cents.
+             */
+            returned_cents: number;
             event: {
                 name: string;
+                /**
+                 * @description cancelled once the organizer has cancelled the event.
+                 * @enum {string}
+                 */
+                status: "live" | "ended" | "cancelled";
                 /** Format: date-time */
                 starts_at: string;
                 /** Format: date-time */
@@ -1035,8 +1072,10 @@ export interface components {
             attendee_name: string;
             /** @enum {string} */
             status: "valid" | "void";
-            /** @description What the ticket's QR code holds: 22 base64url characters. Whoever has it can get in, so show it only to the ticket's holder. */
-            qr: string;
+            /** @description true when it's void because it was refunded. */
+            refunded: boolean;
+            /** @description What the ticket's QR code holds: 22 base64url characters. Whoever has it can get in, so show it only to the ticket's holder. null for a void ticket. */
+            qr: string | null;
         };
         PaymentStart: {
             /**
@@ -1156,6 +1195,8 @@ export interface components {
              * @enum {string|null}
              */
             failure: "stripe_failed" | "no_access" | "gave_up" | null;
+            /** @description true when it went through and the buyer's bank sent the money back (it's failed, with stripe_failed). The money is in your Stripe balance again. */
+            returned_by_bank: boolean;
             /** Format: date-time */
             created_at: string;
         };
@@ -3425,6 +3466,38 @@ export interface operations {
             };
             404: components["responses"]["Error"];
             429: components["responses"]["Error"];
+        };
+    };
+    requestOrderLinks: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                eventSlug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrderLinksRequest"];
+            };
+        };
+        responses: {
+            /** @description Queued, or nothing to send: the two look the same. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     createCheckout: {

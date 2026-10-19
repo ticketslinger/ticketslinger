@@ -118,6 +118,9 @@ export const PENDING =
 /** The payment was stopped unfinished, an hour after the hold ran out. */
 export const CANCELLED =
   "Your payment didn't go through, so you haven't been charged. The tickets you were holding have gone back on sale.";
+/** Paid, but the buyer has since asked for a new link: it goes by email only. */
+export const LINK_BY_EMAIL =
+  "You've got these tickets. To see them, open the newest link we emailed you.";
 /** The organizer cancelled the event; the API says the same in its 409. */
 export const EVENT_CANCELLED =
   "This event has been cancelled, so it isn't selling tickets any more. If you'd already paid, we're refunding you in full.";
@@ -375,7 +378,9 @@ function Checkout({ data }: { data: CheckoutData }) {
             const c = await r.json();
             const step = waitStep(c, started);
             if (step === "done") {
-              if (!go(c.order_url, c.order_code)) setPhase({ kind: "over", message: PENDING });
+              if (!go(c.order_url, c.order_code)) {
+                setPhase({ kind: "over", message: c.order_url ? PENDING : LINK_BY_EMAIL });
+              }
               return;
             }
             if (step === "over") {

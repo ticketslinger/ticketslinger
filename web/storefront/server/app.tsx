@@ -7,12 +7,13 @@ import { bodyLimit } from "hono/body-limit";
 import { serveStatic } from "hono/bun";
 import type { VNode } from "preact";
 import { render } from "preact-render-to-string";
-import { EVENT_CANCELLED } from "../islands/checkout";
+import { EVENT_CANCELLED, LINK_BY_EMAIL } from "../islands/checkout";
 import { ORDER, orderPath, TOKEN } from "../islands/links";
 import { csp } from "./csp";
 import { CheckoutPage } from "./pages/CheckoutPage";
 import { EventPage, type EventPageProps, type StorefrontEvent } from "./pages/EventPage";
 import { ErrorPage, NotFound } from "./pages/NotFound";
+import { OrderLinkPage, type OrderLinkPageProps } from "./pages/OrderLinkPage";
 import { NoOrder, OrderPage } from "./pages/OrderPage";
 import { Recent } from "./recent";
 
@@ -91,6 +92,13 @@ const CODE_MESSAGES: Record<string, string> = {
     "That code doesn't take anything off these tickets. Pick the ones it's for, or clear it.",
 };
 const IN_PROGRESS = CHECKOUT_MESSAGES.idempotency_in_progress;
+// Our words for what requestOrderLinks says.
+const BAD_EMAIL = "That email doesn't look right. It should look like ada@example.com.";
+const LINK_MESSAGES: Record<string, string> = {
+  rate_limited: "That's a lot of tries from here. Wait a while and try again.",
+  turnstile_failed: "We couldn't check you're a person. Try again.",
+  turnstile_unavailable: BUSY,
+};
 
 type Status = 200 | 400 | 404 | 409 | 410 | 413 | 422 | 429 | 500 | 502 | 503;
 
@@ -310,6 +318,10 @@ export function createApp(opts: StorefrontOptions): Hono {
     const checkout = r.data;
     if (!checkout?.event) return trouble(c);
     if (checkout.status === "completed") {
+      // The buyer asked for a new link since: this address no longer hands it out.
+      if (!checkout.order_url) {
+        return page(c, 200, <ErrorPage title="Your tickets" message={LINK_BY_EMAIL} />);
+      }
       // Rebuilt from the code and token: the link's own path never reaches the Location header.
       const to = orderPath(checkout.order_url ?? "", checkout.order_code);
       if (!to) return trouble(c);
@@ -405,6 +417,63 @@ export function createApp(opts: StorefrontOptions): Hono {
         ? `Using code ${r.data.promo.code}.`
         : "That code doesn't work for this event.";
     return eventPage(c, 200, { data: r.data, code, codeMessage });
+  });
+
+  // "Email me my link again": the same answer whether or not the address bought anything.
+  async function linkPage(
+    c: Context,
+    status: Status,
+    p: Omit<OrderLinkPageProps, "eventName" | "action" | "siteKey">,
+  ) {
+    const { organizer, event } = c.req.param();
+    if (RESERVED.has(organizer)) return notFound(c);
+    const r = await read(c, organizer, event, "");
+    if (r.status === 404) return notFound(c, "event");
+    if (!r.data) return trouble(c);
+    const action = `/${encodeURIComponent(organizer)}/${encodeURIComponent(event)}/order-link`;
+    const form = siteKey !== "" && !p.done;
+    return page(
+      c,
+      status,
+      <OrderLinkPage {...p} eventName={r.data.event.name} action={action} siteKey={siteKey} />,
+      form ? "turnstile" : "plain",
+    );
+  }
+
+  app.get("/:organizer/:event/order-link", (c) => linkPage(c, 200, {}));
+
+  app.post("/:organizer/:event/order-link", async (c) => {
+    const { organizer, event } = c.req.param();
+    if (RESERVED.has(organizer)) return notFound(c);
+    let form: Record<string, unknown>;
+    try {
+      form = await c.req.parseBody();
+    } catch {
+      return trouble(c, 400, "We couldn't read that form. Go back and try again.");
+    }
+    const field = (k: string) => {
+      const v = form[k];
+      return typeof v === "string" ? v : "";
+    };
+    const email = field("email").trim().slice(0, 254);
+    const body: components["schemas"]["OrderLinksRequest"] = { email };
+    const turnstile = field("cf-turnstile-response");
+    if (turnstile) body.turnstile_token = turnstile;
+    const res = await api
+      .POST("/storefront/{organizer}/{eventSlug}/order-links", {
+        params: { path: { organizer, eventSlug: event } },
+        body,
+        headers: { ...apiHeaders(c), "Idempotency-Key": crypto.randomUUID() },
+      })
+      .catch(() => null);
+    if (!res) return linkPage(c, 502, { email, message: GENERIC });
+    const status = res.response.status;
+    if (status === 204) return linkPage(c, 200, { done: true });
+    if (status === 404) return notFound(c, "event");
+    const code = res.error?.error.code ?? "";
+    if (code === "bad_email") return linkPage(c, 422, { email, emailMessage: BAD_EMAIL });
+    const shown = ([400, 422, 429, 503] as const).find((s) => s === status) ?? 502;
+    return linkPage(c, shown, { email, message: LINK_MESSAGES[code] ?? GENERIC });
   });
 
   app.post("/:organizer/:event/checkout", async (c) => {

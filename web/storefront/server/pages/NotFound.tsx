@@ -10,9 +10,15 @@ export function NotFound({ what }: { what: "event" | "page" | "checkout" }) {
   );
 }
 
-export function ErrorPage({ message }: { message: string }) {
+export function ErrorPage({
+  message,
+  title = "Something went wrong",
+}: {
+  message: string;
+  title?: string;
+}) {
   return (
-    <Layout title="Something went wrong">
+    <Layout title={title}>
       <h1>{message}</h1>
     </Layout>
   );

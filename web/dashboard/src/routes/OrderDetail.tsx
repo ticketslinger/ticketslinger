@@ -38,7 +38,6 @@ const STATE: Record<Refund["status"], string> = {
   succeeded: "Refunded",
   failed: "Failed",
 };
-// ponytail: the detail API can't say a refund once succeeded and came back, so no bank-bounce copy yet.
 const WHY: Record<NonNullable<Refund["failure"]>, string> = {
   stripe_failed: "Stripe couldn't send it.",
   no_access:
@@ -46,11 +45,27 @@ const WHY: Record<NonNullable<Refund["failure"]>, string> = {
   gave_up: "Stripe kept saying no, so we stopped trying.",
 };
 
+/** Why a failed refund failed, in the organizer's terms. */
+export function failureText(r: Refund): string {
+  if (r.returned_by_bank) {
+    return "This one went through, then the buyer's bank sent it back, so the money is in your Stripe balance again. Contact the buyer to find another way to pay them back.";
+  }
+  return r.failure ? WHY[r.failure] : WHY.stripe_failed;
+}
+
+/** A bank that sent a refund back would only send a retry back too: the organizer settles it with the buyer. */
+export const retryable = (r: Refund) => r.status === "failed" && !r.returned_by_bank;
+
+/** A payment that landed after the event was cancelled was refunded because of the cancellation. */
+export const reasonText = (r: Refund, eventCancelled: boolean) =>
+  r.reason === "late_payment" && eventCancelled ? REASON.event_cancelled : REASON[r.reason];
+
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 function RefundRow({
   r,
   canRetry,
+  eventCancelled,
   onRetried,
   org,
   ev,
@@ -58,6 +73,7 @@ function RefundRow({
 }: {
   r: Refund;
   canRetry: boolean;
+  eventCancelled: boolean;
   onRetried: () => void;
   org: string;
   ev: string;
@@ -69,13 +85,13 @@ function RefundRow({
     <li>
       <p>
         <strong>{formatCents(r.amount_cents)}</strong> ·{" "}
-        {r.fee_back ? "with our fee" : "without our fee"} · {REASON[r.reason]} ·{" "}
+        {r.fee_back ? "with our fee" : "without our fee"} · {reasonText(r, eventCancelled)} ·{" "}
         <span className={`pill ${r.status}`}>{STATE[r.status]}</span>
       </p>
       {r.status === "failed" && (
         <>
-          <p>{r.failure ? WHY[r.failure] : WHY.stripe_failed}</p>
-          {canRetry && (
+          <p>{failureText(r)}</p>
+          {canRetry && retryable(r) && (
             <button
               type="button"
               className="inline secondary"
@@ -305,6 +321,7 @@ export function OrderDetail({
                     key={r.id}
                     r={r}
                     canRetry={canEdit(org)}
+                    eventCancelled={event?.status === "cancelled"}
                     onRetried={reload}
                     org={org.slug}
                     ev={eventId}

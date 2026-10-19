@@ -722,6 +722,18 @@ test("a completed checkout goes to its order", async () => {
   expect(res.headers.get("cache-control")).toBe("no-store");
 });
 
+test("a completed checkout whose link was replaced points to the email", async () => {
+  const { a } = app(() => Response.json(checkout({ status: "completed", order_code: "TS-7K2QF" })));
+  const res = await a.request(`/checkout/${TOK}`);
+  expect(res.status).toBe(200);
+  expect(res.headers.get("location")).toBeNull();
+  const html = await res.text();
+  expect(html).toContain(
+    "You've got these tickets. To see them, open the newest link we emailed you.",
+  );
+  expect(html).not.toContain("<script");
+});
+
 test("an expired checkout says so and links back, with no script", async () => {
   const { a } = app(() => Response.json(checkout({ status: "expired" })));
   const res = await a.request(`/checkout/${TOK}`);
@@ -855,7 +867,10 @@ const order = {
   code: "TS-7K2QF",
   status: "paid",
   email: "ada@example.com",
+  refunded_cents: 0,
+  returned_cents: 0,
   event: {
+    status: "live",
     name: "Spring Gala",
     starts_at: "2027-05-02T01:00:00Z",
     ends_at: "2027-05-02T05:00:00Z",
@@ -877,14 +892,16 @@ const order = {
       ticket_type_name: "General",
       attendee_name: "Ada",
       status: "valid",
-      qr: "x".repeat(22),
+      refunded: false,
+      qr: "x".repeat(22) as string | null,
     },
     {
       id: "k2",
       ticket_type_name: "General",
       attendee_name: "<b>Grace</b>",
       status: "valid",
-      qr: "y".repeat(22),
+      refunded: false,
+      qr: "y".repeat(22) as string | null,
     },
   ],
 };
@@ -1095,5 +1112,150 @@ test("a crash logs no token from the error's message", async () => {
     expect(logged).not.toContain(TOK);
   } finally {
     spy.mockRestore();
+  }
+});
+
+test("the order page says what was refunded, from the refund rows", async () => {
+  const show = async (o: unknown) => {
+    const { a } = app(() => Response.json(o));
+    return (await a.request(`/orders/TS-7K2QF?t=${TOK}`)).text();
+  };
+  const part = structuredClone(order);
+  part.status = "partially_refunded";
+  part.refunded_cents = 2345;
+  part.tickets[0] = { ...part.tickets[0], status: "void", refunded: true, qr: null };
+  let html = await show(part);
+  expect(html).toContain("Part of this order was refunded: $23.45 went back to your card.");
+  expect(html).toContain("Refunded");
+  expect(html).not.toContain("x".repeat(22));
+  expect(html).not.toContain("<img");
+  expect(html).not.toContain("<svg");
+
+  const full = structuredClone(order);
+  full.status = "refunded";
+  full.refunded_cents = 4690;
+  full.tickets = full.tickets.map((t) => ({ ...t, status: "void", refunded: true, qr: null }));
+  html = await show(full);
+  expect(html).toContain("This order was refunded in full: $46.90 back to your card.");
+
+  full.event.status = "cancelled";
+  html = await show(full);
+  expect(html).toContain(
+    "Spring Gala was cancelled, so this order was refunded in full: $46.90 back to your card.",
+  );
+  expect(html).not.toContain("arrived after the last tickets");
+
+  // A late payment on an event that was cancelled meanwhile is the cancellation's doing.
+  const late = structuredClone(order);
+  late.status = "cancelled";
+  late.refunded_cents = 4690;
+  late.tickets = [];
+  late.event.status = "cancelled";
+  html = await show(late);
+  expect(html).toContain("Spring Gala was cancelled while your payment was on its way");
+  expect(html).not.toContain("arrived after the last tickets");
+
+  // Voided without a refund (a free ticket) reads Cancelled.
+  const free = structuredClone(order);
+  free.tickets[1] = { ...free.tickets[1], status: "void", refunded: false, qr: null };
+  html = await show(free);
+  expect(html).toContain("Cancelled");
+  expect(html).toContain("You're going.");
+});
+
+test("a refund the bank sent back tells the buyer to contact the organizer", async () => {
+  const o = structuredClone(order);
+  o.status = "refunded";
+  o.returned_cents = 4690;
+  o.tickets = o.tickets.map((t) => ({ ...t, status: "void", refunded: true, qr: null }));
+  const { a } = app(() => Response.json(o));
+  const html = await (await a.request(`/orders/TS-7K2QF?t=${TOK}`)).text();
+  expect(html).toContain("Your bank sent $46.90 of your refund back, so it's with Acme again.");
+  expect(html).not.toContain("refunded in full");
+  expect(html).not.toContain('class="order-status"');
+});
+
+test("every event page links to getting the ticket link again", async () => {
+  const ended = structuredClone(event);
+  ended.event.state = "ended";
+  ended.ticket_types[0].on_sale = false;
+  const soldOut = structuredClone(event);
+  soldOut.ticket_types[0].remaining = 0;
+  for (const ev of [event, ended, soldOut]) {
+    const { a } = app(() => Response.json(ev));
+    const html = await (await a.request("/acme/gala")).text();
+    expect(html).toContain(
+      '<a href="/acme/gala/order-link">Already bought? Get your ticket link again</a>',
+    );
+  }
+});
+
+const linkRoutes =
+  (answer: () => Response): Api =>
+  (r) =>
+    new URL(r.url).pathname.endsWith("/order-links") ? answer() : Response.json(event);
+
+test("the order link page asks for an email behind the quick check", async () => {
+  const { a } = app(linkRoutes(() => new Response(null, { status: 204 })));
+  const res = await a.request("/acme/gala/order-link");
+  const html = await res.text();
+  expect(res.status).toBe(200);
+  expect(html).toContain("Get your ticket link again");
+  expect(html).toContain(
+    "Tell us the email you bought with. If it has tickets for this event, we'll send a fresh link there, and the old one will stop working.",
+  );
+  expect(html).toContain('action="/acme/gala/order-link"');
+  expect(html).toContain('type="email"');
+  expect(html).toContain('data-sitekey="1x00000000000000000000AA"');
+  expect(html).toContain("Send my link");
+  expect(res.headers.get("content-security-policy")).toContain(
+    "frame-src https://challenges.cloudflare.com",
+  );
+});
+
+test("asking for the link again says the same thing for any address", async () => {
+  const { a, calls } = app(linkRoutes(() => new Response(null, { status: 204 })));
+  const pages: string[] = [];
+  for (const email of ["ada@example.com", "nobody@example.com"]) {
+    const res = await a.request(
+      "/acme/gala/order-link",
+      form({ email, "cf-turnstile-response": "tok-1" }),
+    );
+    expect(res.status).toBe(200);
+    pages.push(await res.text());
+  }
+  expect(pages[0]).toBe(pages[1]);
+  expect(pages[0]).toContain(
+    "Done. If that address bought tickets for Spring Gala, the link is on its way. It can take a minute or two.",
+  );
+  const posts = calls.filter(
+    (c) => new URL(c.url).pathname === "/v1/storefront/acme/gala/order-links",
+  );
+  expect(posts).toHaveLength(2);
+  expect(await posts[0].json()).toEqual({ email: "ada@example.com", turnstile_token: "tok-1" });
+  expect(posts[0].headers.get("x-real-ip")).toBe("203.0.113.9");
+  expect(posts[0].headers.get("idempotency-key")).toMatch(/^[0-9a-f-]{36}$/);
+  expect(posts[1].headers.get("idempotency-key")).not.toBe(posts[0].headers.get("idempotency-key"));
+});
+
+test("the order link page shows our words for each refusal", async () => {
+  const cases: [Response, number, string][] = [
+    [apiError(422, "bad_email", { field: "email" }), 422, "That email doesn't look right."],
+    [
+      apiError(429, "rate_limited"),
+      429,
+      "That's a lot of tries from here. Wait a while and try again.",
+    ],
+    [apiError(422, "turnstile_failed"), 422, "We couldn't check you're a person. Try again."],
+    [apiError(400, "bad_request"), 400, "Something went wrong on our side. Try again."],
+  ];
+  for (const [answer, status, words] of cases) {
+    const { a } = app(linkRoutes(() => answer.clone()));
+    const res = await a.request("/acme/gala/order-link", form({ email: "ada@example" }));
+    const html = await res.text();
+    expect(res.status).toBe(status);
+    expect(html).toContain(words);
+    expect(html).not.toContain("API words");
+    expect(html).toContain('value="ada@example"');
   }
 });
