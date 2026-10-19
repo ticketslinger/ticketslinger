@@ -17,6 +17,8 @@ test("audit actions read as plain words", () => {
   expect(say("order.refunded")).toBe("Order refunded");
   expect(say("event.cancelled")).toBe("Event cancelled");
   expect(say("order.cancelled")).toBe("Order cancelled");
+  expect(say("member.added")).toBe("Team member added");
+  expect(say("member.removed")).toBe("Team member removed");
   expect(say("seat.teleported")).toBe("seat.teleported");
 });
 

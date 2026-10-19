@@ -302,6 +302,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Owners and admins only, from a signed-in session. Everyone on the organizer's team and their role. An API key gets 403 session_required. */
+        get: operations["listMembers"];
+        put?: never;
+        /** @description Owners only, from a signed-in session. Adds an existing, verified TicketSlinger account to the team as admin or checkin; nobody is emailed. 404 no_account when no verified account has that email (an unknown email and an unverified one get the same answer). 409 already_member when they're on the team already, in any role. 422 with field role for any role but admin or checkin: owners can't be made here. */
+        post: operations["addMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/members/{member}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Owners only, from a signed-in session. Takes an admin or check-in member off the team; they lose access at once. 409 cannot_remove for an owner or for yourself. 404 when they aren't on the team. */
+        delete: operations["removeMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/payments": {
         parameters: {
             query?: never;
@@ -539,7 +574,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Any member, or any API key. The event's orders, newest first. Orders still waiting for payment aren't listed. email is the buyer's address. */
+        /** @description Owners and admins, or any API key; check-in staff get 403 forbidden_role, because orders show what people paid. The event's orders, newest first. Orders still waiting for payment aren't listed. email is the buyer's address. */
         get: operations["listOrders"];
         put?: never;
         post?: never;
@@ -556,7 +591,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Any member, or any API key. One order with every ticket it ever had (refunded ones show as void, with the refund that covered them) and its refunds, newest first. email is the buyer's address. */
+        /** @description Owners and admins, or any API key; check-in staff get 403 forbidden_role, as for listOrders. One order with every ticket it ever had (refunded ones show as void, with the refund that covered them) and its refunds, newest first. email is the buyer's address. */
         get: operations["getOrderDetail"];
         put?: never;
         post?: never;
@@ -1527,6 +1562,26 @@ export interface components {
             /** Format: date-time */
             at: string;
         };
+        AddMember: {
+            /**
+             * Format: email
+             * @description The email of their TicketSlinger account (422 invalid_email when it isn't one address).
+             */
+            email: string;
+            /**
+             * @description admin runs events, refunds and reports; checkin scans tickets and finds guests.
+             * @enum {string}
+             */
+            role: "admin" | "checkin";
+        };
+        Member: {
+            /** Format: uuid */
+            user_id: string;
+            name: string;
+            email: string;
+            /** @enum {string} */
+            role: "owner" | "admin" | "checkin";
+        };
         CreateApiKey: {
             name: string;
             /**
@@ -2429,6 +2484,97 @@ export interface operations {
             422: components["responses"]["Error"];
         };
     };
+    listMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Member"][];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    addMember: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddMember"];
+            };
+        };
+        responses: {
+            /** @description Added */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Member"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    removeMember: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                /** @description The member's user_id. */
+                member: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
     getPayments: {
         parameters: {
             query?: never;
@@ -3133,6 +3279,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };
@@ -3159,6 +3306,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
             404: components["responses"]["Error"];
         };
     };

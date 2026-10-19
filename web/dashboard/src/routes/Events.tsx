@@ -94,13 +94,17 @@ export function NewEvent({ org }: { org: Org }) {
   );
 }
 
-const TABS = [
+const TABS: { path: string; label: string; editorsOnly?: boolean }[] = [
   { path: "", label: "Details" },
   { path: "/tickets", label: "Tickets" },
   { path: "/promo-codes", label: "Promo codes" },
   { path: "/questions", label: "Questions" },
-  { path: "/orders", label: "Orders" },
+  // Orders show what people paid, which check-in staff don't see (spec D22).
+  { path: "/orders", label: "Orders", editorsOnly: true },
 ];
+
+/** The event's tabs this member may open. */
+export const eventTabs = (org: Org) => TABS.filter((t) => !t.editorsOnly || canEdit(org));
 
 export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: string }) {
   const path = { organizer: org.slug, event: id };
@@ -181,7 +185,7 @@ export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: s
           )}
 
           <nav className="tabs" aria-label="Event sections">
-            {TABS.map((t) => (
+            {eventTabs(org).map((t) => (
               <Link
                 key={t.label}
                 href={`/o/${org.slug}/events/${event.id}${t.path}`}
