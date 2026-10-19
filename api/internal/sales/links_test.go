@@ -2,7 +2,11 @@ package sales_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -198,8 +202,8 @@ func TestOrderLinksRotateOnlyAfterSend(t *testing.T) {
 		t.Fatalf("after a failed send: version %d, old link opens %v; want 0 and true", version(), opens(0))
 	}
 	step(w)
-	if len(flaky.Sent) != 1 || flaky.Sent[0].IdempotencyKey != "ts-job-"+id+"-v1" {
-		t.Fatalf("sent %+v, want one email keyed ts-job-%s-v1", flaky.Sent, id)
+	if key := linksKey(id, map[uuid.UUID]int{order: 1}); len(flaky.Sent) != 1 || flaky.Sent[0].IdempotencyKey != key {
+		t.Fatalf("sent %+v, want one email keyed %s", flaky.Sent, key)
 	}
 	if version() != 1 || opens(0) || !opens(1) {
 		t.Fatalf("after the send: version %d, old opens %v, new opens %v", version(), opens(0), opens(1))
@@ -223,12 +227,96 @@ func TestOrderLinksRotateOnlyAfterSend(t *testing.T) {
 	if f.count(t, `select count(*) from jobs where kind = 'order_links'`) != 0 {
 		t.Fatal("the retry didn't finish the job")
 	}
-	key := "ts-job-" + id + "-v2"
+	key := linksKey(id, map[uuid.UUID]int{order: 2})
 	if len(mem.Sent) != 2 || mem.Sent[0].IdempotencyKey != key || mem.Sent[1].IdempotencyKey != key || mem.Sent[0].Text != mem.Sent[1].Text {
 		t.Fatalf("sent %+v, want the same email twice under %s", mem.Sent, key)
 	}
 	if version() != 2 || opens(1) || !opens(2) {
 		t.Fatalf("after the retry: version %d, want 2 with only the new link opening", version())
+	}
+}
+
+// linksKey is the key OrderLinks sends under for these orders' new versions.
+func linksKey(job string, next map[uuid.UUID]int) string {
+	var pairs []string
+	for id, v := range next {
+		pairs = append(pairs, id.String()+":"+strconv.Itoa(v))
+	}
+	slices.Sort(pairs)
+	sum := sha256.Sum256([]byte(strings.Join(pairs, "\n")))
+	return "ts-job-" + job + "-l" + hex.EncodeToString(sum[:])[:16]
+}
+
+func TestOrderLinksRotateSeveralOrdersTogether(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500})
+	ctx := context.Background()
+	a, _, _ := f.paidOrder(t, s, fake, 1, 1)
+	drain(t, s, &mailer.Memory{})
+	f.must(t, s.RequestOrderLinks(ctx, "acme", "gala", "buyer@example.com"))
+	runKind(t, s, sales.OrderLinksJob, s.OrderLinks(&mailer.Memory{})) // a is at version 1
+	b, _, _ := f.paidOrder(t, s, fake, 1, 2)                           // b at 0, same buyer
+	drain(t, s, &mailer.Memory{})
+	f.exec(t, `update orders set link_sent_at = now() - interval '11 minutes' where id = $1`, a)
+	version := func(o uuid.UUID) int { return f.count(t, `select link_version from orders where id = $1`, o) }
+	opens := func(o uuid.UUID, v int) bool {
+		_, err := s.Order(ctx, f.str(t, `select code from orders where id = $1`, o), sales.OrderTokenAt(s.SecretKey, o, v))
+		return err == nil
+	}
+
+	// The second order's rotation fails once: neither rotates.
+	f.exec(t, `create sequence fail_once`)
+	f.exec(t, `create function fail_once() returns trigger language plpgsql security definer as $$
+		begin if old.id = '`+b.String()+`' and nextval('fail_once') = 1 then raise exception 'forced'; end if; return new; end $$`)
+	f.exec(t, `create trigger fail_once before update of link_version on orders for each row execute function fail_once()`)
+	mem := &mailer.Memory{}
+	w := &jobs.Worker{Pool: s.Pool, Handlers: map[string]jobs.Handler{sales.OrderLinksJob: s.OrderLinks(mem)}}
+	f.must(t, s.RequestOrderLinks(ctx, "acme", "gala", "buyer@example.com"))
+	job := f.str(t, `select id::text from jobs where kind = 'order_links'`)
+	if ran, err := w.RunOnce(ctx); !ran || err != nil {
+		t.Fatalf("ran=%v err=%v", ran, err)
+	}
+	if version(a) != 1 || version(b) != 0 || !opens(a, 1) || !opens(b, 0) {
+		t.Fatalf("after a failed rotation: versions %d and %d, want 1 and 0 with the old links opening", version(a), version(b))
+	}
+	f.exec(t, `update jobs set run_at = now() where kind = 'order_links'`)
+	runKind(t, s, sales.OrderLinksJob, s.OrderLinks(mem))
+
+	key := linksKey(job, map[uuid.UUID]int{a: 2, b: 1})
+	if len(mem.Sent) != 2 || mem.Sent[0].IdempotencyKey != key || mem.Sent[1].IdempotencyKey != key || mem.Sent[0].Text != mem.Sent[1].Text {
+		t.Fatalf("sent %+v, want one email, twice, under %s", mem.Sent, key)
+	}
+	if version(a) != 2 || version(b) != 1 || opens(a, 1) || opens(b, 0) || !opens(a, 2) || !opens(b, 1) {
+		t.Fatalf("after the retry: versions %d and %d, want 2 and 1 with only the new links opening", version(a), version(b))
+	}
+}
+
+// cancelOnSend delivers, then shuts the worker down.
+type cancelOnSend struct {
+	mailer.Memory
+	cancel context.CancelFunc
+}
+
+func (m *cancelOnSend) Send(ctx context.Context, msg mailer.Message) error {
+	m.cancel()
+	return m.Memory.Send(ctx, msg)
+}
+
+func TestOrderLinksCommitAfterSendSurvivesShutdown(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500})
+	order, _, _ := f.paidOrder(t, s, fake, 1, 1)
+	drain(t, s, &mailer.Memory{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := &cancelOnSend{cancel: cancel}
+	f.must(t, s.RequestOrderLinks(context.Background(), "acme", "gala", "buyer@example.com"))
+	w := &jobs.Worker{Pool: s.Pool, Handlers: map[string]jobs.Handler{sales.OrderLinksJob: s.OrderLinks(m)}}
+	if _, err := w.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if v := f.count(t, `select link_version from orders where id = $1`, order); len(m.Sent) != 1 || v != 1 {
+		t.Fatalf("shutdown mid-job: %d emails, version %d; want 1 and 1", len(m.Sent), v)
 	}
 }
 

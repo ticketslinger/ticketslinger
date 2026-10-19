@@ -3,10 +3,13 @@ package sales
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -47,7 +50,7 @@ func (s *Service) RequestOrderLinks(ctx context.Context, organizerSlug, eventSlu
 // link; a retry of the same request isn't a new request.
 //
 // The links rotate only after the send succeeds, so a failed send never
-// kills a working link. The key names the new versions: a retry after a
+// kills a working link. The key names the new links: a retry after a
 // send whose rotation didn't commit rebuilds the same links under the same
 // key, so the provider drops the copy and the rotation lands.
 func (s *Service) OrderLinks(m mailer.Mailer) jobs.Handler {
@@ -85,31 +88,39 @@ func (s *Service) OrderLinks(m mailer.Mailer) jobs.Handler {
 		if err != nil || len(orders) == 0 {
 			return err
 		}
-		// One order's key ends in its new version. With several, the sum of
-		// the new versions: versions only grow and orders only join, so any
-		// change to the links changes the key.
-		var lines []string
-		sum := 0
+		// The key names exactly which links this email carries: the provider
+		// counts a second body under a used key as already sent, so two
+		// different link sets must never share one.
+		var lines, pairs []string
 		for _, o := range orders {
 			lines = append(lines, o.Code+": "+s.orderURL(o.Code, o.ID, o.Version+1))
-			sum += o.Version + 1
+			pairs = append(pairs, o.ID.String()+":"+strconv.Itoa(o.Version+1))
 		}
+		slices.Sort(pairs)
+		sum := sha256.Sum256([]byte(strings.Join(pairs, "\n")))
 		err = jobs.Deliver(ctx, m, mailer.Message{
 			To:      orders[len(orders)-1].Email, // the address on the order, not the spelling typed in the form
 			Subject: "Your ticket link for " + name,
 			Text: "Here's the link to your tickets for " + name +
 				". It replaces any link we sent before, so an older one won't open them any more. Keep it to yourself: anyone with it can see your tickets.\n\n" +
 				strings.Join(lines, "\n"),
-			IdempotencyKey: "ts-job-" + jobs.ID(ctx) + "-v" + strconv.Itoa(sum),
+			IdempotencyKey: "ts-job-" + jobs.ID(ctx) + "-l" + hex.EncodeToString(sum[:])[:16],
 		})
 		if err != nil {
 			return err
 		}
-		return system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error {
+		// ponytail: two ceilings. A rotation that fails to commit until the job
+		// parks leaves the buyer an email whose links never open (their old link
+		// keeps working). Resend keeps a key for 24 hours, so a retry after that
+		// sends an identical second copy.
+		// The email went out: try to commit even while the worker shuts down.
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		return system.Run(rctx, s.Pool, org, func(tx pgx.Tx) error {
 			for _, o := range orders {
 				hash := sha256.Sum256([]byte(orderToken(s.SecretKey, o.ID, o.Version+1)))
 				// No row: another request rotated it first, and its link went out.
-				if _, err := tx.Exec(ctx, `update orders set link_version = $3, magic_token_hash = $4, link_sent_at = statement_timestamp()
+				if _, err := tx.Exec(rctx, `update orders set link_version = $3, magic_token_hash = $4, link_sent_at = statement_timestamp()
 					where id = $1 and link_version = $2`, o.ID, o.Version, o.Version+1, hash[:]); err != nil {
 					return err
 				}
