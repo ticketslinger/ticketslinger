@@ -36,6 +36,9 @@ GRANT UPDATE (updated_at) ON events TO ts_system;
 REVOKE UPDATE (updated_at) ON events FROM ts_system;
 DROP POLICY events_system_lock ON events;
 DROP FUNCTION queue_abandoned_orders(int);
-ALTER TABLE payments DROP CONSTRAINT payments_status_check,
+-- The narrower check has no 'cancelled': an intent stopped unpaid is failed.
+ALTER TABLE payments DROP CONSTRAINT payments_status_check;
+UPDATE payments SET status = 'failed' WHERE status = 'cancelled';
+ALTER TABLE payments
   ADD CONSTRAINT payments_status_check CHECK (status IN ('pending', 'succeeded', 'failed'));
 ALTER TABLE orders DROP COLUMN settle_queued_at;

@@ -2,10 +2,14 @@ package sales_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
 	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
@@ -13,6 +17,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/payments"
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 	"github.com/ticketslinger/ticketslinger/api/internal/sales"
+	"github.com/ticketslinger/ticketslinger/api/migrations"
 )
 
 // abandoned is a pending order whose hold ended two hours ago, queued for
@@ -323,4 +328,29 @@ func TestCancelRefusedBecauseItWasCancelled(t *testing.T) {
 	if n := f.count(t, `select count(*) from jobs`); n != 0 {
 		t.Fatalf("%d jobs left", n)
 	}
+}
+
+// The migrations still go down past 00032 once a payment has been
+// cancelled: the narrower check has no 'cancelled', so Down calls it failed.
+func TestMigrationsGoDownWithACancelledPayment(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	ctx := context.Background()
+	abandoned(t, s, f, fake)
+	drain(t, s, &mailer.Memory{})
+	if n := f.count(t, `select count(*) from payments where status = 'cancelled'`); n != 1 {
+		t.Fatalf("%d cancelled payments, want 1", n)
+	}
+	sqlDB, err := sql.Open("pgx", f.owner.Config().ConnString())
+	f.must(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	p, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	f.must(t, err)
+	_, err = p.DownTo(ctx, 31)
+	f.must(t, err)
+	if n := f.count(t, `select count(*) from payments where status = 'failed'`); n != 1 {
+		t.Fatalf("%d failed payments after going down, want the cancelled one", n)
+	}
+	_, err = p.Up(ctx)
+	f.must(t, err)
 }
