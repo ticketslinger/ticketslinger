@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func TestScanAcceptsThenDuplicates(t *testing.T) {
 		t.Fatalf("accepted rows at North: %d, want 1", n)
 	}
 	for _, table := range []string{"checkins", "audit_log"} {
-		if n := f.count(t, `select count(*) from `+table+` c where c::text like '%' || $1 || '%'`, tk[0].qr); n != 0 {
+		if n := f.count(t, `select count(*) from `+table+` c where strpos(c::text, $1) > 0`, tk[0].qr); n != 0 {
 			t.Fatalf("%s rows carrying the scanned text: %d", table, n)
 		}
 	}
@@ -108,7 +109,7 @@ func TestConcurrentScansAcceptOnce(t *testing.T) {
 
 func TestScanOfAnythingElseIsInvalid(t *testing.T) {
 	f := seed(t)
-	f.order(t, f.org, f.event, f.general, "TS-AAAAA", "a@example.com", "Ada")
+	own := f.order(t, f.org, f.event, f.general, "TS-AAAAA", "a@example.com", "Ada")
 	otherEvent, otherGeneral := f.liveEvent(t, f.org, "matinee")
 	sameOrg := f.order(t, f.org, otherEvent, otherGeneral, "TS-BBBBB", "b@example.com", "Bea")
 	org2 := f.organizer(t, "rival")
@@ -116,11 +117,12 @@ func TestScanOfAnythingElseIsInvalid(t *testing.T) {
 	rival := f.order(t, org2, rivalEvent, rivalGeneral, "TS-CCCCC", "c@example.com", "Cy")
 
 	for name, qr := range map[string]string{
-		"a link":                        "https://example.com",
-		"not base64url":                 "!!!!!!!!!!!!!!!!!!!!!!",
-		"no ticket has it":              "AAAAAAAAAAAAAAAAAAAAAA",
-		"another event, same organizer": sameOrg[0].qr,
-		"another organizer":             rival[0].qr,
+		"a link":                         "https://example.com",
+		"not base64url":                  "!!!!!!!!!!!!!!!!!!!!!!",
+		"no ticket has it":               "AAAAAAAAAAAAAAAAAAAAAA",
+		"another event, same organizer":  sameOrg[0].qr,
+		"another organizer":              rival[0].qr,
+		"a non-canonical last character": nonCanonical(own[0].qr),
 	} {
 		r := f.checkIn(t, f.event, checkin.Input{QR: qr})
 		if r.Result != "invalid" || r.Ticket != nil || r.Sold != 1 {
@@ -169,7 +171,7 @@ func TestManualCheckIn(t *testing.T) {
 // ts_app moves checked_in_at one way: from nothing to a time, on a valid ticket.
 func TestAppCannotUndoACheckIn(t *testing.T) {
 	f := seed(t)
-	tk := f.order(t, f.org, f.event, f.general, "TS-WWWWW", "u@example.com", "Ada", "Bob")
+	tk := f.order(t, f.org, f.event, f.general, "TS-WWWWW", "u@example.com", "Ada", "Bob", "Cy", "Dee")
 	f.checkIn(t, f.event, checkin.Input{TicketID: tk[0].id})
 	f.exec(t, `update tickets set status = 'void' where id = $1`, tk[1].id)
 	ctx := context.Background()
@@ -180,6 +182,8 @@ func TestAppCannotUndoACheckIn(t *testing.T) {
 		"undo":              {`update tickets set checked_in_at = null where id = $1`, tk[0].id},
 		"move the time":     {`update tickets set checked_in_at = now() where id = $1`, tk[0].id},
 		"check in void row": {`update tickets set checked_in_at = now() where id = $1`, tk[1].id},
+		"back-dated":        {`update tickets set checked_in_at = statement_timestamp() - interval '1 hour' where id = $1`, tk[2].id},
+		"forward-dated":     {`update tickets set checked_in_at = statement_timestamp() + interval '1 hour' where id = $1`, tk[3].id},
 	} {
 		err := db.WithOrganizer(ctx, f.app, f.user, f.org, func(tx pgx.Tx, _ string) error {
 			_, err := tx.Exec(ctx, c.sql, c.id)
@@ -218,6 +222,7 @@ func TestSearchFindsByNameEmailAndCode(t *testing.T) {
 		"buyer@ex": both,
 		"7k2qf":    both,
 		"TS-7K2QF": both,
+		" 7k2qf ":  both,
 		"%":        nil,
 		"_":        nil,
 	} {
@@ -228,4 +233,11 @@ func TestSearchFindsByNameEmailAndCode(t *testing.T) {
 	if got := search("zed"); len(got) != 20 {
 		t.Errorf("search zed: %d results, want 20", len(got))
 	}
+}
+
+// nonCanonical flips an unused low bit of the last of 22 base64url characters:
+// a lenient decoder reads the same 16 bytes from it.
+func nonCanonical(qr string) string {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	return qr[:21] + string(alphabet[strings.IndexByte(alphabet, qr[21])^1])
 }

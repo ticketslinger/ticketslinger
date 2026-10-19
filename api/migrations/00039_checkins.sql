@@ -31,8 +31,8 @@ GRANT UPDATE (checked_in_at) ON tickets TO ts_app;
 
 -- ts_app moves tickets one way only: valid to void, pointed at a refund once,
 -- released once, and only as it voids them; checked in once, from nothing to
--- a time, and only while valid. Nothing it does brings a refunded ticket back
--- or un-checks one.
+-- the time of the check-in itself (never back- or forward-dated), and only
+-- while valid. Nothing it does brings a refunded ticket back or un-checks one.
 -- +goose StatementBegin
 CREATE OR REPLACE FUNCTION tickets_app_one_way() RETURNS trigger LANGUAGE plpgsql
   SET search_path = pg_catalog, public, pg_temp AS $$
@@ -44,7 +44,8 @@ BEGIN
     OR ((NEW.refund_id IS DISTINCT FROM OLD.refund_id OR NEW.released_at IS DISTINCT FROM OLD.released_at)
         AND NEW.status IS DISTINCT FROM 'void')
     OR (NEW.checked_in_at IS DISTINCT FROM OLD.checked_in_at
-        AND (OLD.checked_in_at IS NOT NULL OR NEW.checked_in_at IS NULL OR OLD.status <> 'valid'))) THEN
+        AND (OLD.checked_in_at IS NOT NULL OR NEW.checked_in_at IS NULL
+             OR NEW.checked_in_at <> statement_timestamp() OR OLD.status <> 'valid'))) THEN
     RAISE EXCEPTION 'tickets: one way only: valid to void, checked in once' USING ERRCODE = 'insufficient_privilege';
   END IF;
   RETURN NEW;

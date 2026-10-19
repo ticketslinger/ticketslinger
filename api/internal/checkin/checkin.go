@@ -120,6 +120,7 @@ var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 // (substring, any case) or by order code (with or without "TS-"), valid ones
 // first, then by name.
 func Search(ctx context.Context, tx pgx.Tx, event uuid.UUID, q string) ([]Ticket, error) {
+	q = strings.TrimSpace(q)
 	code := strings.ToUpper(q)
 	if !strings.HasPrefix(code, "TS-") {
 		code = "TS-" + code
@@ -137,13 +138,13 @@ func Summary(ctx context.Context, tx pgx.Tx, event uuid.UUID) (checkedIn, sold i
 	return checkedIn, sold, err
 }
 
-// decodeQR reads a ticket QR: 22 base64url characters, no padding, carrying
-// the ticket's 16-byte secret.
+// decodeQR reads a ticket QR: 22 base64url characters, no padding, in
+// canonical form, carrying the ticket's 16-byte secret.
 func decodeQR(s string) ([]byte, bool) {
 	if len(s) != 22 {
 		return nil, false
 	}
-	b, err := base64.RawURLEncoding.DecodeString(s)
+	b, err := base64.RawURLEncoding.Strict().DecodeString(s)
 	return b, err == nil && len(b) == 16
 }
 
