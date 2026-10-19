@@ -2,17 +2,17 @@ You're going to {{.Event}}.
 
 {{.When}}{{with .Venue}}, {{.}}{{end}}.
 
-Bring the codes below to the door, on your phone or on paper. Each one lets one person in, once.
+Your codes are in the attached PDF and on your order page. Bring them to the door, on your phone or on paper. Each one lets one person in, once.
 {{range .Shown}}
 Ticket {{.N}} of {{$.Count}}: {{.Type}}{{with .Attendee}}
 {{.}}{{end}}
 {{end}}
-{{if .Over}}All {{.Count}} tickets are in the attached PDF, one to a page, and on your order page. That's a lot easier to scroll than {{.Count}} codes in one email.{{else}}They're in the attached PDF too, one to a page, if you'd rather print them.{{end}}
+{{if .Over}}All {{.Count}} tickets are in the attached PDF, one to a page, and on your order page. That's a lot easier to scroll than {{.Count}} codes in one email.{{else}}The PDF has one ticket to a page, if you'd rather print them.{{end}}
 
 Open your order: {{.OrderURL}}
 
 That link is the only key to your tickets. Keep it to yourself: anyone who has it can see them.
 
-Lose this email? Ask for a fresh link at {{.LostLinkURL}}.
+Lose this email? Ask for a fresh link here: {{.LostLinkURL}}
 
 {{.Organizer}} sold you these tickets through TicketSlinger. Something wrong with them? Reply to this email and a person will read it.

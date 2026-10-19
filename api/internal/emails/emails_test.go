@@ -67,16 +67,18 @@ func TestTicketEmailHasCodesPDFAndLink(t *testing.T) {
 		}
 	}
 	for _, s := range []string{"You're going to Spring Social.", "That link is the only key to your tickets. Keep it to yourself: anyone who has it can see them.",
-		"Ticket 3 of 3: General", "Guest 3", "Open your order", "Acme sold you these tickets through TicketSlinger."} {
+		"Ticket 3 of 3: General", "Guest 3", "Open your order", "Bring the codes below to the door",
+		"They're in the attached PDF too, one to a page, if you'd rather print them.",
+		`Ask for a fresh link here: <a href="https://tickets.example/acme/spring-social/order-link" style="color:#1d4ed8;">https://tickets.example/acme/spring-social/order-link</a></p>`, "Acme sold you these tickets through TicketSlinger."} {
 		if !strings.Contains(m.HTML, s) {
 			t.Errorf("HTML lacks %q", s)
 		}
 	}
 	for _, s := range []string{"You're going to Spring Social.", "Oct 14, 2026, 7:00 PM, The Hall.",
-		"Bring the codes below to the door, on your phone or on paper. Each one lets one person in, once.",
-		"Ticket 1 of 3: General\nGuest 1", "They're in the attached PDF too, one to a page, if you'd rather print them.",
+		"Your codes are in the attached PDF and on your order page. Bring them to the door, on your phone or on paper. Each one lets one person in, once.",
+		"Ticket 1 of 3: General\nGuest 1", "The PDF has one ticket to a page, if you'd rather print them.",
 		"That link is the only key to your tickets. Keep it to yourself: anyone who has it can see them.",
-		"Lose this email? Ask for a fresh link at https://tickets.example/acme/spring-social/order-link.",
+		"Lose this email? Ask for a fresh link here: https://tickets.example/acme/spring-social/order-link\n",
 		"Acme sold you these tickets through TicketSlinger. Something wrong with them? Reply to this email and a person will read it."} {
 		if !strings.Contains(m.Text, s) {
 			t.Errorf("text lacks %q", s)
@@ -100,7 +102,7 @@ func TestBigOrderEmailStaysSmall(t *testing.T) {
 		t.Errorf("%d inline, %d attachments", len(ids), len(att))
 	}
 	over := "All 100 tickets are in the attached PDF, one to a page, and on your order page. That's a lot easier to scroll than 100 codes in one email."
-	if !strings.Contains(m.Text, over) || strings.Contains(m.Text, "They're in the attached PDF too") || strings.Contains(m.Text, "Ticket 11 of") {
+	if !strings.Contains(m.Text, over) || strings.Contains(m.Text, "The PDF has one ticket to a page") || strings.Contains(m.Text, "Ticket 11 of") {
 		t.Error("text doesn't send the reader to the PDF")
 	}
 	size := len(m.HTML) + len(m.Text)
