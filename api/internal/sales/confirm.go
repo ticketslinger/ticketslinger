@@ -239,11 +239,15 @@ func closeCheckout(ctx context.Context, tx pgx.Tx, checkout *uuid.UUID) error {
 }
 
 // settle gives the order its final status and its link: a cancelled order's
-// page tells the buyer what happened.
+// page tells the buyer what happened. The payment's client secret goes: the
+// intent is paid or being refunded, so the secret has no use left.
 func (s *Service) settle(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, status string) error {
 	hash := sha256.Sum256([]byte(orderToken(s.SecretKey, orderID)))
-	_, err := tx.Exec(ctx, `update orders set status = $2, magic_token_hash = $3,
-		paid_at = case when $2 = 'paid' then statement_timestamp() end where id = $1`, orderID, status, hash[:])
+	if _, err := tx.Exec(ctx, `update orders set status = $2, magic_token_hash = $3,
+		paid_at = case when $2 = 'paid' then statement_timestamp() end where id = $1`, orderID, status, hash[:]); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `update payments set client_secret = '' where order_id = $1`, orderID)
 	return err
 }
 

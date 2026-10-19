@@ -124,6 +124,7 @@ func newWorker(pool *pgxpool.Pool, m mailer.Mailer, cfg config.Config, pay plugi
 		sales.OrderConfirmationJob: shop.OrderConfirmation(m),
 		sales.RefundJob:            sales.Refund(shop),
 		sales.CancelPaymentJob:     sales.CancelPayment(shop),
+		sales.SettleOrderJob:       sales.SettleOrder(shop),
 	}, Parked: map[string]func(context.Context, []byte, string){sales.RefundJob: sales.RefundParked(shop)}}
 }
 

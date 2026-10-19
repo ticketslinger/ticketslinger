@@ -2,11 +2,15 @@ import { expect, test } from "bun:test";
 import { h } from "preact";
 import { render } from "preact-render-to-string";
 import {
+  afterReturn,
   answersFor,
+  CANCELLED,
   type CheckoutData,
   DECLINED_LATE,
+  EVENT_CANCELLED,
   fieldErrors,
   firstPhase,
+  MESSAGES,
   PENDING,
   Pending,
   payload,
@@ -161,6 +165,7 @@ test("back from the bank with a decline is never the pending page", () => {
 
 test("the pending page still has a way back to the event", () => {
   const data = {
+    id: "c",
     token: "t",
     status: "paying",
     expires_at: "2027-05-02T01:15:00Z",
@@ -179,4 +184,36 @@ test("the pending page still has a way back to the event", () => {
   expect(html).toContain("Back to Spring Gala");
   // No slugs, no link: never a made-up address.
   expect(render(h(Pending, { data: { ...data, organizer: "" } }))).not.toContain("href");
+});
+
+test("back from the bank, Stripe's own word on the payment sets the page", () => {
+  const waiting = { kind: "waiting", test: false, started: true } as const;
+  for (const lapsed of [false, true]) {
+    expect(afterReturn("succeeded", lapsed)).toEqual(waiting);
+    expect(afterReturn("processing", lapsed)).toEqual(waiting);
+    expect(afterReturn("canceled", lapsed)).toEqual({ kind: "over", message: CANCELLED });
+    // Nothing unknown is ever read as nothing charged.
+    expect(afterReturn(undefined, lapsed)).toEqual(waiting);
+    expect(afterReturn("requires_capture", lapsed)).toEqual(waiting);
+    expect(afterReturn("requires_confirmation", lapsed)).toEqual(waiting);
+    for (const unpaid of ["requires_payment_method", "requires_action"]) {
+      expect(afterReturn(unpaid, lapsed)).toEqual(
+        lapsed ? { kind: "over", message: DECLINED_LATE } : { kind: "details" },
+      );
+    }
+  }
+});
+
+test("a stopped payment says so, and never that it may still go through", () => {
+  const at = "2027-05-02T01:15:00Z";
+  expect(waitStep({ status: "cancelled", expires_at: at }, true)).toBe("over");
+  expect(waitStep({ status: "cancelled", expires_at: at }, false)).toBe("over");
+  expect(CANCELLED).not.toContain("may still");
+  expect(CANCELLED).toContain("haven't been charged");
+  expect(EVENT_CANCELLED).toContain("refunding you in full");
+});
+
+test("switched-off card payments are the organizer's doing, not a fault of ours", () => {
+  expect(MESSAGES.payments_refused).toBeDefined();
+  expect(MESSAGES.payments_refused).not.toContain("our side");
 });

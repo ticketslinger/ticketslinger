@@ -228,6 +228,12 @@ func TestSweepRemovesOnlyExpired(t *testing.T) {
 		values ($1, $2, $3, 'TS-AAAAA', 'b@example.com', 1000, 0, 0, 0, 1000, 'pass', '{}', '{}')`, org, event, kept)
 	b[0] = 2
 	must(owner.QueryRow(ctx, `insert into checkouts(organizer_id, event_id, token_hash, expires_at) values ($1, $2, $3, now() - interval '1 day') returning id`, org, event, b).Scan(&recent))
+	// A pending order whose hold ended 30 minutes ago isn't settled yet; kept's (8 days) is.
+	b[0] = 3
+	var lately string
+	must(owner.QueryRow(ctx, `insert into checkouts(organizer_id, event_id, token_hash, expires_at) values ($1, $2, $3, now() - interval '30 minutes') returning id`, org, event, b).Scan(&lately))
+	exec(`insert into orders(organizer_id, event_id, checkout_id, code, email, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents, fee_mode, quote, details)
+		values ($1, $2, $3, 'TS-BBBBB', 'c@example.com', 1000, 0, 0, 0, 1000, 'pass', '{}', '{}')`, org, event, lately)
 
 	states := `insert into stripe_link_states(state_hash, organizer_id, user_id, session_id, expires_at)
 		values (sha256($1::text::bytea), $2, $3, (select id from sessions where token_hash = 'live'), now() + $4::interval)`
@@ -243,11 +249,13 @@ func TestSweepRemovesOnlyExpired(t *testing.T) {
 		`select count(*) from sessions`:                                                     1,
 		`select count(*) from email_tokens`:                                                 1,
 		`select count(*) from webauthn_challenges`:                                          1,
-		`select count(*) from checkouts`:                                                    2,
-		`select count(*) from idempotency_keys`:                                             1,
-		`select count(*) from login_failures where ip = '203.0.113.2'`:                      1,
-		`select count(*) from login_failures`:                                               1,
-		`select count(*) from checkouts where id = '` + gone + `'`:                          0,
+		`select count(*) from checkouts`:                                                    3,
+		`select count(*) from jobs where kind = 'settle_order' and payload->>'order_id' = (select id::text from orders where checkout_id = '` + kept + `')`: 1,
+		`select count(*) from jobs`:                                    1,
+		`select count(*) from idempotency_keys`:                        1,
+		`select count(*) from login_failures where ip = '203.0.113.2'`: 1,
+		`select count(*) from login_failures`:                          1,
+		`select count(*) from checkouts where id = '` + gone + `'`:     0,
 	} {
 		if got := count(t, owner, sql); got != want {
 			t.Errorf("%s = %d, want %d", sql, got, want)
@@ -255,6 +263,9 @@ func TestSweepRemovesOnlyExpired(t *testing.T) {
 	}
 	if err := jobs.Sweep(ctx, pool); err != nil {
 		t.Fatalf("second sweep: %v", err)
+	}
+	if got := count(t, owner, `select count(*) from jobs`); got != 1 {
+		t.Errorf("%d jobs after a second sweep, want the one settle", got)
 	}
 }
 

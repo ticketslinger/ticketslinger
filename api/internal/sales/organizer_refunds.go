@@ -3,9 +3,7 @@ package sales
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -17,9 +15,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
 	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
-	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 	"github.com/ticketslinger/ticketslinger/api/internal/pricing"
-	"github.com/ticketslinger/ticketslinger/api/internal/system"
 )
 
 // RefundRequest is an organizer's refund of an order.
@@ -301,7 +297,7 @@ func CancelEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, confirmNa
 		return res, err
 	}
 	for _, o := range pending {
-		if err := jobs.Enqueue(ctx, tx, CancelPaymentJob, cancelPaymentJob{Organizer: org, Order: o}); err != nil {
+		if err := jobs.Enqueue(ctx, tx, CancelPaymentJob, settleJob{Organizer: org, Order: o}); err != nil {
 			return res, err
 		}
 	}
@@ -320,70 +316,4 @@ func CancelEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, confirmNa
 	return res, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "event.cancelled", EntityType: "event", EntityID: event,
 		Before: map[string]string{"status": status}, After: map[string]any{"status": "cancelled", "orders": res.Orders,
 			"amount_cents": res.AmountCents, "fee_cents": res.FeeCents, "pending_orders": len(pending)}})
-}
-
-// CancelPaymentJob stops the intent of an order still pending on a
-// cancelled event, so nobody is charged for it.
-const CancelPaymentJob = "cancel_payment"
-
-type cancelPaymentJob struct {
-	Organizer uuid.UUID `json:"organizer_id"`
-	Order     uuid.UUID `json:"order_id"`
-}
-
-// CancelPayment handles CancelPaymentJob. The intent is cancelled at Stripe
-// (key cancel-<order>), outside any transaction, and then the order. When
-// Stripe says the intent moved on, its status is read: cancelled already is
-// done; paid after all confirms the order as the webhook would, which on a
-// cancelled event refunds it in full as a late payment; anything else is
-// asked about again later. An order not pending any more, or with no intent,
-// is left alone: nothing can be charged without one, and Pay refuses a
-// cancelled event. ponytail: an intent Pay is still making as this runs
-// isn't cancelled; if it's paid, the late path refunds it.
-func CancelPayment(s *Service) jobs.Handler {
-	return func(ctx context.Context, payload []byte) error {
-		var j cancelPaymentJob
-		if err := json.Unmarshal(payload, &j); err != nil {
-			return err
-		}
-		var status string
-		var intent, account *string
-		err := system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx, `select o.status, p.payment_intent_id, p.stripe_account_id
-				from orders o left join payments p on p.order_id = o.id where o.id = $1`, j.Order).Scan(&status, &intent, &account)
-		})
-		if errors.Is(err, pgx.ErrNoRows) || err == nil && (status != "pending" || intent == nil) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if s.Payments == nil {
-			return errors.New("sales: a payment needs stopping but there's no payment provider")
-		}
-		err = s.Payments.CancelPaymentIntent(ctx, *account, *intent, "cancel-"+j.Order.String())
-		if pe := (*plugin.ProviderError)(nil); errors.As(err, &pe) && pe.Code == "payment_intent_unexpected_state" {
-			st, serr := s.Payments.PaymentIntentStatus(ctx, *account, *intent)
-			switch {
-			case serr != nil:
-				return serr
-			case st == "succeeded":
-				return system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) error { return s.markPaid(ctx, tx, j.Organizer, j.Order) })
-			case st != "canceled":
-				return fmt.Errorf("sales: payment %s, asking again later: %w", st, err)
-			}
-			err = nil
-		}
-		if err != nil {
-			return err
-		}
-		return system.Run(ctx, s.Pool, j.Organizer, func(tx pgx.Tx) error {
-			// The checkout first, then the order, as Pay and confirmOrder take them.
-			if _, err := tx.Exec(ctx, `select 1 from checkouts where id = (select checkout_id from orders where id = $1) for update`, j.Order); err != nil {
-				return err
-			}
-			_, err := tx.Exec(ctx, `update orders set status = 'cancelled' where id = $1 and status = 'pending'`, j.Order)
-			return err
-		})
-	}
 }

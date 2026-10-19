@@ -733,6 +733,28 @@ test("an expired checkout says so and links back, with no script", async () => {
   expect(res.headers.get("content-security-policy")).not.toContain("stripe");
 });
 
+test("a checkout whose payment was stopped says so and links back, with no script", async () => {
+  const { a } = app(() => Response.json(checkout({ status: "cancelled" })));
+  const res = await a.request(`/checkout/${TOK}`);
+  const html = await res.text();
+  expect(res.status).toBe(410);
+  expect(html).toContain("The tickets you were holding have gone back on sale.");
+  expect(html).not.toContain("may still");
+  expect(html).toContain('href="/acme/gala"');
+  expect(html).not.toContain("checkout.js");
+});
+
+test("a cancelled event's checkout says the event is cancelled", async () => {
+  const { a } = app(() =>
+    Response.json({ error: { code: "event_cancelled", message: "m" } }, { status: 409 }),
+  );
+  const res = await a.request(`/checkout/${TOK}`);
+  const html = await res.text();
+  expect(res.status).toBe(409);
+  expect(html).toContain("This event has been cancelled, so it");
+  expect(html).toContain("refunding you in full");
+});
+
 test("a paying checkout past its hold keeps the island, never the expired page", async () => {
   // The 3D Secure return_url lands here after the hold ran out, with a card maybe charged.
   const { a } = app(() =>
@@ -744,7 +766,10 @@ test("a paying checkout past its hold keeps the island, never the expired page",
   expect(html).not.toContain("back on sale");
   expect(html).toContain("checkout.js");
   const block = html.match(/<script type="application\/json" id="checkout-data">(.*?)<\/script>/s);
-  expect(JSON.parse(block?.[1] ?? "").status).toBe("paying");
+  const data = JSON.parse(block?.[1] ?? "");
+  expect(data.status).toBe("paying");
+  // The id names what the island keeps across the bank's redirect, so the token never has to.
+  expect(data.id).toBe(checkout({}).id);
 });
 
 test("an unknown or malformed checkout token is the 404 page", async () => {
