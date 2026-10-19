@@ -119,7 +119,7 @@ func TestCheckinSearchAndSummary(t *testing.T) {
 	door := s.member("door@example.com", "checkin")
 	r := s.must(s.do(door, "POST", s.checkinPath(""), `{"qr":"`+qrs[0]+`"}`), 200)
 	tk, _ := r["ticket"].(map[string]any)
-	if r["result"] != "accepted" || tk["attendee_name"] != "Ada" || tk["order_code"] != code || tk["email"] != "buyer@example.com" || tk["checked_in_at"] == nil {
+	if r["result"] != "accepted" || tk["attendee_name"] != "Ada" || tk["order_code"] != code || tk["checked_in_at"] == nil {
 		t.Fatalf("scan: %v", r)
 	}
 	found := s.jsonList(s.do(door, "GET", s.checkinPath("/search?q=ada"), ""))
@@ -128,6 +128,17 @@ func TestCheckinSearchAndSummary(t *testing.T) {
 	}
 	if f := found[0].(map[string]any); f["id"] != tk["id"] || f["order_code"] != code || f["status"] != "valid" || f["checked_in_at"] == nil {
 		t.Fatalf("search ada: %v", f)
+	}
+	// The buyer's email finds their tickets but never comes back: the door
+	// sees a name and an order code, not an address to copy down.
+	byEmail := s.jsonList(s.do(door, "GET", s.checkinPath("/search?q=buyer@example"), ""))
+	if len(byEmail) != 2 {
+		t.Fatalf("search by email: %v", byEmail)
+	}
+	for _, got := range append(byEmail, tk) {
+		if _, has := got.(map[string]any)["email"]; has {
+			t.Fatalf("a check-in ticket carries the buyer's email: %v", got)
+		}
 	}
 	sum := s.must(s.do(door, "GET", s.checkinPath("/summary"), ""), 200)
 	if sum["checked_in"] != float64(1) || sum["sold"] != float64(2) {
@@ -182,6 +193,25 @@ func TestCheckinBounds(t *testing.T) {
 		t.Fatalf("search ab: %v", list)
 	}
 	s.must(s.do(s.owner, "GET", s.checkinPath("/search?q="+strings.Repeat("a", 120)), ""), 200)
+}
+
+// Search reads names and order codes, so one caller can't page through
+// every ticket of an event without end.
+func TestCheckinSearchIsRateLimited(t *testing.T) {
+	s := newShop(t, nil)
+	for i := range 600 {
+		if res := s.do(s.owner, "GET", s.checkinPath("/search?q=ada"), ""); res.StatusCode != 200 {
+			t.Fatalf("search %d: %d", i, res.StatusCode)
+		}
+	}
+	res := s.do(s.owner, "GET", s.checkinPath("/search?q=ada"), "")
+	if res.StatusCode != 429 || s.errorCode(res) != "rate_limited" || res.Header.Get("Retry-After") == "" {
+		t.Fatalf("search 601: %d %q, want 429 rate_limited with Retry-After", res.StatusCode, s.errorCode(res))
+	}
+	// Scans keep their own count, and another caller has a count of its own.
+	s.must(s.do(s.owner, "POST", s.checkinPath(""), `{"qr":"not-a-ticket"}`), 200)
+	_, key := s.createKey(s.owner, "acme", "read")
+	s.must(s.do(key, "GET", s.checkinPath("/search?q=ada"), ""), 200)
 }
 
 // Every invalid scan writes a checkins row, so one caller can't scan without end.

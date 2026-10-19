@@ -3,7 +3,7 @@ import { ApiFailure } from "../api";
 import { eventTabs } from "./Events";
 import { ROLE } from "./Home";
 import type { Org } from "./Organizer";
-import { explain, ROLE_CHOICES } from "./Team";
+import { explain, ROLE_CHOICES, removeWarning } from "./Team";
 
 test("roles read as the spec words them", () => {
   expect([ROLE.owner, ROLE.admin, ROLE.checkin]).toEqual(["Owner", "Admin", "Check-in"]);
@@ -36,4 +36,10 @@ test("check-in staff get no Orders tab; editors do", () => {
   expect(tabs("owner")).toContain("Orders");
   for (const role of ["owner", "admin", "checkin"] as const)
     expect(tabs(role)).toContain("Check-in");
+});
+
+test("the remove confirm says their keys stop working too", () => {
+  expect(removeWarning("Acme")).toBe(
+    "They lose access to Acme straight away, and any API keys they made here stop working.",
+  );
 });

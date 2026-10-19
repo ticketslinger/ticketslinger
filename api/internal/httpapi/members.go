@@ -115,18 +115,9 @@ func (s *server) RemoveMember(ctx context.Context, req RemoveMemberRequestObject
 		if err != nil {
 			return err
 		}
-		// Their live keys, read before remove_member revokes them, for the audit log.
-		rows, err := tx.Query(ctx, `select id, name, prefix, scope from api_keys
-			where organizer_id = $1 and created_by = $2 and revoked_at is null`, org.ID, req.Member)
-		if err != nil {
-			return err
-		}
-		keys, err := pgx.CollectRows(rows, pgx.RowToStructByPos[revokedKey])
-		if err != nil {
-			return err
-		}
 		var r string
-		if err := tx.QueryRow(ctx, `select remove_member($1)`, req.Member).Scan(&r); err != nil {
+		var revoked []uuid.UUID
+		if err := tx.QueryRow(ctx, `select result, revoked from remove_member($1)`, req.Member).Scan(&r, &revoked); err != nil {
 			return err
 		}
 		switch r {
@@ -139,6 +130,15 @@ func (s *server) RemoveMember(ctx context.Context, req RemoveMemberRequestObject
 		case "removed":
 		default:
 			return errors.New("remove_member: unexpected result " + r)
+		}
+		// Exactly the keys remove_member revoked, one made a moment ago included.
+		rows, err := tx.Query(ctx, `select id, name, prefix, scope from api_keys where id = any($1) order by id`, revoked)
+		if err != nil {
+			return err
+		}
+		keys, err := pgx.CollectRows(rows, pgx.RowToStructByPos[revokedKey])
+		if err != nil {
+			return err
 		}
 		for _, k := range keys {
 			if err := audit.Write(ctx, tx, audit.Entry{Organizer: org.ID, Actor: actorFrom(ctx), Action: "api_key.revoked",

@@ -10,10 +10,13 @@ function fakeForm(token: string | null = "") {
   const box = { dataset: { sitekey: "1x00000000000000000000AA" } };
   // Like the browser's: requestSubmit fires submit, and only an unprevented one sends the form.
   // Capped, so a loop shows up as a count instead of a frozen test run.
+  const view = new EventTarget();
+  const buttons = [{ disabled: true }];
   const form = Object.assign(new EventTarget(), {
     submitted: 0,
     requested: 0,
-    ownerDocument: { createElement: (): Field => ({ value: "" }) },
+    ownerDocument: { createElement: (): Field => ({ value: "" }), defaultView: view },
+    querySelectorAll: () => buttons,
     append(el: Field) {
       field = el;
     },
@@ -28,6 +31,8 @@ function fakeForm(token: string | null = "") {
   return {
     form,
     box,
+    view,
+    buttons,
     field: () => field,
     setField: (v: string) => {
       if (field) field.value = v;
@@ -37,7 +42,7 @@ function fakeForm(token: string | null = "") {
 
 /** A load() that counts calls and hands back a widget whose check passes when `pass()` is called. */
 function fakeLoad(mode: "ok" | "fail" | "throw" = "ok") {
-  const calls = { load: 0, render: [] as unknown[] };
+  const calls = { load: 0, render: [] as unknown[], reset: [] as unknown[] };
   let pass = () => {};
   let error = () => {};
   const turnstile: Turnstile = {
@@ -46,6 +51,9 @@ function fakeLoad(mode: "ok" | "fail" | "throw" = "ok") {
       calls.render.push([el, o.sitekey]);
       pass = () => o.callback("tok");
       error = () => o["error-callback"]?.("110200");
+    },
+    reset(el) {
+      calls.reset.push(el);
     },
   };
   const load = () => {
@@ -213,4 +221,36 @@ test("a held submit disables its button only when the form actually goes", async
   await tick();
   expect(form.submitted).toBe(1);
   expect(button.disabled).toBe(true);
+});
+
+/** The browser restoring the page from the back/forward cache, or not. */
+const pageshow = (persisted: boolean) => Object.assign(new Event("pageshow"), { persisted });
+
+test("back from the next page, the spent token is dropped and the check runs again", async () => {
+  const { form, box, view, buttons, field, setField } = fakeForm();
+  const { calls, load, pass } = fakeLoad();
+  lazyCheck(form as unknown as HTMLFormElement, load);
+  form.dispatchEvent(new Event("focusin"));
+  await tick();
+  pass();
+  setField("tok");
+  view.dispatchEvent(pageshow(true));
+  expect(buttons[0]?.disabled).toBe(false);
+  expect(field()?.value).toBe("");
+  expect(calls.reset).toEqual([box]);
+  // So the next submit waits for a fresh token instead of resending the old one.
+  const e = submit();
+  form.dispatchEvent(e);
+  expect(e.defaultPrevented).toBe(true);
+});
+
+test("a first visit, or a restore before Turnstile loaded, resets nothing", async () => {
+  const { form, view, field } = fakeForm("tok");
+  const { calls, load } = fakeLoad();
+  lazyCheck(form as unknown as HTMLFormElement, load);
+  view.dispatchEvent(pageshow(false));
+  expect(field()?.value).toBe("tok");
+  view.dispatchEvent(pageshow(true));
+  expect(field()?.value).toBe("");
+  expect(calls.reset).toEqual([]);
 });

@@ -3,8 +3,17 @@ package httpapi_test
 import (
 	"context"
 	"io"
+	"net/http"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/ticketslinger/ticketslinger/api/internal/apikeys"
+	"github.com/ticketslinger/ticketslinger/api/internal/db"
 	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
 )
 
@@ -163,5 +172,138 @@ func TestRemovingAMemberRevokesTheirKeys(t *testing.T) {
 	if n := s.count(`select count(*) from audit_log where action = 'api_key.revoked' and entity_type = 'api_key' and entity_id = $1
 		and before->>'scope' = 'write' and actor_user_id is not null`, adminKeyID); n != 1 {
 		t.Fatalf("api_key.revoked rows: %d, want 1", n)
+	}
+}
+
+// waitForLockWaiters returns once n backends of this database wait on a lock.
+func (s shop) waitForLockWaiters(n int) {
+	s.t.Helper()
+	owner := testdb.Owner(s.t, s.pool)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		if err := owner.QueryRow(context.Background(), `select count(distinct l.pid) from pg_locks l
+			join pg_stat_activity a on a.pid = l.pid where not l.granted and a.datname = current_database()`).Scan(&waiting); err != nil {
+			s.t.Fatal(err)
+		}
+		if waiting >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			s.t.Fatalf("%d backends waiting on a lock after 10s, want %d", waiting, n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// send runs a request off the test goroutine and reports its status.
+func (s shop) sendAsync(token, method, path string) <-chan int {
+	out := make(chan int, 1)
+	go func() {
+		req, _ := http.NewRequest(method, s.srv.URL+path, strings.NewReader(`{"name":"CI","scope":"write"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		res, err := s.client.Do(req)
+		if err != nil {
+			out <- 0
+			return
+		}
+		_ = res.Body.Close()
+		out <- res.StatusCode
+	}()
+	return out
+}
+
+func (s shop) orgID() uuid.UUID {
+	s.t.Helper()
+	var id uuid.UUID
+	if err := testdb.Owner(s.t, s.pool).QueryRow(context.Background(), `select id from organizers where slug = 'acme'`).Scan(&id); err != nil {
+		s.t.Fatal(err)
+	}
+	return id
+}
+
+// An admin making a key at the moment they're removed can't keep it: the
+// removal waits for the key, then revokes it and logs that.
+func TestKeyMadeDuringRemovalIsRevoked(t *testing.T) {
+	s := newShop(t, nil)
+	s.member("admin@example.com", "admin")
+	admin := uuid.MustParse(s.userID("admin@example.com"))
+	org := s.orgID()
+	made, release := make(chan uuid.UUID), make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	created := make(chan error, 1)
+	go func() {
+		created <- db.WithOrganizer(context.Background(), s.pool, admin, org, func(tx pgx.Tx, _ string) error {
+			k, _, err := apikeys.New(s.pool).Create(context.Background(), tx, org, admin, "CI", "write")
+			if err != nil {
+				close(made)
+				return err
+			}
+			made <- k.ID
+			<-release
+			return nil
+		})
+	}()
+	key, ok := <-made
+	if !ok {
+		t.Fatal(<-created)
+	}
+	removed := s.sendAsync(s.owner, "DELETE", membersPath+"/"+admin.String())
+	s.waitForLockWaiters(1)
+	once.Do(func() { close(release) })
+	if err := <-created; err != nil {
+		t.Fatal(err)
+	}
+	if code := <-removed; code != 204 {
+		t.Fatalf("remove: %d, want 204", code)
+	}
+	if n := s.count(`select count(*)::int from api_keys where id = $1 and revoked_at is not null`, key); n != 1 {
+		t.Fatal("the key made during the removal still works")
+	}
+	if n := s.count(`select count(*)::int from audit_log where action = 'api_key.revoked' and entity_id = $1
+		and before->>'scope' = 'write' and actor_user_id is not null`, key); n != 1 {
+		t.Fatalf("api_key.revoked rows: %d, want 1", n)
+	}
+}
+
+// The other way round: a key asked for while the removal is under way waits
+// for it, then finds them gone.
+func TestKeyAskedForDuringRemovalIsRefused(t *testing.T) {
+	s := newShop(t, nil)
+	adminTok := s.member("admin@example.com", "admin")
+	admin := uuid.MustParse(s.userID("admin@example.com"))
+	var owner uuid.UUID
+	if err := testdb.Owner(t, s.pool).QueryRow(context.Background(), `select user_id from memberships where role = 'owner'`).Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	var r string
+	if err := tx.QueryRow(ctx, `select set_config('app.user_id', $1, true), set_config('app.organizer_id', $2, true)`,
+		owner.String(), s.orgID().String()).Scan(&r, &r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `select 1 from remove_member($1)`, admin); err != nil {
+		t.Fatal(err)
+	}
+	asked := s.sendAsync(adminTok, "POST", "/v1/organizers/acme/api-keys")
+	s.waitForLockWaiters(1)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := s.count(`select count(*)::int from memberships where user_id = $1`, admin); n != 0 {
+		t.Fatal("remove_member left them on the team")
+	}
+	if code := <-asked; code != 404 {
+		t.Fatalf("create key after removal: %d, want 404", code)
+	}
+	if n := s.count(`select count(*)::int from api_keys where created_by = $1 and revoked_at is null`, admin); n != 0 {
+		t.Fatalf("%d live keys for a removed admin", n)
 	}
 }

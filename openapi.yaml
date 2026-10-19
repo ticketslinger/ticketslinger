@@ -711,7 +711,7 @@ paths:
   /organizers/{organizer}/events/{event}/checkins/search:
     get:
       operationId: searchCheckinTickets
-      description: "Any member, or any API key. Finds up to 20 of the event's tickets by attendee name or buyer email (any part, any case) or by order code (with or without TS-), valid tickets first, then by name. 422 (field q) if q is over 120 characters, or under 2 once spaces around it are dropped."
+      description: "Any member, or any API key. Finds up to 20 of the event's tickets by attendee name or buyer email (any part, any case) or by order code (with or without TS-), valid tickets first, then by name. The email only finds tickets; it never comes back. 422 (field q) if q is over 120 characters, or under 2 once spaces around it are dropped. 429 rate_limited after 600 searches in a minute from one caller at one event."
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
@@ -723,6 +723,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/checkins/summary:
     get:
       operationId: getCheckinSummary
@@ -1329,12 +1330,11 @@ components:
         gate: { type: string, maxLength: 40, description: "Which door, if you name them." }
     CheckinTicket:
       type: object
-      required: [id, ticket_type_name, attendee_name, email, order_code, status, checked_in_at]
+      required: [id, ticket_type_name, attendee_name, order_code, status, checked_in_at]
       properties:
         id: { type: string, format: uuid }
         ticket_type_name: { type: string }
         attendee_name: { type: string }
-        email: { type: string, description: "The buyer's address." }
         order_code: { type: string }
         status: { type: string, enum: [valid, void] }
         checked_in_at: { type: [string, "null"], format: date-time, description: "When it was first checked in; null if it hasn't been." }

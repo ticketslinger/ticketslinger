@@ -21,6 +21,9 @@ export const TEAM_ERRORS: Record<string, string> = {
   cannot_remove: "Owners can't be removed here, and you can't remove yourself.",
 };
 
+export const removeWarning = (org: string) =>
+  `They lose access to ${org} straight away, and any API keys they made here stop working.`;
+
 export function explain(e: unknown): unknown {
   if (!(e instanceof ApiFailure)) return e;
   const copy = TEAM_ERRORS[e.code];
@@ -157,7 +160,7 @@ function MemberRow({
           {m.role !== "owner" &&
             (confirming ? (
               <>
-                <p>They lose access to {org.name} straight away.</p>
+                <p>{removeWarning(org.name)}</p>
                 <div className="row">
                   <button
                     type="button"

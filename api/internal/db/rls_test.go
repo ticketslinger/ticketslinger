@@ -730,7 +730,7 @@ func TestTeamFunctionsAreOwnersOnly(t *testing.T) {
 	}
 	for q, args := range map[string][]any{
 		`select add_member('c@example.com', 'checkin')`: nil,
-		`select remove_member($1)`:                      {ua},
+		`select result from remove_member($1)`:          {ua},
 	} {
 		if r, err := call(ub, q, args...); err != nil || r != "forbidden" {
 			t.Errorf("admin %s: %q %v, want forbidden", q, r, err)
@@ -740,7 +740,7 @@ func TestTeamFunctionsAreOwnersOnly(t *testing.T) {
 	if _, err := call(ua, `select add_member('c@example.com', 'owner')`); !errors.As(err, &pgErr) || pgErr.Code != "23514" {
 		t.Fatalf("role owner: %v, want check_violation", err)
 	}
-	if r, err := call(ua, `select remove_member($1)`, ua); err != nil || r != "cannot_remove" {
+	if r, err := call(ua, `select result from remove_member($1)`, ua); err != nil || r != "cannot_remove" {
 		t.Fatalf("owner removing themself: %q %v", r, err)
 	}
 	var n int

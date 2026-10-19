@@ -11,6 +11,7 @@ export type Turnstile = {
       "error-callback"?(code: string): void;
     },
   ): unknown;
+  reset(el: Element): void;
 };
 
 const API = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
@@ -44,11 +45,13 @@ export function lazyCheck(form: HTMLFormElement, load: () => Promise<Turnstile>)
     send();
   };
   let started = false;
+  let widget: Turnstile | undefined;
   const start = () => {
     if (started) return;
     started = true;
     load()
       .then((t) => {
+        widget = t;
         t.render(box, {
           sitekey: box.dataset.sitekey ?? "",
           // The token goes in the form's field before the held submit reads it.
@@ -62,9 +65,14 @@ export function lazyCheck(form: HTMLFormElement, load: () => Promise<Turnstile>)
       // A throw from render (no turnstile global, a bad site key) fails the same way.
       .catch(fail);
   };
-  // Back from the next page, out of the back/forward cache: the button works again.
+  // Back from the next page, out of the back/forward cache: the button works again, and the
+  // token it sent is spent, so it goes and the widget fetches a fresh one.
   form.ownerDocument.defaultView?.addEventListener("pageshow", (e) => {
-    if (e.persisted) for (const b of form.querySelectorAll("button")) b.disabled = false;
+    if (!e.persisted) return;
+    for (const b of form.querySelectorAll("button")) b.disabled = false;
+    const token = form.querySelector<HTMLInputElement>('input[name="cf-turnstile-response"]');
+    if (token) token.value = "";
+    widget?.reset(box);
   });
   for (const type of ["focusin", "change", "pointerdown"]) {
     form.addEventListener(type, start, { once: true });

@@ -51,8 +51,8 @@ type server struct {
 	// Per client address (ratelimit.AddrKey): checkouts created, pay calls,
 	// storefront reads that try a code, order page reads, and order link requests.
 	checkoutLimit, payLimit, codeLimit, orderLimit, linkLimit *ratelimit.Limiter
-	// Per caller (user or API key) and event: check-in scans.
-	checkinLimit *ratelimit.Limiter
+	// Per caller (user or API key) and event: check-in scans and searches.
+	checkinLimit, searchLimit *ratelimit.Limiter
 }
 
 func New(d Deps) http.Handler {
@@ -69,7 +69,7 @@ func New(d Deps) http.Handler {
 	noStore := noStoreRoutes()
 	s := &server{Deps: d, public: publicRoutes(), checkoutLimit: ratelimit.New(10, time.Minute), payLimit: ratelimit.New(20, time.Minute),
 		codeLimit: ratelimit.New(30, time.Minute), orderLimit: ratelimit.New(60, time.Minute), linkLimit: ratelimit.New(5, time.Hour),
-		checkinLimit: ratelimit.New(300, time.Minute)}
+		checkinLimit: ratelimit.New(300, time.Minute), searchLimit: ratelimit.New(600, time.Minute)}
 	strict := NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc:  func(w http.ResponseWriter, r *http.Request, err error) { writeBadRequest(w, r, err) },
 		ResponseErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) { writeError(w, err) },
