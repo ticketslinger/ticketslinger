@@ -227,11 +227,11 @@ func checkMail(c *Config) error {
 	}
 	if c.MailAlertTo != "" {
 		if _, err := mail.ParseAddress(c.MailAlertTo); err != nil {
-			return errors.New("TS_MAIL_ALERT_TO must be an address like james@example.com")
+			return errors.New("TS_MAIL_ALERT_TO must be an address like you@example.com")
 		}
 	}
 	// A typo here would send the bearer key in clear.
-	if a, err := url.Parse(c.ResendAPIURL); err != nil || a.Scheme != "https" && (a.Scheme != "http" || !IsLocalHost(a.Hostname())) {
+	if a, err := url.Parse(c.ResendAPIURL); err != nil || a.Hostname() == "" || a.Scheme != "https" && (a.Scheme != "http" || !IsLocalHost(a.Hostname())) {
 		return errors.New("TS_RESEND_API_URL must be https:// unless it points at localhost")
 	}
 	if s := c.ResendWebhookSecret; s != "" && !strings.HasPrefix(s, "whsec_") {

@@ -245,3 +245,27 @@ func TestDailyQuotaWaitsForMidnightUTC(t *testing.T) {
 		t.Fatalf("run_at %v attempts %d last_error %q, want %v, 0, the quota code", runAt, attempts, lastError, before)
 	}
 }
+
+func TestResendDoesNotFollowRedirects(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if r.URL.Path == "/emails" {
+			http.Redirect(w, r, "/elsewhere", http.StatusTemporaryRedirect)
+		}
+	}))
+	defer srv.Close()
+	err := provider(srv.URL).Send(context.Background(), mailer.Message{To: "a@example.com", Subject: "Hi", Text: "Hi"})
+	if e, ok := errors.AsType[*mailer.Error](err); !ok || e.Kind != mailer.Retry || e.Problem != "unreachable" || e.Status != 307 || hits != 1 {
+		t.Fatalf("err %v after %d requests, want a 307 kept as unreachable and no second request", err, hits)
+	}
+}
+
+func TestResendTrimsTheURLsTrailingSlash(t *testing.T) {
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { path = r.URL.Path }))
+	defer srv.Close()
+	if err := provider(srv.URL+"/").Send(context.Background(), mailer.Message{To: "a@example.com", Subject: "Hi", Text: "Hi"}); err != nil || path != "/emails" {
+		t.Fatalf("err %v path %q, want /emails", err, path)
+	}
+}

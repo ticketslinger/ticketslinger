@@ -239,10 +239,11 @@ func TestMailConfig(t *testing.T) {
 		{name: "bad from", url: prod, mail: "resend", key: "re_abc", from: "tickets at example", wantErr: "TS_MAIL_FROM must be an address like TicketSlinger <tickets@example.com>"},
 		{name: "plain http api", url: prod, mail: "resend", key: "re_abc", apiURL: "http://api.resend.com", wantErr: "TS_RESEND_API_URL must be https:// unless it points at localhost"},
 		{name: "loopback api", url: prod, mail: "resend", key: "re_abc", apiURL: "http://127.0.0.1:9999", want: "resend"},
+		{name: "https api without a host", url: prod, mail: "resend", key: "re_abc", apiURL: "https:///emails", wantErr: "TS_RESEND_API_URL must be https:// unless it points at localhost"},
 		{name: "https api", url: prod, mail: "resend", key: "re_abc", apiURL: "https://api.resend.com", want: "resend"},
 		{name: "bad webhook secret", url: prod, mail: "resend", key: "re_abc", hook: "sec_x", wantErr: "TS_RESEND_WEBHOOK_SECRET must start with whsec_"},
 		{name: "webhook secret", url: prod, mail: "resend", key: "re_abc", hook: "whsec_x", want: "resend"},
-		{name: "bad alert address", url: prod, mail: "resend", key: "re_abc", alert: "nobody", wantErr: "TS_MAIL_ALERT_TO must be an address"},
+		{name: "bad alert address", url: prod, mail: "resend", key: "re_abc", alert: "nobody", wantErr: "TS_MAIL_ALERT_TO must be an address like you@example.com"},
 		{name: "alert address", url: prod, mail: "resend", key: "re_abc", alert: "james@example.com", want: "resend"},
 		{name: "unknown provider", url: prod, mail: "sendgrid", wantErr: "TS_MAIL must be resend, smtp or log"},
 	} {

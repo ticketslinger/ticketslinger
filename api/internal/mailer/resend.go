@@ -48,7 +48,10 @@ type resendEmail struct {
 
 var resendCodeRe = regexp.MustCompile(`^[a-z_]{1,64}$`)
 
-var defaultResendClient = &http.Client{Timeout: 15 * time.Second}
+// defaultResendClient never follows a redirect: a 3xx is an answer, kept as
+// unreachable, and the bearer key stays with the host it was meant for.
+var defaultResendClient = &http.Client{Timeout: 15 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 func (r *Resend) Send(ctx context.Context, m Message) error {
 	body := resendEmail{From: r.From, To: []string{m.To}, Subject: m.Subject, HTML: m.HTML, Text: m.Text}
@@ -64,8 +67,9 @@ func (r *Resend) Send(ctx context.Context, m Message) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.URL+"/emails", bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(r.URL, "/")+"/emails", bytes.NewReader(b))
 	if err != nil {
+		slog.ErrorContext(ctx, "resend: TS_RESEND_API_URL can't make a request; email waits until it is fixed")
 		return &Error{Provider: "resend", Kind: Retry, Code: "config", Problem: "config"}
 	}
 	req.Header.Set("Authorization", "Bearer "+r.Key)
