@@ -678,3 +678,112 @@ func TestDeliverMapsKinds(t *testing.T) {
 		t.Fatalf("run_at %v attempts %d, want %v and 0", runAt, attempts, want)
 	}
 }
+
+func quotaSubjects(t *testing.T, pool *pgxpool.Pool) (subs []string) {
+	t.Helper()
+	rows, err := pool.Query(context.Background(), `select payload->>'subject' from jobs where kind = 'send_email' order by id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		subs = append(subs, s)
+	}
+	return subs
+}
+
+func TestQuotaAlertsOncePerThreshold(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	watch := jobs.QuotaWatch(pool, "owner@example.com", func() time.Time { return time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC) })
+	watch(ctx, -1, -1)
+	watch(ctx, 10, 2399)
+	if n := count(t, pool, `select count(*) from mail_alerts`) + count(t, pool, `select count(*) from jobs`); n != 0 {
+		t.Fatalf("below every threshold: %d rows", n)
+	}
+	watch(ctx, 10, 2400)
+	want := []string{"TicketSlinger has sent 2,400 of its 3,000 emails this month"}
+	if got := quotaSubjects(t, pool); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %q", got)
+	}
+	watch(ctx, 11, 2401)
+	if got := quotaSubjects(t, pool); len(got) != 1 {
+		t.Fatalf("repeat sent again: %q", got)
+	}
+	watch(ctx, 80, 2860)
+	got := quotaSubjects(t, pool)
+	if len(got) != 3 || got[1] != "TicketSlinger has sent 2,860 of its 3,000 emails this month" || got[2] != "TicketSlinger has sent 80 of today's 100 emails" {
+		t.Fatalf("got %q", got)
+	}
+	if n := count(t, pool, `select count(*) from mail_alerts where key in ('month-2400-2026-10','month-2850-2026-10','day-80-2026-10-18')`); n != 3 {
+		t.Fatalf("keys: %d", n)
+	}
+}
+
+func TestQuotaAlertsWithoutAnAddressOnlyLog(t *testing.T) {
+	pool := testdb.New(t)
+	jobs.QuotaWatch(pool, "", time.Now)(context.Background(), 80, 10)
+	if a, j := count(t, pool, `select count(*) from mail_alerts`), count(t, pool, `select count(*) from jobs`); a != 1 || j != 0 {
+		t.Fatalf("alerts %d jobs %d", a, j)
+	}
+}
+
+func TestQuotaAlertCopy(t *testing.T) {
+	pool := testdb.New(t)
+	jobs.QuotaWatch(pool, "o@example.com", time.Now)(context.Background(), 80, 2860)
+	var m, d string
+	if err := pool.QueryRow(context.Background(), `select payload->>'text' from jobs order by id limit 1`).Scan(&m); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(context.Background(), `select payload->>'text' from jobs order by id desc limit 1`).Scan(&d); err != nil {
+		t.Fatal(err)
+	}
+	wantM := "Resend's free plan stops at 3,000 emails a month (and 100 a day), and this server has sent 2,860 this month. On the free plan, ticket emails past the limit wait until the quota resets, so if sales are still coming, upgrade before then: Resend Pro is $20 a month for 50,000. Already on a paid plan? You can ignore this."
+	wantD := "Resend's free plan allows 100 emails a day, counted in UTC, and this server has sent 80 today. On the free plan, ticket emails past that wait for midnight UTC and then go out by themselves. If this keeps happening on sale days, Resend Pro ($20 a month) has no daily cap. Already on a paid plan? You can ignore this."
+	if m != wantM || d != wantD {
+		t.Fatalf("monthly %q\ndaily %q", m, d)
+	}
+}
+
+func TestQuotaAlertsRollOverWithThePeriod(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	at := time.Date(2026, 10, 31, 23, 0, 0, 0, time.UTC)
+	watch := jobs.QuotaWatch(pool, "o@example.com", func() time.Time { return at })
+	watch(ctx, 80, 2400)
+	at = time.Date(2026, 11, 1, 0, 1, 0, 0, time.UTC)
+	watch(ctx, 80, 2400)
+	if n := count(t, pool, `select count(*) from jobs`); n != 4 {
+		t.Fatalf("jobs %d, want 4", n)
+	}
+}
+
+func TestQuotaAlertBoundaries(t *testing.T) {
+	pool := testdb.New(t)
+	jobs.QuotaWatch(pool, "o@example.com", time.Now)(context.Background(), 79, 2849)
+	if n := count(t, pool, `select count(*) from mail_alerts where key like 'day-%' or key like 'month-2850%'`); n != 0 {
+		t.Fatalf("rows %d", n)
+	}
+}
+
+func TestQuotaAlertEnqueueFailureLeavesNoRow(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	owner := testdb.Owner(t, pool)
+	for _, q := range []string{
+		`create function deny_jobs() returns trigger language plpgsql as $$ begin raise exception 'no'; end $$`,
+		`create trigger deny before insert on jobs for each row execute function deny_jobs()`,
+	} {
+		if _, err := owner.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobs.QuotaWatch(pool, "o@example.com", time.Now)(ctx, 80, 2400)
+	if n := count(t, pool, `select count(*) from mail_alerts`); n != 0 {
+		t.Fatalf("rows %d, want 0", n)
+	}
+}
