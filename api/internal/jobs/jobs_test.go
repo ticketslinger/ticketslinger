@@ -563,3 +563,24 @@ func TestSweepDeletesParkedJobsAfter30Days(t *testing.T) {
 		t.Fatal("31-day-old parked job survived")
 	}
 }
+
+func TestDelayInThePastStillWaits(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	w := &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{"mail": func(context.Context, []byte) error {
+		return jobs.Delay(time.Now().Add(-time.Hour), errors.New("later"))
+	}}}
+	enqueue(t, pool, "mail", 1)
+	if ran, err := w.RunOnce(ctx); !ran || err != nil {
+		t.Fatal(ran, err)
+	}
+	if n := count(t, pool, `select count(*) from jobs where run_at > now()`); n != 1 {
+		t.Fatal("a Delay in the past left the job due at once")
+	}
+}
+
+func TestNilErrorsStayNil(t *testing.T) {
+	if jobs.Permanent(nil) != nil || jobs.Delay(time.Now(), nil) != nil {
+		t.Fatal("wrapping nil must give nil")
+	}
+}
