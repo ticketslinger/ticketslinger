@@ -7,6 +7,8 @@ const base = [
 ];
 const extra = {
   plain: [],
+  // The buyer's order page shows its QR codes as data: PNGs, from the API.
+  order: ["img-src 'self' data:"],
   turnstile: [
     "script-src 'self' https://challenges.cloudflare.com",
     "frame-src https://challenges.cloudflare.com",

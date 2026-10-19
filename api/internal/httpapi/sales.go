@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -23,6 +24,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/plugin"
 	"github.com/ticketslinger/ticketslinger/api/internal/ratelimit"
 	"github.com/ticketslinger/ticketslinger/api/internal/sales"
+	"github.com/ticketslinger/ticketslinger/api/internal/tickets"
 )
 
 // providerError logs what the payment provider said and answers 503:
@@ -669,14 +671,48 @@ func (s *server) GetOrder(ctx context.Context, req GetOrderRequestObject) (GetOr
 	out.Event.Status = OrderEventStatus(e.Status)
 	out.RefundedCents, out.ReturnedCents = o.RefundedCents, o.ReturnedCents
 	for _, t := range o.Tickets {
-		qr := nullable.NewNullNullable[string]()
+		qr, qrPNG := nullable.NewNullNullable[string](), nullable.NewNullNullable[string]()
 		if t.QR != "" {
+			png, err := tickets.PNG(t.QR)
+			if err != nil {
+				return nil, err
+			}
 			qr.Set(t.QR)
+			qrPNG.Set(base64.StdEncoding.EncodeToString(png))
 		}
 		out.Tickets = append(out.Tickets, OrderTicket{Id: t.ID, TicketTypeName: t.TicketTypeName, AttendeeName: t.AttendeeName,
-			Status: OrderTicketStatus(t.Status), Refunded: t.Refunded, Qr: qr})
+			Status: OrderTicketStatus(t.Status), Refunded: t.Refunded, Qr: qr, QrPng: qrPNG})
 	}
 	return GetOrder200JSONResponse(out), nil
+}
+
+// GetOrderPDF is the order's tickets as a PDF, for whoever holds its token,
+// counted as an order read. privateAnswers sets no-store and no-referrer.
+func (s *server) GetOrderPDF(ctx context.Context, req GetOrderPDFRequestObject) (GetOrderPDFResponseObject, error) {
+	if err := allow(ctx, s.orderLimit); err != nil {
+		return nil, err
+	}
+	pdf, name, err := s.Sales.OrderPDF(ctx, req.Code, req.Params.Token)
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return GetOrderPDF200ApplicationpdfResponse{Body: bytes.NewReader(pdf), ContentLength: int64(len(pdf)),
+		Headers: GetOrderPDF200ResponseHeaders{ContentDisposition: `attachment; filename="` + name + `"`}}, nil
+}
+
+// RequestTicketEmail is the buyer's "Email me my tickets again", counted as
+// an order read.
+func (s *server) RequestTicketEmail(ctx context.Context, req RequestTicketEmailRequestObject) (RequestTicketEmailResponseObject, error) {
+	if err := allow(ctx, s.orderLimit); err != nil {
+		return nil, err
+	}
+	if len(req.Body.Token) > 200 {
+		return nil, fieldError{&apiError{422, "bad_token", "That isn't the link from your email. Open your order from the email and try again."}, "token"}
+	}
+	if err := s.Sales.RequestTicketEmail(ctx, req.Code, req.Body.Token); err != nil {
+		return nil, salesError(err)
+	}
+	return RequestTicketEmail202Response{}, nil
 }
 
 // ListOrders shows buyers' emails to any member or key; nothing here logs them.

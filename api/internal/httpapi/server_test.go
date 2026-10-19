@@ -77,8 +77,8 @@ func TestSecuredOperationsReject401BeforeBody(t *testing.T) {
 // The operations that need no session are exactly these. Adding
 // `security: []` to anything else fails here, so it can't slip in unreviewed.
 func TestPublicOperationsAreExactlyThese(t *testing.T) {
-	want := []string{"beginPasskeyLogin", "createCheckout", "finishPasskeyLogin", "getCheckout", "getHealth", "getOrder", "getStorefrontEvent",
-		"login", "payCheckout", "requestOrderLinks", "signup", "verifyEmail"}
+	want := []string{"beginPasskeyLogin", "createCheckout", "finishPasskeyLogin", "getCheckout", "getHealth", "getOrder", "getOrderPDF", "getStorefrontEvent",
+		"login", "payCheckout", "requestOrderLinks", "requestTicketEmail", "signup", "verifyEmail"}
 	spec, err := httpapi.GetSwagger()
 	if err != nil {
 		t.Fatal(err)

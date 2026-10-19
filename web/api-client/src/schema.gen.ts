@@ -827,6 +827,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/orders/{code}/tickets.pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The order's valid tickets as a PDF, one to a page, numbered as the email numbers them, for whoever holds the token from the order's link. An unknown code and a wrong token get the same 404. 409 no_tickets when the order has no valid ticket. It comes with Content-Disposition: attachment; filename="tickets-<code>.pdf", Cache-Control: no-store and Referrer-Policy: no-referrer. Counts against the same 60 reads a minute per client address as getOrder, then 429 rate_limited. */
+        get: operations["getOrderPDF"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/orders/{code}/email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The buyer asking for the ticket email again, with the token from the order's link: the same tickets and the same link, to the address on the order. It goes out from the queue, so this answers 202. An unknown code and a wrong token get the same 404. 409 email_on_its_way while the last one is still queued or being retried, 409 too_soon within 10 minutes of the last time it was asked for (by the buyer, the organizer or the sale itself), 409 no_tickets when the order has no valid ticket. Counts against the same 60 requests a minute per client address as getOrder, then 429 rate_limited. */
+        post: operations["requestTicketEmail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1093,6 +1127,12 @@ export interface components {
             refunded: boolean;
             /** @description What the ticket's QR code holds: 22 base64url characters. Whoever has it can get in, so show it only to the ticket's holder. null for a void ticket. */
             qr: string | null;
+            /** @description The same QR code drawn as a PNG, standard base64, ready for a data: URL. Whoever has it can get in. null for a void ticket. */
+            qr_png: string | null;
+        };
+        OrderEmailRequest: {
+            /** @description The t= value from the order's link. */
+            token: string;
         };
         PaymentStart: {
             /**
@@ -3694,6 +3734,67 @@ export interface operations {
             };
             400: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    getOrderPDF: {
+        parameters: {
+            query: {
+                /** @description The t= value from the order's link. */
+                token: string;
+            };
+            header?: never;
+            path: {
+                /** @description The order code, like TS-7K2QF. */
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Content-Disposition": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            400: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    requestTicketEmail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The order code, like TS-7K2QF. */
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrderEmailRequest"];
+            };
+        };
+        responses: {
+            /** @description Queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
             429: components["responses"]["Error"];
         };
     };

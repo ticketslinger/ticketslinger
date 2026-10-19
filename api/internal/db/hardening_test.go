@@ -146,8 +146,10 @@ func TestSaleRolesStayNarrow(t *testing.T) {
 
 	// ts_public runs one query (resolveLive: a live event by its slugs), so
 	// it reads exactly those columns, plus memberships for org_reads below,
-	// has its two policies, and runs one SECURITY DEFINER function:
-	// app_organizer(), which the TO PUBLIC tenant policies call (NULL here).
+	// has its two policies, and runs two SECURITY DEFINER functions:
+	// app_organizer(), which the TO PUBLIC tenant policies call (NULL here),
+	// and queue_order_email_by_link, the buyer's "email me again", which
+	// needs the order's code and link token.
 	var cols, pols, funcs []string
 	if err := owner.QueryRow(ctx, `select
 		array(select c.relname || '.' || a.attname from pg_class c join pg_attribute a on a.attrelid = c.oid
@@ -167,7 +169,7 @@ func TestSaleRolesStayNarrow(t *testing.T) {
 	if want := []string{"events.events_public", "organizers.organizers_public"}; !slices.Equal(pols, want) {
 		t.Errorf("ts_public policies %v, want only %v", pols, want)
 	}
-	if want := []string{"app_organizer()"}; !slices.Equal(funcs, want) {
+	if want := []string{"app_organizer()", "queue_order_email_by_link(text,bytea)"}; !slices.Equal(funcs, want) {
 		t.Errorf("ts_public runs SECURITY DEFINER functions %v, want only %v", funcs, want)
 	}
 	for _, priv := range []string{"INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"} {

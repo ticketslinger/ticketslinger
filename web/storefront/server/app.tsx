@@ -14,7 +14,7 @@ import { CheckoutPage } from "./pages/CheckoutPage";
 import { EventPage, type EventPageProps, type StorefrontEvent } from "./pages/EventPage";
 import { ErrorPage, NotFound } from "./pages/NotFound";
 import { OrderLinkPage, type OrderLinkPageProps } from "./pages/OrderLinkPage";
-import { NoOrder, OrderPage } from "./pages/OrderPage";
+import { NoOrder, OrderPage, type Sent } from "./pages/OrderPage";
 import { Recent } from "./recent";
 
 export type StorefrontOptions = {
@@ -58,6 +58,14 @@ const GENERIC = "Something went wrong on our side. Try again.";
 const NOT_READY = "This event can't take card payments just yet.";
 const BUSY = "Busy for a moment. Try again.";
 const SLOW_DOWN = "That's a lot of tries. Wait a minute and try again.";
+// The order page's notices after "Email me my tickets again", and the API's 409s that lead to
+// them. no_tickets says nothing: the page it goes back to no longer offers the button.
+const SENT: readonly Sent[] = ["1", "soon", "pending"];
+const SENT_FOR: Record<string, Sent | ""> = {
+  email_on_its_way: "pending",
+  too_soon: "soon",
+  no_tickets: "",
+};
 // Our words for what createCheckout says. The API's own message never reaches the page.
 const CHECKOUT_MESSAGES: Record<string, string> = {
   idempotency_in_progress: "We're already holding those for you. Give it a second.",
@@ -395,10 +403,68 @@ export function createApp(opts: StorefrontOptions): Hono {
       status = r.response.status;
       order = r.data;
     } catch {}
-    if (order) return page(c, 200, <OrderPage order={order} />);
+    const sent = SENT.find((s) => s === c.req.query("sent"));
+    if (order) return page(c, 200, <OrderPage order={order} token={t} sent={sent} />, "order");
     if (status === 404 || status === 400) return page(c, 404, <NoOrder />);
     if (status === 429) return trouble(c, 429, SLOW_DOWN);
     return trouble(c);
+  });
+
+  // The API's PDF, streamed through with its own headers; anything else is the order 404.
+  app.get("/orders/:code/tickets.pdf", async (c) => {
+    const code = c.req.param("code");
+    const t = c.req.query("t") ?? "";
+    if (!ORDER.test(code) || !TOKEN.test(t)) return page(c, 404, <NoOrder />);
+    const r = await api
+      .GET("/orders/{code}/tickets.pdf", {
+        params: { path: { code }, query: { token: t } },
+        headers: apiHeaders(c),
+        parseAs: "stream",
+      })
+      .catch(() => null);
+    if (!r) return trouble(c);
+    const status = r.response.status;
+    if (status === 200 && r.data) {
+      const h = new Headers({ "cache-control": "no-store" });
+      for (const k of ["content-type", "content-disposition", "content-length"]) {
+        const v = r.response.headers.get(k);
+        if (v) h.set(k, v);
+      }
+      return new Response(r.data, { status: 200, headers: h });
+    }
+    if (status === 429) return trouble(c, 429, SLOW_DOWN);
+    if (status >= 500) return trouble(c);
+    return page(c, 404, <NoOrder />);
+  });
+
+  // "Email me my tickets again": back to the order page, which says how it went.
+  app.post("/orders/:code/email", async (c) => {
+    const code = c.req.param("code");
+    let t = "";
+    try {
+      const v = (await c.req.parseBody()).t;
+      t = typeof v === "string" ? v : "";
+    } catch {}
+    if (!ORDER.test(code) || !TOKEN.test(t)) return page(c, 404, <NoOrder />);
+    const r = await api
+      .POST("/orders/{code}/email", {
+        params: { path: { code } },
+        body: { token: t },
+        headers: apiHeaders(c),
+      })
+      .catch(() => null);
+    if (!r) return trouble(c);
+    const status = r.response.status;
+    const back = `/orders/${code}?t=${encodeURIComponent(t)}`;
+    if (status === 202) return c.redirect(`${back}&sent=1`, 303);
+    const reason = r.error?.error.code ?? "";
+    const answer = Object.hasOwn(SENT_FOR, reason) ? SENT_FOR[reason] : undefined;
+    if (status === 409 && answer !== undefined) {
+      return c.redirect(answer ? `${back}&sent=${answer}` : back, 303);
+    }
+    if (status === 429) return trouble(c, 429, SLOW_DOWN);
+    if (status >= 500) return trouble(c);
+    return page(c, 404, <NoOrder />);
   });
 
   app.get("/:organizer/:event", async (c) => {
