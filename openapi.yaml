@@ -670,7 +670,7 @@ paths:
   /organizers/{organizer}/events/{event}/checkins/search:
     get:
       operationId: searchCheckinTickets
-      description: "Any member, or any API key. Finds up to 20 of the event's tickets by attendee name or buyer email (any part, any case) or by order code (with or without TS-), valid tickets first, then by name. 422 (field q) unless q is 2 to 120 characters once spaces around it are dropped."
+      description: "Any member, or any API key. Finds up to 20 of the event's tickets by attendee name or buyer email (any part, any case) or by order code (with or without TS-), valid tickets first, then by name. 422 (field q) if q is over 120 characters, or under 2 once spaces around it are dropped."
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }

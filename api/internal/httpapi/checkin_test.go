@@ -148,6 +148,7 @@ func TestCheckinBounds(t *testing.T) {
 	field("GET", s.checkinPath("/search?q=a"), "", "q")
 	field("GET", s.checkinPath("/search?q=%20a%20"), "", "q")
 	field("GET", s.checkinPath("/search?q="+strings.Repeat("a", 121)), "", "q")
+	field("GET", s.checkinPath("/search?q="+strings.Repeat("a", 120)+"%20"), "", "q")
 	s.must(s.do(s.owner, "POST", s.checkinPath(""), `{"qr":"`+strings.Repeat("é", 200)+`","gate":"`+strings.Repeat("é", 40)+`"}`), 200)
 	if list := s.jsonList(s.do(s.owner, "GET", s.checkinPath("/search?q=ab"), "")); len(list) != 0 {
 		t.Fatalf("search ab: %v", list)

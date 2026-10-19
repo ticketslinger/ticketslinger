@@ -80,7 +80,9 @@ func (s *server) CreateCheckin(ctx context.Context, req CreateCheckinRequestObje
 func (s *server) SearchCheckinTickets(ctx context.Context, req SearchCheckinTicketsRequestObject) (SearchCheckinTicketsResponseObject, error) {
 	out := SearchCheckinTickets200JSONResponse{}
 	err := s.inEvent(ctx, req.Organizer, req.Event, catalogueRead, func(_ organizers.Organizer, tx pgx.Tx) error {
-		if n := utf8.RuneCountInString(strings.TrimSpace(req.Params.Q)); n < 2 || n > 120 {
+		// The raw q has the spec's 120 ceiling; the 2 floor counts what's left
+		// once spaces around it are dropped.
+		if utf8.RuneCountInString(req.Params.Q) > 120 || utf8.RuneCountInString(strings.TrimSpace(req.Params.Q)) < 2 {
 			return errInvalidQuery
 		}
 		list, err := checkin.Search(ctx, tx, req.Event, req.Params.Q)
