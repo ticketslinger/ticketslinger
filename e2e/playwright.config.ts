@@ -7,12 +7,15 @@ export default defineConfig({
   workers: 1,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: { baseURL: "http://localhost:3002", ...devices["Pixel 7"], trace: "retain-on-failure" },
-  webServer: {
-    command: "bun start.ts",
-    url: "http://localhost:3002/",
-    reuseExistingServer: !process.env.CI,
-    // Builds the API and the dashboard before serving.
-    timeout: 180_000,
-    stdout: "pipe",
-  },
+  // PERF_EVENT_URL points perf.spec.ts at a live event page: no local stack.
+  webServer: process.env.PERF_EVENT_URL
+    ? undefined
+    : {
+        command: "bun start.ts",
+        url: "http://localhost:3002/",
+        reuseExistingServer: !process.env.CI,
+        // Builds the API and the dashboard before serving.
+        timeout: 180_000,
+        stdout: "pipe",
+      },
 });

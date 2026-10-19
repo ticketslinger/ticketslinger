@@ -7,19 +7,21 @@ import { createApp } from "./app";
 
 const root = join(import.meta.dir, "..");
 
-test("the checkout island stays under 20 KB gzipped", () => {
+test("the checkout island stays under 20 KB gzipped, the Turnstile loader under 1 KB", () => {
   const out = mkdtempSync(join(tmpdir(), "storefront-build-"));
   try {
     const r = Bun.spawnSync(["bun", "build.ts", out], { cwd: root, stderr: "pipe" });
     expect(r.exitCode).toBe(0);
     const size = gzipSync(readFileSync(join(out, "checkout.js"))).length;
     expect(size).toBeLessThanOrEqual(20 * 1024);
+    // The event page's whole first-load script of ours.
+    expect(gzipSync(readFileSync(join(out, "turnstile.js"))).length).toBeLessThanOrEqual(1024);
   } finally {
     rmSync(out, { recursive: true, force: true });
   }
 }, 30_000);
 
-test("the event page ships none of our JavaScript", async () => {
+test("the event page loads only the Turnstile loader, and Turnstile itself waits", async () => {
   const event = {
     organizer: { name: "Acme", slug: "acme" },
     event: {
@@ -35,7 +37,21 @@ test("the event page ships none of our JavaScript", async () => {
       fee_mode: "pass",
       state: "on_sale",
     },
-    ticket_types: [],
+    ticket_types: [
+      {
+        id: "t1",
+        name: "General",
+        description: "",
+        price_cents: 2500,
+        min_per_order: 1,
+        max_per_order: 10,
+        remaining: 3,
+        on_sale: true,
+        sales_start: null,
+        sales_end: null,
+        unlocked: false,
+      },
+    ],
     promo: null,
     questions: [],
   };
@@ -48,5 +64,6 @@ test("the event page ships none of our JavaScript", async () => {
   });
   const html = await (await app.request("/acme/gala")).text();
   expect(html).toContain("Gala");
-  expect(html).not.toMatch(/src="\/assets\/[^"]*\.js"/);
+  expect(html.match(/src="[^"]*"/g)).toEqual(['src="/assets/turnstile.js"']);
+  expect(html).not.toContain("challenges.cloudflare.com");
 });

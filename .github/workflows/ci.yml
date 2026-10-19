@@ -46,6 +46,8 @@ jobs:
       - run: bun run --filter '*' build
   e2e:
     runs-on: ubuntu-latest
+    # The suite plus perf.spec.ts's Lighthouse run; a hang fails here, not after six hours.
+    timeout-minutes: 25
     services:
       db:
         image: postgres:18
@@ -60,6 +62,10 @@ jobs:
         with: { bun-version: 1.3.14 }
       - run: PGPASSWORD=postgres psql -h localhost -p 54329 -U postgres -f deploy/initdb/01-roles.sql
       - run: bun install --frozen-lockfile
+      # Playwright and Lighthouse run on Node; lighthouse 13 needs 22.19 or later.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 22.x }
+      - run: node -v
       - run: cd e2e && bunx playwright install --with-deps chromium
       - run: cd e2e && bunx playwright test
       - if: failure()

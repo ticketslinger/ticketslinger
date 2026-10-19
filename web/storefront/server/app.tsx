@@ -303,6 +303,8 @@ export function createApp(opts: StorefrontOptions): Hono {
   );
 
   app.get("/healthz", (c) => c.text("ok"));
+  // No icon yet; an empty answer keeps a 404 out of every buyer's console.
+  app.get("/favicon.ico", (c) => c.body(null, 204));
 
   async function getCheckout(c: Context, token: string) {
     try {
