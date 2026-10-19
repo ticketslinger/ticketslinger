@@ -329,20 +329,23 @@ func Deliver(ctx context.Context, m mailer.Mailer, msg mailer.Message) error {
 // threshold and period (insert wins) keeps it to once. Failures are logged,
 // never returned: an alert must not fail the ticket email that triggered it.
 func QuotaWatch(pool *pgxpool.Pool, alertTo string, now func() time.Time) func(ctx context.Context, daily, monthly int) {
-	const monthlyBody = "Resend's free plan stops at 3,000 emails a month (and 100 a day). We're at %s. Past the limit, ticket emails wait until next month's quota, so if sales are still coming, upgrade first: Resend Pro is $20 a month for 50,000. It's the first cost trigger in the plan, so it needs your yes."
-	const dailyBody = "Resend's free plan allows 100 emails a day, counted in UTC. Ticket emails past that wait for midnight UTC and then go out by themselves. If this keeps happening on sale days, it's time for Resend Pro ($20 a month, no daily cap). That's a spend, so it needs your yes."
+	const monthlyBody = "Resend's free plan stops at 3,000 emails a month (and 100 a day), and this server has sent %s this month. On the free plan, ticket emails past the limit wait until the quota resets, so if sales are still coming, upgrade before then: Resend Pro is $20 a month for 50,000. Already on a paid plan? You can ignore this."
+	const dailyBody = "Resend's free plan allows 100 emails a day, counted in UTC, and this server has sent %s today. On the free plan, ticket emails past that wait for midnight UTC and then go out by themselves. If this keeps happening on sale days, Resend Pro ($20 a month) has no daily cap. Already on a paid plan? You can ignore this."
 	return func(ctx context.Context, daily, monthly int) {
-		t := now().UTC()
+		t := now().UTC() // the month key assumes Resend's quota resets on the UTC calendar month
 		check := func(period string, used, at int, key, subject, body string) {
 			if used < at {
 				return
 			}
+			ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			fresh := false
 			err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
 				tag, err := tx.Exec(ctx, `insert into mail_alerts(key) values ($1) on conflict do nothing`, key)
 				if err != nil || tag.RowsAffected() == 0 {
 					return err
 				}
-				slog.Error("mail quota", "period", period, "used", used)
+				fresh = true
 				if alertTo == "" {
 					return nil
 				}
@@ -350,6 +353,8 @@ func QuotaWatch(pool *pgxpool.Pool, alertTo string, now func() time.Time) func(c
 			})
 			if err != nil {
 				slog.Error("mail quota alert", "period", period, "err", err)
+			} else if fresh {
+				slog.Error("mail quota", "period", period, "used", used)
 			}
 		}
 		for _, at := range []int{2400, 2850} {
@@ -358,7 +363,7 @@ func QuotaWatch(pool *pgxpool.Pool, alertTo string, now func() time.Time) func(c
 				"TicketSlinger has sent "+n+" of its 3,000 emails this month", fmt.Sprintf(monthlyBody, n))
 		}
 		check("day", daily, 80, "day-80-"+t.Format("2006-01-02"),
-			"TicketSlinger has sent "+commas(daily)+" of today's 100 emails", dailyBody)
+			"TicketSlinger has sent "+commas(daily)+" of today's 100 emails", fmt.Sprintf(dailyBody, commas(daily)))
 	}
 }
 
