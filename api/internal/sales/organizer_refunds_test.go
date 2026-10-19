@@ -944,8 +944,40 @@ func TestConcurrentRefundsCantBothFit(t *testing.T) {
 	waitForLockWaiters(t, f.owner, 1)
 	f.must(t, first.Commit(ctx))
 	var pg *pgconn.PgError
-	if err := <-done; !errors.As(err, &pg) || pg.Code != "23514" {
-		t.Fatalf("second insert: %v, want check_violation", err)
+	if err := <-done; !errors.As(err, &pg) || pg.Code != "23514" || pg.ConstraintName != "refunds_within_payment" {
+		t.Fatalf("second insert: %v, want check_violation on refunds_within_payment", err)
+	}
+}
+
+// A retry and a new refund at once can't both fit: whichever takes the
+// payment second sees the first.
+func TestRetryAndANewRefundCantBothFit(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 2, price: 2500})
+	ctx := context.Background()
+	order, _, _ := f.paidOrder(t, s, fake, 2, 1) // 5200
+	payment := f.id(t, `select id from payments where order_id = $1`, order)
+	insert := `insert into refunds (organizer_id, payment_id, amount_cents, fee_refunded, fee_cents, status, reason)
+		values ($1, $2, 3000, false, 0, 'requested', 'organizer') returning id`
+	a := f.id(t, insert, f.org, payment)
+	f.exec(t, `update refunds set status = 'failed', failure = 'gave_up' where id = $1`, a)
+	first, err := f.owner.Begin(ctx)
+	f.must(t, err)
+	t.Cleanup(func() { _ = first.Rollback(ctx) })
+	_, err = first.Exec(ctx, insert, f.org, payment)
+	f.must(t, err)
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.retry(s, order, a)
+		done <- err
+	}()
+	waitForLockWaiters(t, f.owner, 1)
+	f.must(t, first.Commit(ctx))
+	if err := <-done; conflictCode(err) != "no_room" {
+		t.Fatalf("retry after the insert: %v, want no_room", err)
+	}
+	if n := f.count(t, `select count(*) from refunds where payment_id = $1 and status <> 'failed'`, payment); n != 1 {
+		t.Fatalf("%d live refunds, want 1", n)
 	}
 }
 
@@ -969,6 +1001,9 @@ func TestRetryRefundRespectsTheCap(t *testing.T) {
 	}
 	if retry() {
 		t.Fatal("retried a refund that no longer fits")
+	}
+	if _, err := f.retry(s, order, a); conflictCode(err) != "no_room" {
+		t.Fatalf("retrying through the app: %v, want no_room", err)
 	}
 	if n := f.count(t, `select count(*) from refunds where id = $1 and status = 'failed'`, a); n != 1 {
 		t.Fatal("the refund that didn't fit moved off failed")

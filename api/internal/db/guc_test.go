@@ -23,12 +23,14 @@ var gucAllowed = map[string]string{
 }
 
 var (
-	gucSet   = regexp.MustCompile(`(?i)set_config\('app\.|set\s+local\s+app\.`)
-	sqlVerbs = regexp.MustCompile(`(?i)select |update |insert |delete |set_config`)
+	// Any 'app. or "app. literal: set_config('app.x', ...) itself, or a GUC
+	// name kept in a Go string and passed in as a parameter.
+	gucSet   = regexp.MustCompile(`(?i)set\s+local\s+app\.|['"]app\.`)
+	sqlVerbs = regexp.MustCompile(`(?i)\b(select|update|insert|delete)\s|set_config`)
 )
 
 // gucViolations walks the non-test Go files under root and lists every file
-// outside gucAllowed that sets an app.* GUC, and every fmt.Sprintf whose
+// outside gucAllowed that names an app.* GUC, and every fmt.Sprintf whose
 // format string looks like SQL (SQL is built with bind parameters only).
 func gucViolations(t *testing.T, root string) []string {
 	t.Helper()
@@ -44,7 +46,7 @@ func gucViolations(t *testing.T, root string) []string {
 			return err
 		}
 		if _, ok := gucAllowed[rel]; !ok && gucSet.Match(src) {
-			bad = append(bad, rel+": sets an app.* GUC")
+			bad = append(bad, rel+": names an app.* GUC")
 		}
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, path, src, 0)
@@ -101,12 +103,16 @@ func TestOnlyScopeSetsTheGUCs(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(scratch, "internal/other"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	src := "package other\n\nimport \"fmt\"\n\nconst q = `select set_config('app.x', $1, true)`\n\n" +
-		"func f(id string) string { return fmt.Sprintf(\"SELECT * FROM t WHERE id = '%s'\", id) }\n"
-	if err := os.WriteFile(filepath.Join(scratch, "internal/other/other.go"), []byte(src), 0o644); err != nil {
-		t.Fatal(err)
+	for name, src := range map[string]string{
+		"other.go": "package other\n\nimport \"fmt\"\n\nconst q = `select set_config('app.x', $1, true)`\n\n" +
+			"func f(id string) string { return fmt.Sprintf(\"SELECT\\n* FROM t WHERE id = '%s'\", id) }\n",
+		"name.go": "package other\n\nconst guc = \"app.organizer_id\" // handed to set_config($1, ...) elsewhere\n",
+	} {
+		if err := os.WriteFile(filepath.Join(scratch, "internal/other", name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if bad := gucViolations(t, scratch); len(bad) != 2 {
-		t.Fatalf("scratch file: %v, want the GUC and the Sprintf caught", bad)
+	if bad := gucViolations(t, scratch); len(bad) != 3 {
+		t.Fatalf("scratch files: %v, want both GUC files and the Sprintf caught", bad)
 	}
 }
