@@ -324,7 +324,8 @@ test("proxy forwards the Idempotency-Key", async () => {
   expect(api.calls[0]?.idem).toBe("k-1");
 });
 
-const PLAIN_CSP = "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'";
+const PLAIN_CSP =
+  "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'";
 
 test("/config.json tells the page the Turnstile site key", async () => {
   const on = mk(fakeApi(), { turnstileSiteKey: "1x00000000000000000000AA" });
@@ -345,7 +346,7 @@ test("only the HTML shell lets Turnstile in, and only when it's on", async () =>
   for (const path of ["/", "/signin"]) {
     const csp = (await on.request(path)).headers.get("content-security-policy") ?? "";
     expect(csp).toContain(
-      "script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com",
+      "script-src 'self' 'wasm-unsafe-eval' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com",
     );
     expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("frame-ancestors 'none'");
@@ -353,4 +354,20 @@ test("only the HTML shell lets Turnstile in, and only when it's on", async () =>
   expect((await on.request("/api/me")).headers.get("content-security-policy")).toBe(PLAIN_CSP);
   const off = mk(api, { staticDir: dir });
   expect((await off.request("/")).headers.get("content-security-policy")).toBe(PLAIN_CSP);
+});
+
+test("the shell allows WebAssembly and nothing more", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dash-"));
+  writeFileSync(join(dir, "index.html"), "<p>spa</p>");
+  for (const turnstileSiteKey of ["", "1x00000000000000000000AA"]) {
+    const csp =
+      (await mk(fakeApi(), { staticDir: dir, turnstileSiteKey }).request("/")).headers.get(
+        "content-security-policy",
+      ) ?? "";
+    expect(csp).toContain("'wasm-unsafe-eval'");
+    expect(csp).not.toContain("'unsafe-eval'");
+    expect(csp).not.toContain("'unsafe-inline'");
+    // One script-src only: a second one would be ignored by the browser.
+    expect(csp.match(/script-src/g)).toHaveLength(1);
+  }
 });
