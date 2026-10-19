@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "./app";
@@ -208,6 +208,21 @@ test("static: files, SPA fallback, no dotfiles, security headers", async () => {
   expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
   const proxied = await mk(fakeApi()).request("/api/me");
   expect(proxied.headers.get("x-frame-options")).toBe("DENY");
+});
+
+test("hashed assets are cached for a year; the shell and SPA routes are not", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "dash-"));
+  writeFileSync(join(dir, "index.html"), "<p>spa</p>");
+  mkdirSync(join(dir, "assets"));
+  writeFileSync(join(dir, "assets", "x.wasm"), new Uint8Array([0, 0x61, 0x73, 0x6d]));
+  const app = createApp({ apiUrl: "http://x/v1", staticDir: dir, secureCookies: false });
+  const wasm = await app.request("/assets/x.wasm");
+  expect(wasm.status).toBe(200);
+  expect(wasm.headers.get("content-type")).toBe("application/wasm");
+  expect(wasm.headers.get("cache-control")).toContain("immutable");
+  for (const path of ["/", "/index.html", "/events/42"]) {
+    expect((await app.request(path)).headers.get("cache-control")).toBeNull();
+  }
 });
 
 test("login API error passes through unchanged with no cookie", async () => {
