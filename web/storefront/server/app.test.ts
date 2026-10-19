@@ -1280,6 +1280,9 @@ test("the order link page asks for an email behind the quick check", async () =>
   expect(res.headers.get("content-security-policy")).toContain(
     "frame-src https://challenges.cloudflare.com",
   );
+  // Turnstile itself waits for the buyer, as on the event page.
+  expect(html).not.toContain("challenges.cloudflare.com/turnstile");
+  expect(html).toContain('<script type="module" src="/assets/turnstile.js">');
 });
 
 test("asking for the link again says the same thing for any address", async () => {
