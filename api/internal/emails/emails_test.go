@@ -162,3 +162,20 @@ func TestHTMLIsAccessible(t *testing.T) {
 		}
 	}
 }
+
+// A control character in a subject would split the header over SMTP and
+// not over Resend: every subject maps them to spaces, so both send the same.
+func TestSubjectsHaveNoControlCharacters(t *testing.T) {
+	d := data(1)
+	d.Event = "Gala\r\nBcc: x"
+	m, err := emails.Tickets(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Subject != "Your tickets for Gala  Bcc: x" {
+		t.Errorf("tickets subject %q", m.Subject)
+	}
+	if p := emails.Plain("a@example.com", "Gala\r\nBcc: x\t\x00", "Hi"); p.Subject != "Gala  Bcc: x  " {
+		t.Errorf("plain subject %q", p.Subject)
+	}
+}
