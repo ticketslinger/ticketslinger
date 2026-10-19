@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -425,6 +426,10 @@ func TestServeUsesTheConfiguredMailer(t *testing.T) {
 	m, err := newMailer(config.Config{Mail: "resend", ResendAPIKey: "re_abc", ResendAPIURL: "https://api.resend.com", MailFrom: "TicketSlinger <tickets@ticketslinger.com>"}, nil)
 	if r, ok := m.(*mailer.Resend); err != nil || !ok || r.Key != "re_abc" || r.URL != "https://api.resend.com" || r.From != "TicketSlinger <tickets@ticketslinger.com>" {
 		t.Fatalf("resend: %#v %v", m, err)
+	}
+	want := &mailer.SMTP{Host: "smtp.example.com", Port: 465, Username: "relay", Password: "pw", From: "a@example.com"}
+	if m, err := newMailer(config.Config{Mail: "smtp", SMTPHost: "smtp.example.com", SMTPPort: 465, SMTPUsername: "relay", SMTPPassword: "pw", MailFrom: "a@example.com"}, nil); err != nil || !reflect.DeepEqual(m, want) {
+		t.Fatalf("smtp: %#v %v", m, err)
 	}
 	if m, err := newMailer(config.Config{Mail: "log"}, nil); err != nil || m != (mailer.Log{}) {
 		t.Fatalf("log: %#v %v", m, err)

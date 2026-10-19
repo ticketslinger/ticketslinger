@@ -187,6 +187,8 @@ func newMailer(cfg config.Config, _ *pgxpool.Pool) (mailer.Mailer, error) {
 	switch cfg.Mail {
 	case "resend":
 		return &mailer.Resend{Key: cfg.ResendAPIKey, From: cfg.MailFrom, URL: cfg.ResendAPIURL}, nil
+	case "smtp":
+		return &mailer.SMTP{Host: cfg.SMTPHost, Port: cfg.SMTPPort, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword, From: cfg.MailFrom}, nil
 	case "log":
 		return mailer.Log{}, nil
 	}
