@@ -48,9 +48,10 @@ if (process.env.STRIPE_SMOKE_ACCOUNT) {
   // The keys already came through with process.env; the secret replaces whsec_e2e.
   apiEnv.TS_STRIPE_WEBHOOK_SECRET = process.env.TS_STRIPE_WEBHOOK_SECRET;
 } else {
-  // Anything Stripe in the caller's environment stays out of the normal suite.
+  // Anything Stripe or TS_PAYMENTS in the caller's environment stays out of the normal suite.
   delete apiEnv.TS_STRIPE_SECRET_KEY;
   delete apiEnv.TS_STRIPE_PUBLISHABLE_KEY;
+  delete apiEnv.TS_PAYMENTS;
 }
 
 function run(cmd: string[], opts: { cwd?: string; env?: Record<string, string | undefined> } = {}) {

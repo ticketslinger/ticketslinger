@@ -35,10 +35,14 @@ test.skip(!ACCOUNT, "manual stripe-smoke workflow only");
 async function payByCard(shop: Page, number: string) {
   const frame = shop.frameLocator('iframe[title*="Secure payment input frame"]');
   const card = frame.getByRole("button", { name: "Card", exact: true });
-  if (await card.isVisible({ timeout: 10_000 }).catch(() => false)) await card.click();
-  await frame.locator('[name="number"]').fill(number);
+  const cardNumber = frame.locator('[name="number"]');
+  // isVisible doesn't wait: first wait for either the accordion or the card form itself.
+  await expect(card.or(cardNumber).first()).toBeVisible({ timeout: 15_000 });
+  if (await card.isVisible()) await card.click();
+  await cardNumber.fill(number);
   await frame.locator('[name="expiry"]').fill("12 / 34");
   await frame.locator('[name="cvc"]').fill("123");
+  // Rendered with the other card fields, so no wait is needed once they're filled.
   const zip = frame.locator('[name="postalCode"]');
   if (await zip.isVisible().catch(() => false)) await zip.fill("42424");
   await shop.getByRole("button", { name: /^Pay \$/ }).dispatchEvent("click");
