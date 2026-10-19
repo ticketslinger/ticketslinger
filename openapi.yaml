@@ -650,6 +650,50 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/checkins:
+    post:
+      operationId: createCheckin
+      description: "Owners, admins and check-in staff, or a write API key. Checks one ticket in: send the scanned QR text as qr, or a ticket picked by hand as ticket_id, never both (422 qr_or_ticket). Every outcome is a 200, and result says which it was. accepted: the ticket is valid and wasn't in yet, so it's in now. duplicate: it's already in, and ticket.checked_in_at says since when. invalid: no ticket of this event matches, so ticket is null. void: the ticket was refunded or cancelled. checked_in and sold count the event's valid tickets. Retrying with the same Idempotency-Key replays the first answer, so a scan resent after a dropped connection still says accepted. 422 (field qr) for an empty or over-long qr, (field gate) for a gate over 40 characters. 429 rate_limited after 300 scans in a minute from one caller at one event."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateCheckin" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CheckinResult" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/checkins/search:
+    get:
+      operationId: searchCheckinTickets
+      description: "Any member, or any API key. Finds up to 20 of the event's tickets by attendee name or buyer email (any part, any case) or by order code (with or without TS-), valid tickets first, then by name. 422 (field q) if q is over 120 characters, or under 2 once spaces around it are dropped."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2, maxLength: 120 } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/CheckinTicket" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/checkins/summary:
+    get:
+      operationId: getCheckinSummary
+      description: Any member, or any API key. How many of the event's valid tickets are checked in, out of how many sold.
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CheckinSummary" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/promo-codes:
     get:
       operationId: listPromoCodes
@@ -1205,6 +1249,38 @@ components:
         problem: { type: [string, "null"], enum: [rate_limited, quota, refused, unreachable, bad_address, config, null], description: "The last thing that went wrong: rate_limited (the mail service asked us to slow down), quota (we hit our sending limit), refused (the mail service turned the message down), unreachable (we couldn't reach it), bad_address (the address can't take mail), config (our mail settings need fixing)." }
         attempts: { type: integer, description: "How many times we've tried to send this one." }
         updated_at: { type: [string, "null"], format: date-time }
+    CreateCheckin:
+      type: object
+      description: Exactly one of qr and ticket_id.
+      properties:
+        qr: { type: string, minLength: 1, maxLength: 200, description: "The text the scanner read from the ticket's QR code." }
+        ticket_id: { type: string, format: uuid, description: "A ticket picked by hand, from searchCheckinTickets." }
+        gate: { type: string, maxLength: 40, description: "Which door, if you name them." }
+    CheckinTicket:
+      type: object
+      required: [id, ticket_type_name, attendee_name, email, order_code, status, checked_in_at]
+      properties:
+        id: { type: string, format: uuid }
+        ticket_type_name: { type: string }
+        attendee_name: { type: string }
+        email: { type: string, description: "The buyer's address." }
+        order_code: { type: string }
+        status: { type: string, enum: [valid, void] }
+        checked_in_at: { type: [string, "null"], format: date-time, description: "When it was first checked in; null if it hasn't been." }
+    CheckinResult:
+      type: object
+      required: [result, ticket, checked_in, sold]
+      properties:
+        result: { type: string, enum: [accepted, duplicate, invalid, void] }
+        ticket: { oneOf: [{ $ref: "#/components/schemas/CheckinTicket" }, { type: "null" }], description: "The ticket the scan matched; null for invalid." }
+        checked_in: { type: integer, description: "The event's valid tickets checked in so far." }
+        sold: { type: integer, description: "The event's valid tickets." }
+    CheckinSummary:
+      type: object
+      required: [checked_in, sold]
+      properties:
+        checked_in: { type: integer, description: "The event's valid tickets checked in so far." }
+        sold: { type: integer, description: "The event's valid tickets." }
     OrderDetail:
       allOf:
         - { $ref: "#/components/schemas/OrderSummary" }

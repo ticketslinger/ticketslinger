@@ -634,6 +634,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/events/{event}/checkins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Owners, admins and check-in staff, or a write API key. Checks one ticket in: send the scanned QR text as qr, or a ticket picked by hand as ticket_id, never both (422 qr_or_ticket). Every outcome is a 200, and result says which it was. accepted: the ticket is valid and wasn't in yet, so it's in now. duplicate: it's already in, and ticket.checked_in_at says since when. invalid: no ticket of this event matches, so ticket is null. void: the ticket was refunded or cancelled. checked_in and sold count the event's valid tickets. Retrying with the same Idempotency-Key replays the first answer, so a scan resent after a dropped connection still says accepted. 422 (field qr) for an empty or over-long qr, (field gate) for a gate over 40 characters. 429 rate_limited after 300 scans in a minute from one caller at one event. */
+        post: operations["createCheckin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/checkins/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Any member, or any API key. Finds up to 20 of the event's tickets by attendee name or buyer email (any part, any case) or by order code (with or without TS-), valid tickets first, then by name. 422 (field q) if q is over 120 characters, or under 2 once spaces around it are dropped. */
+        get: operations["searchCheckinTickets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/checkins/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Any member, or any API key. How many of the event's valid tickets are checked in, out of how many sold. */
+        get: operations["getCheckinSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/events/{event}/promo-codes": {
         parameters: {
             query?: never;
@@ -1226,6 +1277,50 @@ export interface components {
             attempts: number;
             /** Format: date-time */
             updated_at: string | null;
+        };
+        /** @description Exactly one of qr and ticket_id. */
+        CreateCheckin: {
+            /** @description The text the scanner read from the ticket's QR code. */
+            qr?: string;
+            /**
+             * Format: uuid
+             * @description A ticket picked by hand, from searchCheckinTickets.
+             */
+            ticket_id?: string;
+            /** @description Which door, if you name them. */
+            gate?: string;
+        };
+        CheckinTicket: {
+            /** Format: uuid */
+            id: string;
+            ticket_type_name: string;
+            attendee_name: string;
+            /** @description The buyer's address. */
+            email: string;
+            order_code: string;
+            /** @enum {string} */
+            status: "valid" | "void";
+            /**
+             * Format: date-time
+             * @description When it was first checked in; null if it hasn't been.
+             */
+            checked_in_at: string | null;
+        };
+        CheckinResult: {
+            /** @enum {string} */
+            result: "accepted" | "duplicate" | "invalid" | "void";
+            /** @description The ticket the scan matched; null for invalid. */
+            ticket: components["schemas"]["CheckinTicket"] | null;
+            /** @description The event's valid tickets checked in so far. */
+            checked_in: number;
+            /** @description The event's valid tickets. */
+            sold: number;
+        };
+        CheckinSummary: {
+            /** @description The event's valid tickets checked in so far. */
+            checked_in: number;
+            /** @description The event's valid tickets. */
+            sold: number;
         };
         OrderDetail: components["schemas"]["OrderSummary"] & {
             tickets: components["schemas"]["OrderDetailTicket"][];
@@ -3205,6 +3300,98 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+        };
+    };
+    createCheckin: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCheckin"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckinResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    searchCheckinTickets: {
+        parameters: {
+            query: {
+                q: string;
+            };
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckinTicket"][];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    getCheckinSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckinSummary"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
         };
     };
     listPromoCodes: {

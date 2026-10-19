@@ -242,6 +242,13 @@ func past(s *openapi3.Schema) (out []any) {
 	return out
 }
 
+// baseExtra adds to an operation's base body what its rules need beyond the
+// required fields: createCheckin needs one of qr and ticket_id, or the base
+// is a 422 qr_or_ticket.
+var baseExtra = map[string]map[string]any{
+	"createCheckin": {"qr": "AAAAAAAAAAAAAAAAAAAAAA"},
+}
+
 // Every bound the spec states has to be enforced by Go: there is no runtime
 // validation at the edge. One request per bound, just outside it, with every
 // other required field valid so a missing one can't make the 422 for us.
@@ -278,6 +285,9 @@ func TestEveryBoundAnswers422(t *testing.T) {
 				body := map[string]any{}
 				for n := range req {
 					body[n] = sample(t, n, props[n])
+				}
+				for n, v := range baseExtra[opID(op)] {
+					body[n] = v
 				}
 				return body
 			}
