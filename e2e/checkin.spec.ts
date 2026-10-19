@@ -4,6 +4,8 @@ import { createSellableEvent, signUp, signUpWithPasskey, virtualAuthenticator } 
 const SHOP = "http://localhost:3003";
 
 test("door staff find a guest by name and check them in", async ({ page, context, browser }) => {
+  // Two sign-ups, a sellable event and a sale before anyone reaches the door.
+  test.slow();
   await virtualAuthenticator(page, context);
   const stamp = Date.now();
   await signUpWithPasskey(page, "Oscar", `e2e-door-owner-${stamp}@example.com`);
@@ -56,7 +58,8 @@ test("door staff find a guest by name and check them in", async ({ page, context
   await staff.getByRole("button", { name: "Check in Lin" }).click();
   await expect(staff.getByRole("heading", { name: "Welcome in" })).toBeVisible();
 
-  // Money and the team stay with the owner.
+  // Money and the team stay with the owner. The nav is there, just without those links.
+  await expect(staff.getByRole("link", { name: "Check-in" })).toBeVisible();
   await expect(staff.getByRole("link", { name: "Report" })).toHaveCount(0);
   await expect(staff.getByRole("link", { name: "Orders" })).toHaveCount(0);
   await expect(staff.getByRole("link", { name: "Team" })).toHaveCount(0);
