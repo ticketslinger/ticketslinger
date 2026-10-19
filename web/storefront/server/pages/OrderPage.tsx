@@ -44,9 +44,27 @@ export function orderStatus(order: Order): string {
     : "This order was refunded in full.";
 }
 
-export function OrderPage({ order }: { order: Order }) {
+// What "Email me my tickets again" answered, by the sent= the form's redirect carries.
+export type Sent = "1" | "soon" | "pending";
+
+export function sentNotice(sent: Sent, email: string): string {
+  if (sent === "1") {
+    return `On its way to ${email}. Give it a minute or two, and check spam if it doesn't turn up.`;
+  }
+  // True whatever happened to the last one: sent, bounced or given up on.
+  if (sent === "soon") {
+    return "We tried sending these less than 10 minutes ago. Wait until it's been 10 minutes, then try again.";
+  }
+  // Queued or failing: still trying, with no promise it lands.
+  return "We're still trying to send the latest one. Give it a little while, then check your spam folder too.";
+}
+
+export function OrderPage({ order, token, sent }: { order: Order; token: string; sent?: Sent }) {
   const e = order.event;
   const status = orderStatus(order);
+  // Numbered as the email and the PDF number them: valid tickets only, in the API's order (by id).
+  const valid = order.tickets.filter((t) => t.status === "valid");
+  const t = encodeURIComponent(token);
   return (
     <Layout title={`Order ${order.code} · ${e.name}`}>
       <p class="organizer">{e.organizer_name}</p>
@@ -66,18 +84,49 @@ export function OrderPage({ order }: { order: Order }) {
       <p>
         Order {order.code} · {formatCents(order.totals.total_cents)} · sent to {order.email}
       </p>
+      {sent && valid.length > 0 && (
+        <p class="sent" role="status">
+          {sentNotice(sent, order.email)}
+        </p>
+      )}
       {order.tickets.length > 0 && (
         <ul class="order-tickets">
-          {order.tickets.map((t, i) => (
-            <li key={t.id} class={t.status === "void" ? "void" : undefined}>
-              <h2>
-                Ticket {i + 1}: {t.ticket_type_name}
-              </h2>
-              <p>{t.attendee_name || "No name given"}</p>
-              {t.status === "void" && <p class="status">{t.refunded ? "Refunded" : "Cancelled"}</p>}
-            </li>
-          ))}
+          {order.tickets.map((tk) => {
+            const n = valid.indexOf(tk) + 1;
+            return (
+              <li key={tk.id} class={tk.status === "void" ? "void" : undefined}>
+                <h2>
+                  {n > 0 ? `Ticket ${n} of ${valid.length}: ` : ""}
+                  {tk.ticket_type_name}
+                </h2>
+                <p>{tk.attendee_name || "No name given"}</p>
+                {n > 0 && tk.qr_png && (
+                  <img
+                    class="qr"
+                    src={`data:image/png;base64,${tk.qr_png}`}
+                    alt={`QR code for ticket ${n}`}
+                    width={264}
+                    height={264}
+                  />
+                )}
+                {tk.status === "void" && (
+                  <p class="status">{tk.refunded ? "Refunded" : "Cancelled"}</p>
+                )}
+              </li>
+            );
+          })}
         </ul>
+      )}
+      {valid.length > 0 && (
+        <>
+          <p>
+            <a href={`/orders/${order.code}/tickets.pdf?t=${t}`}>Download all tickets (PDF)</a>
+          </p>
+          <form method="post" action={`/orders/${order.code}/email`}>
+            <input type="hidden" name="t" value={token} />
+            <button type="submit">Email me my tickets again</button>
+          </form>
+        </>
       )}
       <p class="keep">Keep this link to yourself: anyone with it can see your tickets.</p>
     </Layout>

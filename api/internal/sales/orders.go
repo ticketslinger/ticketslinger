@@ -15,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
+	"github.com/ticketslinger/ticketslinger/api/internal/system"
+	"github.com/ticketslinger/ticketslinger/api/internal/tickets"
 )
 
 // OrderView is the buyer's order page. RefundedCents adds up the refunds
@@ -47,14 +49,14 @@ var orderCode = regexp.MustCompile(`^TS-[0-9A-HJKMNP-TV-Z]{5}$`)
 // are all ErrNotFound, and each is one statement (order_by_link), the same as
 // a hit: the time an answer takes doesn't say whether the code exists.
 func (s *Service) Order(ctx context.Context, code, token string) (OrderView, error) {
-	if !orderCode.MatchString(strings.ToUpper(code)) || token == "" {
-		return OrderView{}, catalogue.ErrNotFound // no query: the format is public
+	hash, ok := linkHash(code, token)
+	if !ok {
+		return OrderView{}, catalogue.ErrNotFound
 	}
-	hash := sha256.Sum256([]byte(token))
 	var out OrderView
 	var tickets []byte
 	e := &out.Event
-	err := s.Pool.QueryRow(ctx, `select * from order_by_link($1, $2)`, code, hash[:]).Scan(&out.Code, &out.Status, &out.Email,
+	err := s.Pool.QueryRow(ctx, `select * from order_by_link($1, $2)`, code, hash).Scan(&out.Code, &out.Status, &out.Email,
 		&out.SubtotalCents, &out.DiscountCents, &out.TaxCents, &out.FeeCents, &out.TotalCents,
 		&e.Name, &e.Timezone, &e.VenueName, &e.VenueAddress, &e.StartsAt, &e.EndsAt, &e.Organizer, &e.Status,
 		&out.RefundedCents, &out.ReturnedCents, &tickets)
@@ -88,6 +90,54 @@ func (s *Service) Order(ctx context.Context, code, token string) (OrderView, err
 		}
 	}
 	return out, nil
+}
+
+// linkHash is the hash order links are looked up by; false, with no query to
+// make, when the code can't be one (the format is public) or there's no token.
+func linkHash(code, token string) ([]byte, bool) {
+	if !orderCode.MatchString(strings.ToUpper(code)) || token == "" {
+		return nil, false
+	}
+	hash := sha256.Sum256([]byte(token))
+	return hash[:], true
+}
+
+// RequestTicketEmail is the buyer asking for the ticket email again, under
+// queue_order_email's rules. A wrong token is ErrNotFound, exactly as an
+// unknown code: one statement either way (queue_order_email_by_link).
+func (s *Service) RequestTicketEmail(ctx context.Context, code, token string) error {
+	hash, ok := linkHash(code, token)
+	if !ok {
+		return catalogue.ErrNotFound
+	}
+	var res *string
+	err := system.Buyer(ctx, s.Pool, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `select queue_order_email_by_link($1, $2)`, code, hash).Scan(&res)
+	})
+	if err != nil {
+		return err
+	}
+	return queueAnswer(res)
+}
+
+// OrderPDF is the order's valid tickets, one to a page, numbered as the
+// email numbers them (by ticket id); errNoTickets when none is valid.
+func (s *Service) OrderPDF(ctx context.Context, code, token string) (pdf []byte, filename string, err error) {
+	o, err := s.Order(ctx, code, token)
+	if err != nil {
+		return nil, "", err
+	}
+	doc := tickets.PDFOrder{Code: o.Code, Event: o.Event.Name, When: when(o.Event.StartsAt, o.Event.Timezone), Venue: o.Event.VenueName}
+	for _, t := range o.Tickets {
+		if t.QR != "" {
+			doc.Tickets = append(doc.Tickets, tickets.PDFTicket{Type: t.TicketTypeName, Attendee: t.AttendeeName, QR: t.QR})
+		}
+	}
+	if len(doc.Tickets) == 0 {
+		return nil, "", errNoTickets
+	}
+	pdf, err = tickets.PDF(doc)
+	return pdf, "tickets-" + o.Code + ".pdf", err
 }
 
 // OrderSummary is one row of an event's order list. TicketCount counts the

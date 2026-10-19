@@ -896,6 +896,39 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
+  /orders/{code}/tickets.pdf:
+    get:
+      operationId: getOrderPDF
+      security: []
+      description: "The order's valid tickets as a PDF, one to a page, numbered as the email numbers them, for whoever holds the token from the order's link. An unknown code and a wrong token get the same 404. 409 no_tickets when the order has no valid ticket. It comes with Content-Disposition: attachment; filename=\"tickets-<code>.pdf\", Cache-Control: no-store and Referrer-Policy: no-referrer. Counts against the same 60 reads a minute per client address as getOrder, then 429 rate_limited."
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string }, description: "The order code, like TS-7K2QF." }
+        - { name: token, in: query, required: true, schema: { type: string }, description: "The t= value from the order's link." }
+      responses:
+        "200":
+          description: OK
+          headers:
+            Content-Disposition: { required: true, schema: { type: string } }
+          content: { application/pdf: { schema: { type: string, format: binary } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /orders/{code}/email:
+    post:
+      operationId: requestTicketEmail
+      security: []
+      description: "The buyer asking for the ticket email again, with the token from the order's link: the same tickets and the same link, to the address on the order. It goes out from the queue, so this answers 202. An unknown code and a wrong token get the same 404. 409 email_on_its_way while the last one is still queued or being retried, 409 too_soon within 10 minutes of the last time it was asked for (by the buyer, the organizer or the sale itself), 409 no_tickets when the order has no valid ticket. Counts against the same 60 requests a minute per client address as getOrder, then 429 rate_limited."
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string }, description: "The order code, like TS-7K2QF." }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/OrderEmailRequest" } } } }
+      responses:
+        "202": { description: Queued }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     session: { type: http, scheme: bearer, description: "A session token, or an organizer API key (tsk_...). A key acts only within its own organizer, and gets 403 session_required on anything that needs a person: your account, your organizer list, the audit log and key management. A read key gets 403 scope_read_only on writes." }
@@ -1108,7 +1141,7 @@ components:
         tickets: { type: array, items: { $ref: "#/components/schemas/OrderTicket" } }
     OrderTicket:
       type: object
-      required: [id, ticket_type_name, attendee_name, status, refunded, qr]
+      required: [id, ticket_type_name, attendee_name, status, refunded, qr, qr_png]
       properties:
         id: { type: string, format: uuid }
         ticket_type_name: { type: string }
@@ -1116,6 +1149,12 @@ components:
         status: { type: string, enum: [valid, void] }
         refunded: { type: boolean, description: "true when it's void because it was refunded." }
         qr: { type: [string, "null"], description: "What the ticket's QR code holds: 22 base64url characters. Whoever has it can get in, so show it only to the ticket's holder. null for a void ticket." }
+        qr_png: { type: [string, "null"], description: "The same QR code drawn as a PNG, standard base64, ready for a data: URL. Whoever has it can get in. null for a void ticket." }
+    OrderEmailRequest:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, maxLength: 200, description: "The t= value from the order's link." }
     PaymentStart:
       type: object
       required: [kind, amount_cents]

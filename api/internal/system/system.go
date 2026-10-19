@@ -17,7 +17,18 @@ const resetScope = `select set_config('app.user_id', '', true), set_config('app.
 // Public runs fn read-only as ts_public: the ids and slugs of live events
 // and of their organizers. Nothing else.
 func Public(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) error {
-	return pgx.BeginTxFunc(ctx, pool, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+	return public(ctx, pool, pgx.ReadOnly, fn)
+}
+
+// Buyer runs fn as ts_public in a transaction that may write. ts_public
+// can't write a row itself; it writes only through the SECURITY DEFINER
+// functions granted to it, which check the buyer's order token.
+func Buyer(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) error {
+	return public(ctx, pool, pgx.ReadWrite, fn)
+}
+
+func public(ctx context.Context, pool *pgxpool.Pool, mode pgx.TxAccessMode, fn func(pgx.Tx) error) error {
+	return pgx.BeginTxFunc(ctx, pool, pgx.TxOptions{AccessMode: mode}, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `set local role ts_public`); err != nil {
 			return err
 		}

@@ -292,6 +292,19 @@ button:disabled {
   text-decoration: line-through;
 }
 
+/* Scanners want sharp module edges: no smoothing when the PNG is scaled. */
+.qr {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  image-rendering: pixelated;
+  margin-top: 8px;
+}
+
+.sent {
+  font-weight: 600;
+}
+
 .keep {
   margin-top: 24px;
   font-weight: 600;

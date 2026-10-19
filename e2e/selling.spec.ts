@@ -77,6 +77,21 @@ test("an organizer connects Stripe, a buyer pays on a phone, and the order shows
     pdf_pages: 2,
   });
 
+  // The order page shows both codes, hands over the same PDF, and can send the email again.
+  await expect(shop.locator("img.qr")).toHaveCount(2);
+  await expect(shop.locator("img.qr").first()).toBeVisible();
+  await expect(shop.locator("img.qr").last()).toBeVisible();
+  const download = shop.waitForEvent("download");
+  await shop.getByRole("link", { name: "Download all tickets (PDF)" }).click();
+  expect((await download).suggestedFilename()).toBe(`tickets-${code}.pdf`);
+  await shop.getByRole("button", { name: "Email me my tickets again" }).click();
+  // Straight after the sale, the first email is either still going or less than 10 minutes old.
+  await expect(
+    shop
+      .getByText("We're still trying to send the latest one.")
+      .or(shop.getByText("We tried sending these less than 10 minutes ago.")),
+  ).toBeVisible();
+
   // A free ticket needs no payment at all.
   await shop.goto(`${SHOP}/${slug}/spring-social`);
   await shop.getByLabel("Volunteer").selectOption("1");

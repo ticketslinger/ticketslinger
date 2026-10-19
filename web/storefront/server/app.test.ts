@@ -894,6 +894,10 @@ const order = {
       status: "valid",
       refunded: false,
       qr: "x".repeat(22) as string | null,
+      qr_png:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==" as
+          | string
+          | null,
     },
     {
       id: "k2",
@@ -902,6 +906,10 @@ const order = {
       status: "valid",
       refunded: false,
       qr: "y".repeat(22) as string | null,
+      qr_png:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGP4DwABAQEAWr0wvAAAAABJRU5ErkJggg==" as
+          | string
+          | null,
     },
   ],
 };
@@ -920,7 +928,7 @@ test("the order page lists each ticket and says to keep the link private", async
   expect(res.headers.get("cache-control")).toBe("no-store");
   expect(res.headers.get("content-security-policy")).not.toContain("script-src");
   expect(html).not.toContain("<script");
-  expect(html).toContain("Ticket 1: General");
+  expect(html).toContain("Ticket 1 of 2: General");
   expect(html).toContain("Ada");
   expect(html).toContain("&lt;b>Grace&lt;/b>");
   expect(html).toContain("Keep this link to yourself: anyone with it can see your tickets.");
@@ -1123,20 +1131,29 @@ test("the order page says what was refunded, from the refund rows", async () => 
   const part = structuredClone(order);
   part.status = "partially_refunded";
   part.refunded_cents = 2345;
-  part.tickets[0] = { ...part.tickets[0], status: "void", refunded: true, qr: null };
+  part.tickets[0] = { ...part.tickets[0], status: "void", refunded: true, qr: null, qr_png: null };
   let html = await show(part);
   expect(html).toContain(
     "Part of this order was refunded: $23.45 is on its way back to your card.",
   );
   expect(html).toContain("Refunded");
   expect(html).not.toContain("x".repeat(22));
-  expect(html).not.toContain("<img");
+  // The one ticket left is ticket 1 of 1, as in the email and the PDF.
+  expect(html.match(/<img /g)).toHaveLength(1);
+  expect(html).toContain('alt="QR code for ticket 1"');
+  expect(html).toContain("Ticket 1 of 1: General");
   expect(html).not.toContain("<svg");
 
   const full = structuredClone(order);
   full.status = "refunded";
   full.refunded_cents = 4690;
-  full.tickets = full.tickets.map((t) => ({ ...t, status: "void", refunded: true, qr: null }));
+  full.tickets = full.tickets.map((t) => ({
+    ...t,
+    status: "void",
+    refunded: true,
+    qr: null,
+    qr_png: null,
+  }));
   html = await show(full);
   expect(html).toContain(
     "This order was refunded in full: $46.90 is on its way back to your card.",
@@ -1178,7 +1195,13 @@ test("the order page says what was refunded, from the refund rows", async () => 
     fee_cents: 0,
     total_cents: 0,
   };
-  zero.tickets = zero.tickets.map((t) => ({ ...t, status: "void", refunded: false, qr: null }));
+  zero.tickets = zero.tickets.map((t) => ({
+    ...t,
+    status: "void",
+    refunded: false,
+    qr: null,
+    qr_png: null,
+  }));
   html = await show(zero);
   expect(html).toContain("These tickets were cancelled.");
   expect(html).not.toContain("refunding");
@@ -1189,7 +1212,7 @@ test("the order page says what was refunded, from the refund rows", async () => 
 
   // Voided without a refund (a free ticket) reads Cancelled.
   const free = structuredClone(order);
-  free.tickets[1] = { ...free.tickets[1], status: "void", refunded: false, qr: null };
+  free.tickets[1] = { ...free.tickets[1], status: "void", refunded: false, qr: null, qr_png: null };
   html = await show(free);
   expect(html).toContain("Cancelled");
   expect(html).toContain("You're going.");
@@ -1199,7 +1222,13 @@ test("a refund the bank sent back tells the buyer to contact the organizer", asy
   const o = structuredClone(order);
   o.status = "refunded";
   o.returned_cents = 4690;
-  o.tickets = o.tickets.map((t) => ({ ...t, status: "void", refunded: true, qr: null }));
+  o.tickets = o.tickets.map((t) => ({
+    ...t,
+    status: "void",
+    refunded: true,
+    qr: null,
+    qr_png: null,
+  }));
   const { a } = app(() => Response.json(o));
   const html = await (await a.request(`/orders/TS-7K2QF?t=${TOK}`)).text();
   expect(html).toContain("Your bank sent $46.90 of your refund back, so it's with Acme again.");
@@ -1290,4 +1319,166 @@ test("the order link page shows our words for each refusal", async () => {
     expect(html).not.toContain("API words");
     expect(html).toContain('value="ada@example"');
   }
+});
+
+const QR_ONE = order.tickets[0].qr_png;
+const QR_TWO = order.tickets[1].qr_png;
+
+test("the order page shows each valid ticket's QR code, the PDF and the email button", async () => {
+  const { a } = app(() => Response.json(order));
+  const res = await a.request(`/orders/TS-7K2QF?t=${TOK}`);
+  const html = await res.text();
+  expect(html.match(/<img class="qr"/g)).toHaveLength(2);
+  expect(html).toContain(
+    `<img class="qr" src="data:image/png;base64,${QR_ONE}" alt="QR code for ticket 1" width="264" height="264"/>`,
+  );
+  expect(html).toContain(`src="data:image/png;base64,${QR_TWO}" alt="QR code for ticket 2"`);
+  expect(html).toContain(
+    `<a href="/orders/TS-7K2QF/tickets.pdf?t=${TOK}">Download all tickets (PDF)</a>`,
+  );
+  expect(html).toContain('<form method="post" action="/orders/TS-7K2QF/email"');
+  expect(html).toContain(`<input type="hidden" name="t" value="${TOK}"/>`);
+  expect(html).toContain("Email me my tickets again");
+  expect(res.headers.get("content-security-policy")).toContain("img-src 'self' data:");
+  expect(res.headers.get("content-security-policy")).not.toContain("script-src");
+  // Only the order page takes data: images.
+  const ev = await app(() => Response.json(event)).a.request("/acme/gala");
+  expect(ev.headers.get("content-security-policy")).not.toContain("data:");
+  const missing = await app(() => apiError(404, "not_found")).a.request(
+    `/orders/TS-7K2QF?t=${TOK}`,
+  );
+  expect(missing.headers.get("content-security-policy")).not.toContain("data:");
+});
+
+test("an order with no valid ticket has no QR, no PDF and no email button", async () => {
+  const o = structuredClone(order);
+  o.status = "refunded";
+  o.refunded_cents = 4690;
+  o.tickets = o.tickets.map((t) => ({
+    ...t,
+    status: "void",
+    refunded: true,
+    qr: null,
+    qr_png: null,
+  }));
+  const { a } = app(() => Response.json(o));
+  const html = await (await a.request(`/orders/TS-7K2QF?t=${TOK}`)).text();
+  expect(html).not.toContain('class="qr"');
+  expect(html).not.toContain("QR code for ticket");
+  expect(html).not.toContain("tickets.pdf");
+  expect(html).not.toContain("Download all tickets (PDF)");
+  expect(html).not.toContain("<form");
+  expect(html).not.toContain("Email me my tickets again");
+});
+
+test("the PDF link passes the API's PDF through, privately", async () => {
+  const pdf = "%PDF-1.7 fake";
+  const { a, calls } = app(
+    () =>
+      new Response(pdf, {
+        headers: {
+          "content-type": "application/pdf",
+          "content-length": String(pdf.length),
+          "content-disposition": 'attachment; filename="tickets-TS-7K2QF.pdf"',
+          "cache-control": "no-store",
+        },
+      }),
+  );
+  const res = await a.request(`/orders/TS-7K2QF/tickets.pdf?t=${TOK}`, {
+    headers: { "x-real-ip": "203.0.113.9" },
+  });
+  expect(res.status).toBe(200);
+  expect(res.headers.get("content-type")).toBe("application/pdf");
+  expect(res.headers.get("content-disposition")).toBe(
+    'attachment; filename="tickets-TS-7K2QF.pdf"',
+  );
+  expect(res.headers.get("cache-control")).toBe("no-store");
+  expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+  expect(res.headers.get("content-length")).toBe(String(pdf.length));
+  expect(await res.text()).toBe(pdf);
+  const url = new URL(calls[0].url);
+  expect(url.pathname).toBe("/v1/orders/TS-7K2QF/tickets.pdf");
+  expect(url.searchParams.get("token")).toBe(TOK);
+  expect(calls[0].headers.get("x-real-ip")).toBe("203.0.113.9");
+
+  for (const [api, path] of [
+    [() => apiError(404, "not_found"), `/orders/TS-7K2QF/tickets.pdf?t=${TOK}`],
+    [() => Response.json({}), "/orders/TS-7K2QF/tickets.pdf"],
+  ] as [Api, string][]) {
+    const r = await app(api).a.request(path);
+    expect(r.status).toBe(404);
+    expect(r.headers.get("content-type")).toContain("text/html");
+    expect(r.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(await r.text()).toContain("That link doesn't open an order.");
+  }
+
+  // No valid ticket left: back to the order page, which says why.
+  const none = await app(() => apiError(409, "no_tickets")).a.request(
+    `/orders/TS-7K2QF/tickets.pdf?t=${TOK}`,
+  );
+  expect(none.status).toBe(303);
+  expect(none.headers.get("location")).toBe(`/orders/TS-7K2QF?t=${TOK}`);
+
+  // No length, or more than 20 MB: refused, and none of the body goes out.
+  for (const length of [null, String(20 * 1024 * 1024 + 1)]) {
+    const headers: Record<string, string> = { "content-type": "application/pdf" };
+    if (length) headers["content-length"] = length;
+    const body = new ReadableStream({
+      start(ctl) {
+        ctl.enqueue(new TextEncoder().encode(pdf));
+        ctl.close();
+      },
+    });
+    const r = await app(() => new Response(body, { headers })).a.request(
+      `/orders/TS-7K2QF/tickets.pdf?t=${TOK}`,
+    );
+    expect(r.status).toBe(502);
+    expect(r.headers.get("content-type")).toContain("text/html");
+    expect(await r.text()).not.toContain(pdf);
+  }
+});
+
+test("asking for the email again answers on the order page", async () => {
+  const ask = async (api: Api) => {
+    const { a, calls } = app(api);
+    const res = await a.request("/orders/TS-7K2QF/email", form({ t: TOK }));
+    return { res, calls };
+  };
+  const { res, calls } = await ask(() => new Response(null, { status: 202 }));
+  expect(res.status).toBe(303);
+  expect(res.headers.get("location")).toBe(`/orders/TS-7K2QF?t=${TOK}&sent=1`);
+  expect(new URL(calls[0].url).pathname).toBe("/v1/orders/TS-7K2QF/email");
+  expect(calls[0].method).toBe("POST");
+  expect(await calls[0].json()).toEqual({ token: TOK });
+  expect(calls[0].headers.get("x-real-ip")).toBe("203.0.113.9");
+
+  const to = async (code: string) =>
+    (await ask(() => apiError(409, code))).res.headers.get("location");
+  expect(await to("email_on_its_way")).toBe(`/orders/TS-7K2QF?t=${TOK}&sent=pending`);
+  expect(await to("too_soon")).toBe(`/orders/TS-7K2QF?t=${TOK}&sent=soon`);
+  // Nothing to send: back to the page, which no longer offers it, with no notice.
+  expect(await to("no_tickets")).toBe(`/orders/TS-7K2QF?t=${TOK}`);
+
+  const lost = await ask(() => apiError(404, "not_found"));
+  expect(lost.res.status).toBe(404);
+  expect(await lost.res.text()).toContain("That link doesn't open an order.");
+  expect((await ask(() => apiError(429, "rate_limited"))).res.status).toBe(429);
+  const { a, calls: none } = app(() => new Response(null, { status: 202 }));
+  expect((await a.request("/orders/TS-7K2QF/email", form({ t: "short" }))).status).toBe(404);
+  expect(none).toHaveLength(0);
+
+  const notice = async (sent: string) => {
+    const { a } = app(() => Response.json(order));
+    return (await a.request(`/orders/TS-7K2QF?t=${TOK}&sent=${sent}`)).text();
+  };
+  expect(await notice("1")).toContain(
+    "On its way to ada@example.com. Give it a minute or two, and check spam if it doesn't turn up.",
+  );
+  expect(await notice("soon")).toContain(
+    "We tried sending these less than 10 minutes ago. Wait until it's been 10 minutes, then try again.",
+  );
+  expect(await notice("pending")).toContain(
+    "We're still trying to send the latest one. Give it a little while, then check your spam folder too.",
+  );
+  expect(await notice("other")).not.toContain('role="status"');
 });
