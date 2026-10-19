@@ -186,9 +186,12 @@ func TestDirectModeSkipsTheFeeStep(t *testing.T) {
 	payment := f.id(t, `select id from payments where payment_intent_id = $1`, pi.ID)
 	var refund uuid.UUID
 	f.must(t, system.Run(ctx, s.Pool, f.org, func(tx pgx.Tx) (err error) {
-		refund, err = sales.RequestRefundForTest(ctx, tx, f.org, payment, 2500, 100, true, "organizer", nil)
+		refund, err = sales.RequestRefundForTest(ctx, tx, f.org, payment, 2500, 0, true, "organizer", nil)
 		return err
 	}))
+	// A fee on the row anyway (the insert refuses one past the payment's
+	// own, which is none here): the payment carrying no fee is what skips it.
+	f.exec(t, `update refunds set fee_cents = 100 where id = $1`, refund)
 	// Stripe's word that the money went back queues no fee step: only the
 	// request's own job is waiting.
 	f.must(t, system.Run(ctx, s.Pool, f.org, func(tx pgx.Tx) error { return sales.FinishRefundForTest(s, ctx, tx, f.org, refund, "succeeded") }))
