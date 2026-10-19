@@ -173,7 +173,8 @@ test("real test-mode Stripe: a card, a 3D Secure card, a refund and a cancellati
       console.log("js-bytes", js);
       test.info().annotations.push({ type: "js-bytes", description: JSON.stringify(js) });
       expect(js.topFrame).toBeGreaterThan(0);
-      expect(js.topFrame).toBeLessThanOrEqual(60 * 1024);
+      // Soft: an over-budget checkout still fails the run, but the purchases below still get tested.
+      expect.soft(js.topFrame).toBeLessThanOrEqual(60 * 1024);
     } else await toCard();
     await payByCard(shop, number);
     if (threeDS) await complete3DS(shop);
