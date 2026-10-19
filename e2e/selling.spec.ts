@@ -1,5 +1,12 @@
+import { readFileSync } from "node:fs";
 import { devices, expect, test } from "@playwright/test";
-import { API, createSellableEvent, signUpWithPasskey, virtualAuthenticator } from "./helpers";
+import {
+  API,
+  cameraShowing,
+  createSellableEvent,
+  signUpWithPasskey,
+  virtualAuthenticator,
+} from "./helpers";
 
 const SHOP = "http://localhost:3003";
 
@@ -8,6 +15,8 @@ test("an organizer connects Stripe, a buyer pays on a phone, and the order shows
   context,
   browser,
 }) => {
+  // Three camera scans at the door ride on top of the sale.
+  test.slow();
   await virtualAuthenticator(page, context);
   const stamp = Date.now();
   await signUpWithPasskey(page, "Olive", `e2e-sell-${stamp}@example.com`);
@@ -81,6 +90,8 @@ test("an organizer connects Stripe, a buyer pays on a phone, and the order shows
   await expect(shop.locator("img.qr")).toHaveCount(2);
   await expect(shop.locator("img.qr").first()).toBeVisible();
   await expect(shop.locator("img.qr").last()).toBeVisible();
+  // Ada's code, as a phone held up to the door would show it.
+  const qr = await shop.locator("img.qr").first().screenshot({ type: "jpeg", quality: 95 });
   const download = shop.waitForEvent("download");
   await shop.getByRole("link", { name: "Download all tickets (PDF)" }).click();
   expect((await download).suggestedFilename()).toBe(`tickets-${code}.pdf`);
@@ -112,4 +123,56 @@ test("an organizer connects Stripe, a buyer pays on a phone, and the order shows
   await page.getByRole("link", { name: "Spring Social" }).click();
   await page.getByRole("link", { name: "Orders" }).click();
   await expect(page.getByText("2 orders · 3 tickets · $46.90 in sales")).toBeVisible();
+
+  // The owner downloads the orders as a spreadsheet.
+  await page.getByRole("link", { name: "Report" }).click();
+  const csv = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download orders (CSV)" }).click();
+  const header = readFileSync(await (await csv).path(), "utf8").split(/\r?\n/)[0];
+  expect(header).toContain("Tickets bought");
+  expect(header).toContain("Fee paid by");
+
+  // At the door, a phone's camera sees Ada's ticket: green, then amber when it's shown again.
+  const door = await cameraShowing(qr, test.info().outputPath("qr.mjpeg"));
+  const staff = {
+    ...devices["Pixel 7"],
+    permissions: ["camera"],
+    baseURL: test.info().project.use.baseURL,
+  };
+  const cookies = await context.cookies();
+  const scanAt = async (noNativeReader: boolean) => {
+    const phone = await door.newContext(staff);
+    await phone.addCookies(cookies);
+    const p = await phone.newPage();
+    // Without the browser's own reader, the scanner falls back to our zxing-wasm under the CSP.
+    if (noNativeReader)
+      await p.addInitScript(() => {
+        delete (globalThis as { BarcodeDetector?: unknown }).BarcodeDetector;
+      });
+    await p.goto(`/o/${slug}`);
+    await p.getByRole("link", { name: "Spring Social" }).click();
+    await p.getByRole("link", { name: "Check-in" }).click();
+    await p.getByRole("button", { name: "Start scanning" }).click();
+    return { phone, p };
+  };
+  try {
+    const { phone, p } = await scanAt(false);
+    await expect(p.getByRole("heading", { name: "Welcome in" })).toBeVisible({ timeout: 10_000 });
+    await expect(p.getByText("Ada · General")).toBeVisible();
+    // The frame keeps playing: green clears at 2.5 s, the repeat guard lets go at 3 s.
+    await expect(p.getByRole("heading", { name: "Already checked in" })).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(p.getByText("1 of 3 checked in")).toBeVisible();
+    await phone.close();
+
+    const fallback = await scanAt(true);
+    expect(await fallback.p.evaluate(() => "BarcodeDetector" in globalThis)).toBe(false);
+    await expect(fallback.p.getByRole("heading", { name: "Already checked in" })).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(fallback.p.getByText("1 of 3 checked in")).toBeVisible();
+  } finally {
+    await door.close();
+  }
 });
