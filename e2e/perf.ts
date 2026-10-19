@@ -6,10 +6,12 @@ import lighthouse from "lighthouse";
 /**
  * Gzip bytes of every script `url` loads. `topFrame` counts only scripts the top-level
  * document loads, first or third party; `all` adds the ones inside iframes (Turnstile's challenge).
+ * `then` runs after load and before the quiet wait, for scripts a page only loads once used.
  */
 export async function scriptBytes(
   page: Page,
   url: string,
+  then?: () => Promise<unknown>,
 ): Promise<{ topFrame: number; all: number }> {
   const scripts: Response[] = [];
   let last = Date.now();
@@ -22,6 +24,7 @@ export async function scriptBytes(
   // Not "networkidle": Turnstile's challenge iframe runs a blob: script whose request never
   // finishes, so the page never goes idle. Wait for load, then two quiet seconds without a script.
   await page.goto(url, { waitUntil: "load" });
+  await then?.();
   while (Date.now() - last < 2_000) await page.waitForTimeout(250);
   page.off("response", collect);
   let topFrame = 0;

@@ -157,22 +157,24 @@ test("real test-mode Stripe: a card, a 3D Secure card, a refund and a cancellati
       timeout: 15_000,
     });
     await shop.getByRole("button", { name: "Get tickets" }).click();
-    await shop.getByLabel("Email").fill(`smoke+${stamp}-${who}@example.com`);
-    await shop.getByLabel("Name on ticket 1").fill(`${who} One`);
-    await shop.getByLabel("Name on ticket 2").fill(`${who} Two`);
-    await shop.getByRole("button", { name: "Continue to payment" }).click();
+    await shop.getByLabel("Email").waitFor();
     const pay = shop.getByRole("button", { name: "Pay $52.00" });
-    await expect(pay).toBeVisible({ timeout: 30_000 });
-    if (weigh) {
-      // The checkout's own JS, Stripe's loader included, weighed with the Payment Element up (D7).
+    const toCard = async () => {
+      await shop.getByLabel("Email").fill(`smoke+${stamp}-${who}@example.com`);
+      await shop.getByLabel("Name on ticket 1").fill(`${who} One`);
+      await shop.getByLabel("Name on ticket 2").fill(`${who} Two`);
+      await shop.getByRole("button", { name: "Continue to payment" }).click();
+      await expect(pay).toBeVisible({ timeout: 30_000 });
       await cardFrame(shop);
-      const js = await scriptBytes(shop, shop.url());
+    };
+    if (weigh) {
+      // The checkout's JS with the Payment Element up, Stripe's loader included (D7).
+      const js = await scriptBytes(shop, shop.url(), toCard);
       console.log("js-bytes", js);
       test.info().annotations.push({ type: "js-bytes", description: JSON.stringify(js) });
       expect(js.topFrame).toBeGreaterThan(0);
       expect(js.topFrame).toBeLessThanOrEqual(60 * 1024);
-      await expect(pay).toBeVisible({ timeout: 30_000 });
-    }
+    } else await toCard();
     await payByCard(shop, number);
     if (threeDS) await complete3DS(shop);
     // Only the webhook, through stripe listen, makes the order.
