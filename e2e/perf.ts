@@ -63,6 +63,18 @@ export async function lighthouseScores(
       if (!result) throw new Error("lighthouse returned no result");
       const { categories, runtimeError } = result.lhr;
       if (runtimeError) throw new Error(`lighthouse: ${runtimeError.code} ${runtimeError.message}`);
+      // Whatever costs points, by audit id, so a red run says why.
+      for (const c of Object.values(categories)) {
+        for (const ref of c.auditRefs) {
+          const a = result.lhr.audits[ref.id];
+          if (ref.weight > 0 && a.score !== null && a.score < 1) {
+            const items = (a.details as { items?: { node?: { snippet?: string } }[] } | undefined)
+              ?.items;
+            const at = items?.[0]?.node?.snippet ?? "";
+            console.log(`lighthouse ${c.id}: ${ref.id} ${a.score} ${a.displayValue ?? ""} ${at}`);
+          }
+        }
+      }
       scores.performance.push(categories.performance.score ?? 0);
       scores.accessibility.push(categories.accessibility.score ?? 0);
       scores.bestPractices.push(categories["best-practices"].score ?? 0);

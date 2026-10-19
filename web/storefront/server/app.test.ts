@@ -81,7 +81,7 @@ test("event page is server-rendered; its one script of ours is the Turnstile loa
   expect(res.status).toBe(200);
   expect(html).toContain("Spring Gala");
   expect(html).toContain("$25.00");
-  expect(html.match(/<script[^>]*>/g)).toEqual([
+  expect(html.match(/<script[^>]*>/gi)).toEqual([
     '<script type="module" src="/assets/turnstile.js">',
   ]);
   expect(html).not.toMatch(/style="/);
