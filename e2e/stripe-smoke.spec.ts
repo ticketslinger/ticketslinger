@@ -4,6 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { devices, expect, type Frame, type Page, test } from "@playwright/test";
 import { signUpWithPasskey, virtualAuthenticator } from "./helpers";
+import { scriptBytes } from "./perf";
 
 const SHOP = "http://localhost:3003";
 const ACCOUNT = process.env.STRIPE_SMOKE_ACCOUNT ?? "";
@@ -80,7 +81,11 @@ async function complete3DS(shop: Page) {
     .poll(
       async () => {
         for (const f of shop.frames()) {
-          const ok = f.locator('#test-source-authorize-3ds, button:text-is("Complete")').first();
+          const ok = f
+            .locator(
+              '#test-source-authorize-3ds, button:text-is("Complete"), button:text-is("Complete authentication")',
+            )
+            .first();
           if (await ok.count().catch(() => 0)) {
             await ok.dispatchEvent("click");
             return true;
@@ -143,7 +148,7 @@ test("real test-mode Stripe: a card, a 3D Secure card, a refund and a cancellati
   await expect(page.getByRole("button", { name: "Back to draft" })).toBeVisible();
 
   // Two buyers, 2 × General each: $50.00 plus a $2.00 service fee.
-  const buy = async (who: string, number: string, threeDS: boolean) => {
+  const buy = async (who: string, number: string, threeDS: boolean, weigh = false) => {
     const buyer = await browser.newContext({ ...devices["Pixel 7"] });
     const shop = await buyer.newPage();
     await shop.goto(`${SHOP}/${slug}/smoke-social`);
@@ -152,11 +157,27 @@ test("real test-mode Stripe: a card, a 3D Secure card, a refund and a cancellati
       timeout: 15_000,
     });
     await shop.getByRole("button", { name: "Get tickets" }).click();
-    await shop.getByLabel("Email").fill(`smoke+${stamp}-${who}@example.com`);
-    await shop.getByLabel("Name on ticket 1").fill(`${who} One`);
-    await shop.getByLabel("Name on ticket 2").fill(`${who} Two`);
-    await shop.getByRole("button", { name: "Continue to payment" }).click();
-    await expect(shop.getByRole("button", { name: "Pay $52.00" })).toBeVisible({ timeout: 30_000 });
+    await shop.getByLabel("Email").waitFor();
+    const pay = shop.getByRole("button", { name: "Pay $52.00" });
+    const toCard = async () => {
+      await shop.getByLabel("Email").fill(`smoke+${stamp}-${who}@example.com`);
+      await shop.getByLabel("Name on ticket 1").fill(`${who} One`);
+      await shop.getByLabel("Name on ticket 2").fill(`${who} Two`);
+      await shop.getByRole("button", { name: "Continue to payment" }).click();
+      await expect(pay).toBeVisible({ timeout: 30_000 });
+      await cardFrame(shop);
+    };
+    if (weigh) {
+      // The checkout's JS with the Payment Element up. Stripe.js has to come from js.stripe.com
+      // (PCI) and is about 300 KB gzip by itself, so the budget gates our own JS only (D7);
+      // Stripe's share (thirdParty) and the totals are recorded, ungated.
+      const js = await scriptBytes(shop, shop.url(), toCard);
+      const weight = { ...js, thirdParty: js.topFrame - js.own };
+      console.log("js-bytes", weight);
+      test.info().annotations.push({ type: "js-bytes", description: JSON.stringify(weight) });
+      expect(js.own).toBeGreaterThan(0);
+      expect(js.own).toBeLessThanOrEqual(60 * 1024);
+    } else await toCard();
     await payByCard(shop, number);
     if (threeDS) await complete3DS(shop);
     // Only the webhook, through stripe listen, makes the order.
@@ -165,9 +186,9 @@ test("real test-mode Stripe: a card, a 3D Secure card, a refund and a cancellati
     await buyer.close();
     return code;
   };
-  const first = await buy("Ada", "4242 4242 4242 4242", false);
-  // Stripe's test card that always asks for 3D Secure.
-  await buy("Bo", "4000 0025 0000 3155", true);
+  const first = await buy("Ada", "4242 4242 4242 4242", false, true);
+  // Stripe's test card that asks for 3D Secure on every payment.
+  await buy("Bo", "4000 0027 6000 3184", true);
 
   // Refund ticket 1 of the first order, with our fee: $25.00 + $1.00.
   await page.goto(`/o/${slug}`);
