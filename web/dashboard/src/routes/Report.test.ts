@@ -55,7 +55,7 @@ test("empty means no sales, no orders, no money", () => {
 
 test("the orders note says refunded ones are included", () => {
   expect(ordersNote(10)).toBe(
-    "10 orders, refunded ones included. The Orders tab lists only the ones still standing.",
+    "10 orders, refunded ones included. The Orders tab counts only the ones still standing.",
   );
   expect(ordersNote(1)).toStartWith("1 order, refunded");
 });

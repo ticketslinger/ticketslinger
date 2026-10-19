@@ -30,7 +30,7 @@ export const isEmpty = (r: EventReport) => r.gross_cents === 0 && r.orders === 0
 
 /** Says why the Orders tab can list fewer orders than this figure. */
 export const ordersNote = (n: number) =>
-  `${n} ${n === 1 ? "order" : "orders"}, refunded ones included. The Orders tab lists only the ones still standing.`;
+  `${n} ${n === 1 ? "order" : "orders"}, refunded ones included. The Orders tab counts only the ones still standing.`;
 
 /** The file name in a Content-Disposition header, or the fallback. */
 export function fileName(header: string | null, fallback: string): string {
