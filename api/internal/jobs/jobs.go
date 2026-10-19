@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ticketslinger/ticketslinger/api/internal/emails"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 )
 
@@ -288,7 +289,7 @@ func SendEmail(m mailer.Mailer) Handler {
 		if err := json.Unmarshal(payload, &p); err != nil {
 			return err
 		}
-		return Deliver(ctx, m, mailer.Message{To: p.To, Subject: p.Subject, Text: p.Text})
+		return Deliver(ctx, m, emails.Plain(p.To, p.Subject, p.Text))
 	}
 }
 

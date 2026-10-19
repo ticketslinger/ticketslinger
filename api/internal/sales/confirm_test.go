@@ -1,11 +1,16 @@
 package sales_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -637,5 +642,53 @@ func TestTicketsKeepWhatTheBuyerPaid(t *testing.T) {
 				t.Fatalf("charges %d + fees %d != total %d", charges, fees, c.Quote.TotalCents)
 			}
 		})
+	}
+}
+
+// The confirmation carries every valid ticket's QR inline and in the PDF,
+// and none of them reaches a log line.
+func TestConfirmationEmailCarriesTheTickets(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	c, pi := payingWith(t, s, f, fake, buy(sales.Item{TicketTypeID: f.general, Quantity: 2}),
+		sales.Details{Email: "buyer@example.com", Attendees: []string{"Ada", "Bob"}})
+	f.must(t, s.HandleStripeEvent(ctx, succeeded(pi.ID, "acct_fake1", c.Quote.TotalCents, 1)))
+	order, code, _ := f.orderOf(t, c.ID)
+	m := &mailer.Memory{}
+	drain(t, s, m)
+
+	sum, ok := m.Summary("buyer@example.com")
+	if !ok || sum.Subject != "Your tickets for Gala" || sum.Inline != 2 || !slices.Equal(sum.Attachments, []string{"tickets-" + code + ".pdf"}) || sum.PDFPages != 2 {
+		t.Fatalf("summary %+v, %v", sum, ok)
+	}
+	msg := m.Sent[len(m.Sent)-1]
+	if !strings.Contains(msg.Text, "Ticket 2 of 2: General\nBob") || !strings.Contains(msg.Text, "/acme/gala/order-link") ||
+		msg.Tags["order"] != order.String() || msg.Tags["organizer"] != f.org.String() {
+		t.Errorf("email %q, tags %v", msg.Text, msg.Tags)
+	}
+	rows, err := f.owner.Query(ctx, `select secret from tickets where order_id = $1`, order)
+	f.must(t, err)
+	secrets, err := pgx.CollectRows(rows, pgx.RowTo[[]byte])
+	f.must(t, err)
+	for _, sec := range secrets {
+		qr := base64.RawURLEncoding.EncodeToString(sec)
+		if strings.Contains(logs.String(), qr) || strings.Contains(logs.String(), hex.EncodeToString(sec)) {
+			t.Errorf("a QR value is in the log:\n%s", logs.String())
+		}
+	}
+
+	// Every ticket void: nothing to bring to the door, so nothing is sent.
+	f.exec(t, `update tickets set status = 'void' where order_id = $1`, order)
+	payload, _ := json.Marshal(map[string]string{"order_id": order.String(), "organizer_id": f.org.String()})
+	m = &mailer.Memory{}
+	f.must(t, s.OrderConfirmation(m)(ctx, payload))
+	if len(m.Sent) != 0 {
+		t.Errorf("sent %d emails for an order with no valid tickets", len(m.Sent))
 	}
 }

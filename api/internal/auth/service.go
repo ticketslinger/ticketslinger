@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ticketslinger/ticketslinger/api/internal/emails"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/ratelimit"
 	"github.com/ticketslinger/ticketslinger/api/internal/turnstile"
@@ -222,7 +223,7 @@ func (s *Service) Signup(ctx context.Context, email, password, name, turnstileTo
 	// The account exists either way; a failed send must not fail the signup.
 	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := s.mail.Send(sendCtx, mailer.Message{To: email, Subject: "Confirm your email", Text: body}); err != nil {
+	if err := s.mail.Send(sendCtx, emails.Plain(email, "Confirm your email", body)); err != nil {
 		slog.ErrorContext(ctx, "verification email not sent", "user", u.ID, "err", err)
 	}
 	return sess, u, nil

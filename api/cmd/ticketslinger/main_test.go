@@ -155,6 +155,24 @@ func TestTestMailReturnsTheNewestLinkForThatAddress(t *testing.T) {
 	}
 }
 
+func TestTestMailSummary(t *testing.T) {
+	m := &mailer.Memory{}
+	_ = m.Send(context.Background(), mailer.Message{To: "a@example.com", Subject: "Your tickets", Parts: []mailer.Part{
+		{Filename: "ticket-1.png", ContentType: "image/png", ContentID: "qr-1", Data: []byte("png")},
+		{Filename: "tickets-TS-ABCDE.pdf", ContentType: "application/pdf", Data: []byte("<< /Type /Pages >> << /Type /Page >> << /Type/Page >>")}}})
+	h := testRoutes(http.NotFoundHandler(), m, nil, "")
+	if code, body := get(t, h, "/__test/last-email-summary?to=a@example.com"); code != 200 ||
+		body != `{"subject":"Your tickets","inline":1,"attachments":["tickets-TS-ABCDE.pdf"],"pdf_pages":2}`+"\n" {
+		t.Fatalf("got %d %q", code, body)
+	}
+	if code, _ := get(t, h, "/__test/last-email-summary?to=nobody@example.com"); code != 404 {
+		t.Errorf("no mail: got %d, want 404", code)
+	}
+	if code, _ := get(t, h, "/__test/last-email-summary?to=a@example.com", "X-Forwarded-For", "203.0.113.9"); code != 404 {
+		t.Errorf("proxied: got %d, want 404", code)
+	}
+}
+
 func TestWorkerSendsQueuedEmail(t *testing.T) {
 	m := &mailer.Memory{}
 	w := newWorker(nil, m, config.Config{}, nil)

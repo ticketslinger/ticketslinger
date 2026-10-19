@@ -237,6 +237,15 @@ func testRoutes(api http.Handler, m *mailer.Memory, fake *payments.Fake, webhook
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = fmt.Fprint(w, link)
 	})
+	mux.HandleFunc("GET /__test/last-email-summary", func(w http.ResponseWriter, r *http.Request) {
+		sum, ok := m.Summary(r.URL.Query().Get("to"))
+		if proxied(r) || !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sum)
+	})
 	mux.HandleFunc("POST /__test/stripe/pay-latest", func(w http.ResponseWriter, r *http.Request) {
 		var pi plugin.PaymentIntent
 		ok := fake != nil

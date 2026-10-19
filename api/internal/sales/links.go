@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/ticketslinger/ticketslinger/api/internal/emails"
 	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
 	"github.com/ticketslinger/ticketslinger/api/internal/system"
@@ -98,14 +99,14 @@ func (s *Service) OrderLinks(m mailer.Mailer) jobs.Handler {
 		}
 		slices.Sort(pairs)
 		sum := sha256.Sum256([]byte(strings.Join(pairs, "\n")))
-		err = jobs.Deliver(ctx, m, mailer.Message{
-			To:      orders[len(orders)-1].Email, // the address on the order, not the spelling typed in the form
-			Subject: "Your ticket link for " + name,
-			Text: "Here's the link to your tickets for " + name +
-				". It replaces any link we sent before, so an older one won't open them any more. Keep it to yourself: anyone with it can see your tickets.\n\n" +
-				strings.Join(lines, "\n"),
-			IdempotencyKey: "ts-job-" + jobs.ID(ctx) + "-l" + hex.EncodeToString(sum[:])[:16],
-		})
+		msg := emails.Plain(
+			orders[len(orders)-1].Email, // the address on the order, not the spelling typed in the form
+			"Your ticket link for "+name,
+			"Here's the link to your tickets for "+name+
+				". It replaces any link we sent before, so an older one won't open them any more. Keep it to yourself: anyone with it can see your tickets.\n\n"+
+				strings.Join(lines, "\n"))
+		msg.IdempotencyKey = "ts-job-" + jobs.ID(ctx) + "-l" + hex.EncodeToString(sum[:])[:16]
+		err = jobs.Deliver(ctx, m, msg)
 		if err != nil {
 			return err
 		}
