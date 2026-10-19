@@ -220,7 +220,9 @@ func (s *Service) Signup(ctx context.Context, email, password, name, turnstileTo
 	body := "Hi,\n\nConfirm your email for TicketSlinger by opening this link:\n\n" + link +
 		"\n\nIt works for 48 hours. If you didn't sign up, you can ignore this email.\n"
 	// The account exists either way; a failed send must not fail the signup.
-	if err := s.mail.Send(ctx, email, "Confirm your email", body); err != nil {
+	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := s.mail.Send(sendCtx, mailer.Message{To: email, Subject: "Confirm your email", Text: body}); err != nil {
 		slog.ErrorContext(ctx, "verification email not sent", "user", u.ID, "err", err)
 	}
 	return sess, u, nil

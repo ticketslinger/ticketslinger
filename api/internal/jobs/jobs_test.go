@@ -275,7 +275,7 @@ func TestSendEmailHandler(t *testing.T) {
 	if err := jobs.SendEmail(m)(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Sent) != 1 || m.Sent[0] != (mailer.Message{To: "a@example.com", Subject: "Hi", Text: "Hello"}) {
+	if len(m.Sent) != 1 || m.Sent[0].To != "a@example.com" || m.Sent[0].Subject != "Hi" || m.Sent[0].Text != "Hello" || m.Sent[0].IdempotencyKey != "" {
 		t.Fatalf("sent %+v", m.Sent)
 	}
 	if err := jobs.SendEmail(m)(context.Background(), []byte(`{`)); err == nil {
@@ -582,5 +582,99 @@ func TestDelayInThePastStillWaits(t *testing.T) {
 func TestNilErrorsStayNil(t *testing.T) {
 	if jobs.Permanent(nil) != nil || jobs.Delay(time.Now(), nil) != nil {
 		t.Fatal("wrapping nil must give nil")
+	}
+}
+
+// fakeMailer records each message and answers with the next of errs (nil once they run out).
+type fakeMailer struct {
+	sent []mailer.Message
+	errs []error
+}
+
+func (f *fakeMailer) Send(_ context.Context, m mailer.Message) error {
+	f.sent = append(f.sent, m)
+	if len(f.errs) == 0 {
+		return nil
+	}
+	err := f.errs[0]
+	f.errs = f.errs[1:]
+	return err
+}
+
+func TestDeliverUsesTheJobsKey(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	f := &fakeMailer{errs: []error{&mailer.Error{Provider: "resend", Kind: mailer.Retry, Status: 503, Code: "unknown", Problem: "unreachable"}}}
+	w := &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{
+		"mail": func(ctx context.Context, _ []byte) error {
+			return jobs.Deliver(ctx, f, mailer.Message{To: "a@example.com", Subject: "Hi", Text: "Hello"})
+		},
+		"custom": func(ctx context.Context, _ []byte) error {
+			return jobs.Deliver(ctx, f, mailer.Message{To: "a@example.com", Subject: "Hi", Text: "Hello", IdempotencyKey: "custom"})
+		},
+	}}
+	enqueue(t, pool, "mail", 1)
+	var id string
+	if err := pool.QueryRow(ctx, `select id::text from jobs`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if ran, err := w.RunOnce(ctx); !ran || err != nil {
+			t.Fatalf("ran=%v err=%v", ran, err)
+		}
+		if _, err := pool.Exec(ctx, `update jobs set run_at = now()`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(f.sent) != 2 || f.sent[0].IdempotencyKey != "ts-job-"+id || f.sent[1].IdempotencyKey != "ts-job-"+id {
+		t.Fatalf("keys %+v, want ts-job-%s twice", f.sent, id)
+	}
+	enqueue(t, pool, "custom", 1)
+	if ran, err := w.RunOnce(ctx); !ran || err != nil {
+		t.Fatalf("ran=%v err=%v", ran, err)
+	}
+	if got := f.sent[2].IdempotencyKey; got != "custom" {
+		t.Fatalf("key %q, want the message's own", got)
+	}
+}
+
+func TestDeliverMapsKinds(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	f := &fakeMailer{}
+	w := &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{"mail": func(ctx context.Context, _ []byte) error {
+		return jobs.Deliver(ctx, f, mailer.Message{To: "a@example.com", Subject: "Hi", Text: "Hello"})
+	}}}
+	run := func() {
+		t.Helper()
+		if ran, err := w.RunOnce(ctx); !ran || err != nil {
+			t.Fatalf("ran=%v err=%v", ran, err)
+		}
+	}
+
+	f.errs = []error{&mailer.Error{Provider: "resend", Kind: mailer.Permanent, Status: 422, Code: "validation_error", Problem: "bad_address"}}
+	enqueue(t, pool, "mail", 1)
+	run()
+	if n := count(t, pool, `select count(*) from jobs where run_at = 'infinity' and last_error = 'resend: 422 validation_error'`); n != 1 || len(f.sent) != 1 {
+		t.Fatalf("parked %d after %d sends, want 1 after 1", n, len(f.sent))
+	}
+	if _, err := pool.Exec(ctx, `delete from jobs`); err != nil {
+		t.Fatal(err)
+	}
+
+	// The brief's 15:00 UTC, on today's date: the queue keeps a delay
+	// between now()+1s and now()+25h of the database's real clock.
+	day := time.Now().UTC().Truncate(24 * time.Hour)
+	jobs.SetNow(t, day.Add(15*time.Hour))
+	f.errs = []error{&mailer.Error{Provider: "resend", Kind: mailer.DailyQuota, Status: 429, Code: "daily_quota_exceeded", Problem: "quota"}}
+	enqueue(t, pool, "mail", 1)
+	run()
+	var runAt time.Time
+	var attempts int
+	if err := pool.QueryRow(ctx, `select run_at, attempts from jobs`).Scan(&runAt, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if want := day.Add(24*time.Hour + 5*time.Minute); !runAt.Equal(want) || attempts != 0 {
+		t.Fatalf("run_at %v attempts %d, want %v and 0", runAt, attempts, want)
 	}
 }

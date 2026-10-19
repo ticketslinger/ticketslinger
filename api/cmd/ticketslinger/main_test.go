@@ -129,7 +129,7 @@ func TestTestModeRefusesPublicURLs(t *testing.T) {
 
 func TestTestMailRefusesProxiedRequests(t *testing.T) {
 	m := &mailer.Memory{}
-	_ = m.Send(context.Background(), "a@example.com", "Confirm", "Open http://localhost:3002/verify-email?token=t")
+	_ = m.Send(context.Background(), mailer.Message{To: "a@example.com", Subject: "Confirm", Text: "Open http://localhost:3002/verify-email?token=t"})
 	h := testRoutes(http.NotFoundHandler(), m, nil, "")
 	for _, hdr := range []string{"X-Real-IP", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded"} {
 		if code, body := get(t, h, "/__test/last-email?to=a@example.com", hdr, "203.0.113.9"); code != 404 {
@@ -141,9 +141,9 @@ func TestTestMailRefusesProxiedRequests(t *testing.T) {
 func TestTestMailReturnsTheNewestLinkForThatAddress(t *testing.T) {
 	m := &mailer.Memory{}
 	ctx := context.Background()
-	_ = m.Send(ctx, "a@example.com", "Confirm", "Open http://localhost:3002/verify-email?token=old to confirm.")
-	_ = m.Send(ctx, "a@example.com", "Confirm", "Open http://localhost:3002/verify-email?token=new to confirm.")
-	_ = m.Send(ctx, "b@example.com", "Confirm", "Open http://localhost:3002/verify-email?token=bee to confirm.")
+	_ = m.Send(ctx, mailer.Message{To: "a@example.com", Subject: "Confirm", Text: "Open http://localhost:3002/verify-email?token=old to confirm."})
+	_ = m.Send(ctx, mailer.Message{To: "a@example.com", Subject: "Confirm", Text: "Open http://localhost:3002/verify-email?token=new to confirm."})
+	_ = m.Send(ctx, mailer.Message{To: "b@example.com", Subject: "Confirm", Text: "Open http://localhost:3002/verify-email?token=bee to confirm."})
 	h := testRoutes(http.NotFoundHandler(), m, nil, "")
 
 	if code, body := get(t, h, "/__test/last-email?to=a@example.com"); code != 200 || body != "http://localhost:3002/verify-email?token=new" {

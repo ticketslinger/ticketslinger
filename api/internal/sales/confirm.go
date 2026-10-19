@@ -311,7 +311,7 @@ func (s *Service) OrderConfirmation(m mailer.Mailer) jobs.Handler {
 		if err != nil {
 			return err
 		}
-		return m.Send(ctx, email, "Your tickets for "+name, "You're going to "+name+" on "+when(starts, zone)+
-			". Your tickets are here, and this link is the only key to them, so keep it to yourself: "+s.orderURL(code, c.Order, version))
+		return jobs.Deliver(ctx, m, mailer.Message{To: email, Subject: "Your tickets for " + name, Text: "You're going to " + name + " on " + when(starts, zone) +
+			". Your tickets are here, and this link is the only key to them, so keep it to yourself: " + s.orderURL(code, c.Order, version)})
 	}
 }

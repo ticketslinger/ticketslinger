@@ -111,12 +111,12 @@ type failFirst struct {
 	failed bool
 }
 
-func (m *failFirst) Send(ctx context.Context, to, subject, text string) error {
+func (m *failFirst) Send(ctx context.Context, msg mailer.Message) error {
 	if !m.failed {
 		m.failed = true
 		return errors.New("mail server down")
 	}
-	return m.Memory.Send(ctx, to, subject, text)
+	return m.Memory.Send(ctx, msg)
 }
 
 func TestOrderLinkAgainRotatesOncePerTenMinutes(t *testing.T) {
@@ -141,8 +141,7 @@ func TestOrderLinkAgainRotatesOncePerTenMinutes(t *testing.T) {
 		t.Fatalf("after 11 minutes: %d emails, version %d; want 2 and 2", len(mem.Sent), version())
 	}
 
-	// The first attempt rotates and then fails to send; its retry must still
-	// send, though the link was rotated a moment ago.
+	// The first attempt fails to send; its retry must still send.
 	f.exec(t, `update orders set link_sent_at = now() - interval '11 minutes' where id = $1`, order)
 	flaky := &failFirst{}
 	w := &jobs.Worker{Pool: s.Pool, Handlers: map[string]jobs.Handler{sales.OrderLinksJob: s.OrderLinks(flaky)}}
@@ -162,6 +161,74 @@ func TestOrderLinkAgainRotatesOncePerTenMinutes(t *testing.T) {
 	}
 	if _, err := s.Order(ctx, code, sales.OrderTokenAt(s.SecretKey, order, version())); err != nil {
 		t.Fatalf("live link: %v", err)
+	}
+}
+
+func TestOrderLinksRotateOnlyAfterSend(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500})
+	ctx := context.Background()
+	order, _, _ := f.paidOrder(t, s, fake, 1, 1)
+	drain(t, s, &mailer.Memory{})
+	code := f.str(t, `select code from orders where id = $1`, order)
+	version := func() int { return f.count(t, `select link_version from orders where id = $1`, order) }
+	opens := func(v int) bool {
+		_, err := s.Order(ctx, code, sales.OrderTokenAt(s.SecretKey, order, v))
+		return err == nil
+	}
+	step := func(w *jobs.Worker) {
+		t.Helper()
+		if ran, err := w.RunOnce(ctx); !ran || err != nil {
+			t.Fatalf("ran=%v err=%v", ran, err)
+		}
+		f.exec(t, `update jobs set run_at = now() where kind = 'order_links'`)
+	}
+	request := func() string {
+		t.Helper()
+		f.must(t, s.RequestOrderLinks(ctx, "acme", "gala", "buyer@example.com"))
+		return f.str(t, `select id::text from jobs where kind = 'order_links'`)
+	}
+
+	// A failed send leaves the old link working.
+	flaky := &failFirst{}
+	w := &jobs.Worker{Pool: s.Pool, Handlers: map[string]jobs.Handler{sales.OrderLinksJob: s.OrderLinks(flaky)}}
+	id := request()
+	step(w)
+	if version() != 0 || !opens(0) {
+		t.Fatalf("after a failed send: version %d, old link opens %v; want 0 and true", version(), opens(0))
+	}
+	step(w)
+	if len(flaky.Sent) != 1 || flaky.Sent[0].IdempotencyKey != "ts-job-"+id+"-v1" {
+		t.Fatalf("sent %+v, want one email keyed ts-job-%s-v1", flaky.Sent, id)
+	}
+	if version() != 1 || opens(0) || !opens(1) {
+		t.Fatalf("after the send: version %d, old opens %v, new opens %v", version(), opens(0), opens(1))
+	}
+
+	// The send goes out but the rotation fails to commit once: the retry
+	// sends under the same key, so the provider drops the copy, and rotates once.
+	f.exec(t, `update orders set link_sent_at = now() - interval '11 minutes' where id = $1`, order)
+	f.exec(t, `create sequence fail_once`)
+	f.exec(t, `create function fail_once() returns trigger language plpgsql security definer as $$
+		begin if nextval('fail_once') = 1 then raise exception 'forced'; end if; return new; end $$`)
+	f.exec(t, `create trigger fail_once before update of link_version on orders for each row execute function fail_once()`)
+	mem := &mailer.Memory{}
+	w = &jobs.Worker{Pool: s.Pool, Handlers: map[string]jobs.Handler{sales.OrderLinksJob: s.OrderLinks(mem)}}
+	id = request()
+	step(w)
+	if version() != 1 || !opens(1) {
+		t.Fatalf("after a failed commit: version %d, want 1 and the live link still opening", version())
+	}
+	step(w)
+	if f.count(t, `select count(*) from jobs where kind = 'order_links'`) != 0 {
+		t.Fatal("the retry didn't finish the job")
+	}
+	key := "ts-job-" + id + "-v2"
+	if len(mem.Sent) != 2 || mem.Sent[0].IdempotencyKey != key || mem.Sent[1].IdempotencyKey != key || mem.Sent[0].Text != mem.Sent[1].Text {
+		t.Fatalf("sent %+v, want the same email twice under %s", mem.Sent, key)
+	}
+	if version() != 2 || opens(1) || !opens(2) {
+		t.Fatalf("after the retry: version %d, want 2 with only the new link opening", version())
 	}
 }
 
