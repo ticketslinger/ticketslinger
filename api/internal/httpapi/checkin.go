@@ -40,7 +40,7 @@ func (s *server) CreateCheckin(ctx context.Context, req CreateCheckinRequestObje
 	var out CreateCheckin200JSONResponse
 	err := s.inEvent(ctx, req.Organizer, req.Event, checkinWrite, func(org organizers.Organizer, tx pgx.Tx) error {
 		b := req.Body
-		if b.Qr != nil && (utf8.RuneCountInString(*b.Qr) > 200) {
+		if b.Qr != nil && (*b.Qr == "" || utf8.RuneCountInString(*b.Qr) > 200) {
 			return errInvalidQR
 		}
 		if b.Gate != nil && utf8.RuneCountInString(*b.Gate) > 40 {
