@@ -1138,7 +1138,7 @@ components:
         created_at: { type: string, format: date-time }
         paid_at: { type: [string, "null"], format: date-time }
         refunded_cents: { type: integer, format: int64, description: "Refunded to the buyer so far, counting refunds still on their way and leaving out failed ones." }
-        fee_refunded_cents: { type: integer, format: int64, description: "How much of our fee goes back with those refunds." }
+        fee_refunded_cents: { type: integer, format: int64, description: "How much of our fee has gone back so far (counted once Stripe has returned it)." }
     OrderDetail:
       allOf:
         - { $ref: "#/components/schemas/OrderSummary" }

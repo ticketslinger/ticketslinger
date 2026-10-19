@@ -1148,7 +1148,7 @@ export interface components {
             refunded_cents: number;
             /**
              * Format: int64
-             * @description How much of our fee goes back with those refunds.
+             * @description How much of our fee has gone back so far (counted once Stripe has returned it).
              */
             fee_refunded_cents: number;
         };

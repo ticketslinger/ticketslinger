@@ -568,6 +568,18 @@ func TestListOrdersCountsWhatsLeft(t *testing.T) {
 		d.Tickets[1].Status != "valid" || d.Tickets[1].ChargeCents != 2500 || d.Tickets[1].FeeCents != 100 {
 		t.Fatalf("detail %+v", d)
 	}
+	// The second ticket's refund goes through, but our fee is stuck: only the
+	// fee that actually went back is counted.
+	fake.FailCall("RefundApplicationFee", &plugin.ProviderError{Op: "fee refund", Refused: true, Status: 400})
+	f.refund(t, s, order, sales.RefundRequest{FeeBack: true})
+	drain(t, s, &mailer.Memory{})
+	asOwner(t, s, f, func(tx pgx.Tx) (err error) {
+		list, err = sales.ListOrders(context.Background(), tx, f.event)
+		return
+	})
+	if o := list[0]; o.RefundedCents != 5200 || o.FeeRefundedCents != 100 {
+		t.Fatalf("with a stuck fee: order %+v, want 5200 refunded and 100 of fee", o)
+	}
 }
 
 // lockOrderOf holds the checkout's order FOR UPDATE in an owner-pool

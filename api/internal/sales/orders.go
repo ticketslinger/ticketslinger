@@ -91,8 +91,10 @@ func (s *Service) Order(ctx context.Context, code, token string) (OrderView, err
 }
 
 // OrderSummary is one row of an event's order list. TicketCount counts the
-// tickets still valid; RefundedCents and FeeRefundedCents add up every refund
-// that hasn't failed, whether it has gone through or is still on its way.
+// tickets still valid; RefundedCents adds up every refund that hasn't
+// failed, whether it has gone through or is still on its way.
+// FeeRefundedCents is the fee that has actually gone back: a fee refund still
+// to come, or stuck, isn't counted.
 type OrderSummary struct {
 	ID                              uuid.UUID
 	Code, Email, Status, FeeMode    string
@@ -109,7 +111,7 @@ const orderSummarySelect = `select o.id, o.code, o.email::text, o.status,
 		(select count(*) from tickets t where t.order_id = o.id and t.status = 'valid'),
 		o.total_cents, o.fee_cents, o.fee_mode, o.created_at, o.paid_at,
 		coalesce((select sum(r.amount_cents) from refunds r join payments p on p.id = r.payment_id where p.order_id = o.id and r.status <> 'failed'), 0),
-		coalesce((select sum(r.fee_cents) from refunds r join payments p on p.id = r.payment_id where p.order_id = o.id and r.status <> 'failed'), 0)
+		coalesce((select sum(r.fee_cents) from refunds r join payments p on p.id = r.payment_id where p.order_id = o.id and r.fee_refunded_at is not null), 0)
 	from orders o
 	where o.event_id = $1 and o.status <> 'pending'
 	  and (o.paid_at is not null or exists (select 1 from payments p where p.order_id = o.id and p.status = 'succeeded'))`
