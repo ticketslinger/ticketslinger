@@ -322,3 +322,51 @@ func Deliver(ctx context.Context, m mailer.Mailer, msg mailer.Message) error {
 	}
 	return err
 }
+
+// QuotaWatch is Resend.OnQuota: when Resend's used count crosses a free-tier
+// threshold (monthly 2,400 and 2,850 of 3,000; daily 80 of 100) it logs at
+// ERROR and, if alertTo is set, queues one alert email. A mail_alerts row per
+// threshold and period (insert wins) keeps it to once. Failures are logged,
+// never returned: an alert must not fail the ticket email that triggered it.
+func QuotaWatch(pool *pgxpool.Pool, alertTo string, now func() time.Time) func(ctx context.Context, daily, monthly int) {
+	const monthlyBody = "Resend's free plan stops at 3,000 emails a month (and 100 a day). We're at %s. Past the limit, ticket emails wait until next month's quota, so if sales are still coming, upgrade first: Resend Pro is $20 a month for 50,000. It's the first cost trigger in the plan, so it needs your yes."
+	const dailyBody = "Resend's free plan allows 100 emails a day, counted in UTC. Ticket emails past that wait for midnight UTC and then go out by themselves. If this keeps happening on sale days, it's time for Resend Pro ($20 a month, no daily cap). That's a spend, so it needs your yes."
+	return func(ctx context.Context, daily, monthly int) {
+		t := now().UTC()
+		check := func(period string, used, at int, key, subject, body string) {
+			if used < at {
+				return
+			}
+			err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+				tag, err := tx.Exec(ctx, `insert into mail_alerts(key) values ($1) on conflict do nothing`, key)
+				if err != nil || tag.RowsAffected() == 0 {
+					return err
+				}
+				slog.Error("mail quota", "period", period, "used", used)
+				if alertTo == "" {
+					return nil
+				}
+				return Enqueue(ctx, tx, "send_email", map[string]string{"to": alertTo, "subject": subject, "text": body})
+			})
+			if err != nil {
+				slog.Error("mail quota alert", "period", period, "err", err)
+			}
+		}
+		for _, at := range []int{2400, 2850} {
+			n := commas(monthly)
+			check("month", monthly, at, fmt.Sprintf("month-%d-%s", at, t.Format("2006-01")),
+				"TicketSlinger has sent "+n+" of its 3,000 emails this month", fmt.Sprintf(monthlyBody, n))
+		}
+		check("day", daily, 80, "day-80-"+t.Format("2006-01-02"),
+			"TicketSlinger has sent "+commas(daily)+" of today's 100 emails", dailyBody)
+	}
+}
+
+// commas writes n with thousands separators (n >= 0).
+func commas(n int) string {
+	s := fmt.Sprint(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
+}

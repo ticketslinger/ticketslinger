@@ -442,7 +442,7 @@ func paymentsStatus(t *testing.T, cfg config.Config, testMode bool) paymentsStat
 
 func TestServeUsesTheConfiguredMailer(t *testing.T) {
 	m, err := newMailer(config.Config{Mail: "resend", ResendAPIKey: "re_abc", ResendAPIURL: "https://api.resend.com", MailFrom: "TicketSlinger <tickets@ticketslinger.com>"}, nil)
-	if r, ok := m.(*mailer.Resend); err != nil || !ok || r.Key != "re_abc" || r.URL != "https://api.resend.com" || r.From != "TicketSlinger <tickets@ticketslinger.com>" {
+	if r, ok := m.(*mailer.Resend); err != nil || !ok || r.Key != "re_abc" || r.OnQuota == nil || r.URL != "https://api.resend.com" || r.From != "TicketSlinger <tickets@ticketslinger.com>" {
 		t.Fatalf("resend: %#v %v", m, err)
 	}
 	want := &mailer.SMTP{Host: "smtp.example.com", Port: 465, Username: "relay", Password: "pw", From: "a@example.com"}

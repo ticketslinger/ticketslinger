@@ -184,10 +184,10 @@ func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Hand
 
 // newMailer is the mailer TS_MAIL names; config.Load has already checked its
 // settings and kept the log mailer to local URLs.
-func newMailer(cfg config.Config, _ *pgxpool.Pool) (mailer.Mailer, error) {
+func newMailer(cfg config.Config, pool *pgxpool.Pool) (mailer.Mailer, error) {
 	switch cfg.Mail {
 	case "resend":
-		return &mailer.Resend{Key: cfg.ResendAPIKey, From: cfg.MailFrom, URL: cfg.ResendAPIURL}, nil
+		return &mailer.Resend{Key: cfg.ResendAPIKey, From: cfg.MailFrom, URL: cfg.ResendAPIURL, OnQuota: jobs.QuotaWatch(pool, cfg.MailAlertTo, time.Now)}, nil
 	case "smtp":
 		return &mailer.SMTP{Host: cfg.SMTPHost, Port: cfg.SMTPPort, Username: cfg.SMTPUsername, Password: cfg.SMTPPassword, From: cfg.MailFrom}, nil
 	case "log":

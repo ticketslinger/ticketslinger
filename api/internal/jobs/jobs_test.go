@@ -678,3 +678,56 @@ func TestDeliverMapsKinds(t *testing.T) {
 		t.Fatalf("run_at %v attempts %d, want %v and 0", runAt, attempts, want)
 	}
 }
+
+func quotaSubjects(t *testing.T, pool *pgxpool.Pool) (subs []string) {
+	t.Helper()
+	rows, err := pool.Query(context.Background(), `select payload->>'subject' from jobs where kind = 'send_email' order by id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		subs = append(subs, s)
+	}
+	return subs
+}
+
+func TestQuotaAlertsOncePerThreshold(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	watch := jobs.QuotaWatch(pool, "owner@example.com", func() time.Time { return time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC) })
+	watch(ctx, -1, -1)
+	watch(ctx, 10, 2399)
+	if n := count(t, pool, `select count(*) from mail_alerts`) + count(t, pool, `select count(*) from jobs`); n != 0 {
+		t.Fatalf("below every threshold: %d rows", n)
+	}
+	watch(ctx, 10, 2400)
+	want := []string{"TicketSlinger has sent 2,400 of its 3,000 emails this month"}
+	if got := quotaSubjects(t, pool); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %q", got)
+	}
+	watch(ctx, 11, 2401)
+	if got := quotaSubjects(t, pool); len(got) != 1 {
+		t.Fatalf("repeat sent again: %q", got)
+	}
+	watch(ctx, 80, 2860)
+	got := quotaSubjects(t, pool)
+	if len(got) != 3 || got[1] != "TicketSlinger has sent 2,860 of its 3,000 emails this month" || got[2] != "TicketSlinger has sent 80 of today's 100 emails" {
+		t.Fatalf("got %q", got)
+	}
+	if n := count(t, pool, `select count(*) from mail_alerts where key in ('month-2400-2026-10','month-2850-2026-10','day-80-2026-10-18')`); n != 3 {
+		t.Fatalf("keys: %d", n)
+	}
+}
+
+func TestQuotaAlertsWithoutAnAddressOnlyLog(t *testing.T) {
+	pool := testdb.New(t)
+	jobs.QuotaWatch(pool, "", time.Now)(context.Background(), 80, 10)
+	if a, j := count(t, pool, `select count(*) from mail_alerts`), count(t, pool, `select count(*) from jobs`); a != 1 || j != 0 {
+		t.Fatalf("alerts %d jobs %d", a, j)
+	}
+}
