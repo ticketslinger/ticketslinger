@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -454,5 +456,58 @@ func TestServeUsesTheConfiguredMailer(t *testing.T) {
 	}
 	if _, err := newMailer(config.Config{Mail: "sendgrid"}, nil); err == nil {
 		t.Fatal("an unknown mailer must be refused")
+	}
+}
+
+func TestMigrateNeedsOnlyTheOwnerURL(t *testing.T) {
+	ctx := context.Background()
+	err := runMigrate(ctx, func(string) string { return "" })
+	if err == nil || err.Error() != "TS_MIGRATE_DATABASE_URL is required for migrate" {
+		t.Fatalf("err = %v", err)
+	}
+
+	owner := os.Getenv("TEST_DATABASE_URL_OWNER")
+	if owner == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("TEST_DATABASE_URL_OWNER must be set when CI is set")
+		}
+		t.Skip("TEST_DATABASE_URL_OWNER not set; run `make dev-db`")
+	}
+	// A fresh, empty database, so migrate has real work to do.
+	admin, err := db.Open(ctx, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "t_migrate_" + uuid.NewString()[:8]
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name+" OWNER ts_owner"); err != nil {
+		admin.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), "DROP DATABASE "+name+" WITH (FORCE)")
+		admin.Close()
+	})
+	u, err := url.Parse(owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Path = "/" + name
+
+	// Only the owner URL: no TS_SECRET_KEY, no Turnstile, nothing serve needs.
+	env := map[string]string{"TS_MIGRATE_DATABASE_URL": u.String()}
+	if err := runMigrate(ctx, func(k string) string { return env[k] }); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := db.Open(ctx, u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	var exists bool
+	if err := pool.QueryRow(ctx, "SELECT to_regclass('goose_db_version') IS NOT NULL").Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("goose_db_version is missing after migrate")
 	}
 }
