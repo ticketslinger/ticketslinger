@@ -91,7 +91,24 @@ test("an organizer connects Stripe, a buyer pays on a phone, and the order shows
   await expect(shop.locator("img.qr").first()).toBeVisible();
   await expect(shop.locator("img.qr").last()).toBeVisible();
   // Ada's code, as a phone held up to the door would show it.
-  const qr = await shop.locator("img.qr").first().screenshot({ type: "jpeg", quality: 95 });
+  // Chrome's fake camera on Linux plays a JPEG with an odd side as a black 2×2 frame,
+  // so the picture is clipped to even CSS pixels at one pixel each.
+  const ada = shop.locator("img.qr").first();
+  await ada.scrollIntoViewIfNeeded();
+  const box = await ada.boundingBox();
+  if (!box) throw new Error("Ada's QR code has no box");
+  const even = (n: number) => Math.ceil(n / 2) * 2;
+  const qr = await shop.screenshot({
+    type: "jpeg",
+    quality: 95,
+    scale: "css",
+    clip: {
+      x: Math.floor(box.x),
+      y: Math.floor(box.y),
+      width: even(box.width),
+      height: even(box.height),
+    },
+  });
   const download = shop.waitForEvent("download");
   await shop.getByRole("link", { name: "Download all tickets (PDF)" }).click();
   expect((await download).suggestedFilename()).toBe(`tickets-${code}.pdf`);
