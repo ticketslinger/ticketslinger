@@ -47,7 +47,9 @@ func hash(plain string) []byte {
 
 // Create issues a key for org, records api_key.created by actor, and returns
 // the plaintext. Only its SHA-256 is stored; the plaintext is never seen again.
-// tx must be scoped to org.
+// tx must be scoped to org. It holds actor's membership until tx ends, so
+// a removal under way at the same time either revokes this key too or wins
+// first, and then Create returns db.ErrNotMember.
 func (s *Service) Create(ctx context.Context, tx pgx.Tx, org, actor uuid.UUID, name, scope string) (Key, string, error) {
 	name = strings.TrimSpace(name)
 	if n := utf8.RuneCountInString(name); n < 1 || n > 80 {
@@ -55,6 +57,13 @@ func (s *Service) Create(ctx context.Context, tx pgx.Tx, org, actor uuid.UUID, n
 	}
 	if scope != "read" && scope != "write" {
 		return Key{}, "", ErrInvalidScope
+	}
+	var member bool
+	if err := tx.QueryRow(ctx, `select hold_membership()`).Scan(&member); err != nil {
+		return Key{}, "", err
+	}
+	if !member {
+		return Key{}, "", db.ErrNotMember
 	}
 	b := make([]byte, 32)
 	_, _ = rand.Read(b) // never fails (crypto/rand panics instead)
