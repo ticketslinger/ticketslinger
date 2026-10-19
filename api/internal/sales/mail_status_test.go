@@ -257,13 +257,19 @@ func TestOldMailEventsAreIgnored(t *testing.T) {
 	var requested time.Time
 	f.must(t, f.owner.QueryRow(context.Background(), `select mail_requested_at from orders where id = $1`, order).Scan(&requested))
 
-	f.must(t, s.MailEvent(context.Background(), f.org, order, "delivered", requested.Add(-time.Minute)))
+	f.must(t, s.MailEvent(context.Background(), f.org, order, "delivered", requested.Add(-15*time.Minute)))
 	f.wantMail(t, order, "queued", "", 0)
-	f.must(t, s.MailEvent(context.Background(), f.org, order, "bounced", requested.Add(-time.Second)))
+	f.must(t, s.MailEvent(context.Background(), f.org, order, "bounced", requested.Add(-15*time.Minute)))
 	f.wantMail(t, order, "queued", "", 0)
 
-	f.must(t, s.MailEvent(context.Background(), f.org, order, "delivered", requested.Add(time.Second)))
+	// Resend's clock may run a little behind ours.
+	f.must(t, s.MailEvent(context.Background(), f.org, order, "delivered", requested.Add(-30*time.Second)))
 	f.wantMail(t, order, "delivered", "", 0)
+
+	// Complained is the last word: a late bounced doesn't take it back.
+	f.must(t, s.MailEvent(context.Background(), f.org, order, "complained", requested.Add(time.Second)))
+	f.must(t, s.MailEvent(context.Background(), f.org, order, "bounced", requested.Add(time.Second)))
+	f.wantMail(t, order, "complained", "", 0)
 	if err := s.MailEvent(context.Background(), f.org, order, "sent", requested.Add(time.Second)); err == nil {
 		t.Fatal("a kind Resend doesn't send was accepted")
 	}

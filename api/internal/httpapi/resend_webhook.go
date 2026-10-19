@@ -62,7 +62,7 @@ func (s *server) resendWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	org, errOrg := uuid.Parse(ev.Data.Tags.Organizer)
 	order, errOrder := uuid.Parse(ev.Data.Tags.Order)
-	if errOrg != nil || errOrder != nil || org == uuid.Nil || ev.Data.CreatedAt.IsZero() {
+	if errOrg != nil || errOrder != nil || org == uuid.Nil || order == uuid.Nil || ev.Data.CreatedAt.IsZero() {
 		writeJSON(w, http.StatusOK, map[string]bool{"received": true}) // not a ticket email of ours
 		return
 	}

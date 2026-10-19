@@ -119,13 +119,13 @@ func TestResendWebhookMovesTheStatus(t *testing.T) {
 	if err := owner.QueryRow(ctx, `select id::text from organizers where slug = 'acme'`).Scan(&org); err != nil {
 		t.Fatal(err)
 	}
-	n := 0
+	n, as := 0, org // as: the organizer tag sent
 	post := func(typ, order string, signed bool) *http.Response {
 		t.Helper()
 		n++
 		body, _ := json.Marshal(map[string]any{"type": typ, "created_at": time.Now().UTC(), "data": map[string]any{
 			"created_at": time.Now().UTC(), "email_id": "56761188-7520-42d8-8898-ff6fc54ce618", "to": []string{"buyer@example.com"},
-			"tags": map[string]string{"order": order, "organizer": org}}})
+			"tags": map[string]string{"order": order, "organizer": as}}})
 		id := "msg_" + strconv.Itoa(n)
 		sig := svixSign(resendSecret, id, strconv.FormatInt(time.Now().Unix(), 10), body)
 		if !signed {
@@ -170,6 +170,18 @@ func TestResendWebhookMovesTheStatus(t *testing.T) {
 	if st := status(order); st != "queued" {
 		t.Fatalf("after events we don't act on: %s", st)
 	}
+	// Tags are believed only together: another organizer's tag with this
+	// order finds nothing, and the nil UUID is no order of ours.
+	s.createOrganizer(s.owner, "other")
+	if err := owner.QueryRow(ctx, `select id::text from organizers where slug = 'other'`).Scan(&as); err != nil {
+		t.Fatal(err)
+	}
+	s.must(post("email.bounced", order, true), 200)
+	as = org
+	s.must(post("email.bounced", "00000000-0000-0000-0000-000000000000", true), 200)
+	if st := status(order); st != "queued" {
+		t.Fatalf("after another organizer's tag: %s", st)
+	}
 	s.must(post("email.bounced", order, true), 200)
 	if st := status(order); st != "bounced" {
 		t.Fatalf("bounced: %s", st)
@@ -181,5 +193,9 @@ func TestResendWebhookMovesTheStatus(t *testing.T) {
 	s.must(post("email.complained", order, true), 200)
 	if st := status(order); st != "complained" {
 		t.Fatalf("complained: %s", st)
+	}
+	s.must(post("email.bounced", order, true), 200)
+	if st := status(order); st != "complained" {
+		t.Fatalf("a late bounced undid the complaint: %s", st)
 	}
 }

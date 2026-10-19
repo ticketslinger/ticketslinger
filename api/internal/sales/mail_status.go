@@ -152,10 +152,14 @@ func (s *Service) MailEvent(ctx context.Context, org, order uuid.UUID, kind stri
 	default:
 		return fmt.Errorf("mail event: unknown kind %q", kind)
 	}
+	// The minute's grace is for Resend's clock running behind ours; the
+	// 10-minute wait between sends keeps an older send's email outside it.
+	// A late bounced never takes back a complaint.
 	return system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `update orders set mail_status = $2, mail_updated_at = statement_timestamp()
-			where id = $1 and mail_requested_at <= $3 and mail_status is distinct from $2
-				and ($2 <> 'delivered' or mail_status in ('queued', 'failing', 'sent'))`, order, kind, emailCreated)
+			where id = $1 and mail_requested_at <= $3::timestamptz + interval '1 minute' and mail_status is distinct from $2
+				and ($2 <> 'delivered' or mail_status in ('queued', 'failing', 'sent'))
+				and not ($2 = 'bounced' and mail_status = 'complained')`, order, kind, emailCreated)
 		return err
 	})
 }
