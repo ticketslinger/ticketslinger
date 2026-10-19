@@ -1,0 +1,75 @@
+# TicketSlinger on one Linux server. From the repository root:
+#   cp deploy/.env.example deploy/.env      # then fill it in
+#   docker compose -f deploy/compose.yaml up -d --build
+#
+# The API, storefront and dashboard use host networking, so they listen on the
+# server's 127.0.0.1 (3000, 3001, 3002) and nothing else can reach them. Put a
+# reverse proxy on the same host in front: it terminates TLS and must set
+# X-Real-IP to the buyer's address, which is the one header the services trust
+# (from a loopback peer only). Behind published bridge ports every buyer would
+# arrive from the Docker gateway and share one rate limit.
+# Host networking is Linux-only: Docker Desktop on macOS or Windows won't do.
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    shm_size: 256m
+    environment:
+      POSTGRES_DB: ticketslinger
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${TS_POSTGRES_PASSWORD}
+      TS_OWNER_PASSWORD: ${TS_OWNER_PASSWORD}
+      TS_APP_PASSWORD: ${TS_APP_PASSWORD}
+    ports: ["127.0.0.1:5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./initdb-selfhost:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=$$TS_APP_PASSWORD psql -h 127.0.0.1 -U ts_app -d ticketslinger -c 'select 1'"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  migrate:
+    build: {context: .., dockerfile: deploy/Dockerfile, target: api}
+    image: ticketslinger-api
+    command: ["migrate"]
+    network_mode: host
+    env_file: .env
+    restart: "no"
+    depends_on:
+      db: {condition: service_healthy}
+
+  api:
+    build: {context: .., dockerfile: deploy/Dockerfile, target: api}
+    image: ticketslinger-api
+    command: ["serve"]
+    network_mode: host
+    env_file: .env
+    restart: unless-stopped
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  storefront:
+    build: {context: .., dockerfile: deploy/Dockerfile, target: web}
+    image: ticketslinger-web
+    working_dir: /app/storefront
+    command: ["bun", "server.js"]
+    network_mode: host
+    env_file: .env
+    restart: unless-stopped
+    depends_on: [api]
+
+  dashboard:
+    build: {context: .., dockerfile: deploy/Dockerfile, target: web}
+    image: ticketslinger-web
+    working_dir: /app/dashboard
+    command: ["bun", "server.js"]
+    network_mode: host
+    env_file: .env
+    restart: unless-stopped
+    depends_on: [api]
+
+volumes:
+  pgdata:

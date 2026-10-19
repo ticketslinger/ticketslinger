@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -302,6 +304,28 @@ func TestIsLocalHost(t *testing.T) {
 	for host, want := range map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true, "127.9.9.9": true, "example.com": false, "10.0.0.1": false, "": false} {
 		if IsLocalHost(host) != want {
 			t.Errorf("IsLocalHost(%q) = %v", host, !want)
+		}
+	}
+}
+
+// Self-hosters copy deploy/.env.example, so it has to name every variable
+// config.go reads.
+func TestComposePassesEveryConfigVariable(t *testing.T) {
+	src, err := os.ReadFile("config.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	example, err := os.ReadFile("../../../deploy/.env.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := regexp.MustCompile(`(?:os\.Getenv|env|intEnv)\("(TS_[A-Z_]+)"`).FindAllStringSubmatch(string(src), -1)
+	if len(names) < 20 {
+		t.Fatalf("found only %d variables in config.go; the pattern is stale", len(names))
+	}
+	for _, m := range names {
+		if !regexp.MustCompile(`(?m)^#?\s*` + m[1] + `=`).Match(example) {
+			t.Errorf("deploy/.env.example is missing %s", m[1])
 		}
 	}
 }
