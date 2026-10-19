@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -29,7 +30,7 @@ var (
 	errEmailOnItsWay = catalogue.ErrConflict{Code: "email_on_its_way",
 		Message: "We're still sending the last one. It'll get there; give it a few minutes."}
 	errTooSoon = catalogue.ErrConflict{Code: "too_soon",
-		Message: "We sent the tickets a few minutes ago. Give that one time to land, and ask the buyer to look in spam before you send again."}
+		Message: "You asked us to send these less than 10 minutes ago. Wait until it's been 10 minutes, then try again."}
 	errNoTickets = catalogue.ErrConflict{Code: "no_tickets",
 		Message: "This order has no valid tickets left, so there's nothing to send."}
 )
@@ -41,6 +42,11 @@ func queueTicketEmail(ctx context.Context, tx pgx.Tx, order uuid.UUID) error {
 	if err := tx.QueryRow(ctx, `select queue_order_email($1)`, order).Scan(&res); err != nil {
 		return err
 	}
+	return queueAnswer(res)
+}
+
+// queueAnswer is queue_order_email's answer as an error; nil only for queued.
+func queueAnswer(res *string) error {
 	switch {
 	case res == nil:
 		return catalogue.ErrNotFound
@@ -50,8 +56,10 @@ func queueTicketEmail(ctx context.Context, tx pgx.Tx, order uuid.UUID) error {
 		return errTooSoon
 	case *res == "no_tickets":
 		return errNoTickets
+	case *res == "queued":
+		return nil
 	}
-	return nil
+	return fmt.Errorf("queue_order_email: unexpected answer %q", *res)
 }
 
 // ResendTicketEmail sends an order's ticket email again: the same job, to
@@ -113,7 +121,8 @@ func nothingToSend(ctx context.Context, tx pgx.Tx, order uuid.UUID) error {
 }
 
 // TicketEmailParked is the order_confirmation job's Parked hook: the queue
-// gave up on it (a crash every time), so the order says so.
+// gave up on it, so the order says so, counting the tries actually made
+// (jobs.Attempt), never fewer than the handler already recorded.
 func TicketEmailParked(s *Service) func(ctx context.Context, payload []byte, cause string) {
 	return func(ctx context.Context, payload []byte, _ string) {
 		var c confirmation
@@ -122,8 +131,8 @@ func TicketEmailParked(s *Service) func(ctx context.Context, payload []byte, cau
 			return
 		}
 		if err := system.Run(ctx, s.Pool, c.Organizer, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `update orders set mail_status = 'gave_up', mail_attempts = $2, mail_updated_at = statement_timestamp()
-				where id = $1 and mail_status in ('queued', 'failing')`, c.Order, jobs.MaxAttempts)
+			_, err := tx.Exec(ctx, `update orders set mail_status = 'gave_up', mail_attempts = greatest(mail_attempts, $2), mail_updated_at = statement_timestamp()
+				where id = $1 and mail_status in ('queued', 'failing')`, c.Order, jobs.Attempt(ctx))
 			return err
 		}); err != nil {
 			slog.ErrorContext(ctx, "ticket email parked: status not saved", "order", c.Order, "err", err)

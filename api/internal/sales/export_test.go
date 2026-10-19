@@ -22,3 +22,5 @@ func FailRefundForTest(s *Service, ctx context.Context, tx pgx.Tx, org, refund u
 var OrderTokenAt = orderToken
 
 var QueueTicketEmailForTest = queueTicketEmail
+
+var QueueAnswerForTest = queueAnswer

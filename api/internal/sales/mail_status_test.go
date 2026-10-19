@@ -2,7 +2,6 @@ package sales_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -11,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
+	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
 	"github.com/ticketslinger/ticketslinger/api/internal/db"
 	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
@@ -126,9 +126,44 @@ func TestCrashParkedEmailGivesUp(t *testing.T) {
 	s, fake := newPaidService(t)
 	f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500})
 	order, _, _ := f.paidOrder(t, s, fake, 1, 1)
-	payload, _ := json.Marshal(map[string]string{"order_id": order.String(), "organizer_id": f.org.String()})
-	sales.TicketEmailParked(s)(context.Background(), payload, "gave up after a crash")
+	// Its tenth run took the worker down: claimed, never finished.
+	f.exec(t, `update jobs set attempts = 10, locked_until = now() - interval '1 second' where kind = 'order_confirmation'`)
+	if ran, err := emailWorker(s, &mailer.Memory{}).RunOnce(context.Background()); ran || err != nil {
+		t.Fatalf("ran %v, %v", ran, err)
+	}
 	f.wantMail(t, order, "gave_up", "", 10)
+}
+
+// The parked hook counts the tries actually made: a job parked on its first
+// run (its own status write lost) gave up after one try, not ten.
+func TestParkedEmailCountsItsTries(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500})
+	order, _, _ := f.paidOrder(t, s, fake, 1, 1)
+	w := emailWorker(s, nil)
+	w.Handlers[sales.OrderConfirmationJob] = func(context.Context, []byte) error {
+		return jobs.Permanent(errors.New("status write lost"))
+	}
+	runOne(t, w)
+	f.wantMail(t, order, "gave_up", "", 1)
+}
+
+func TestQueueAnswerUnknownWordIsAnError(t *testing.T) {
+	for word, want := range map[string]string{"on_its_way": "email_on_its_way", "too_soon": "too_soon", "no_tickets": "no_tickets"} {
+		if err := sales.QueueAnswerForTest(&word); conflictCode(err) != want {
+			t.Errorf("%s: %v, want %s", word, err, want)
+		}
+	}
+	queued, odd := "queued", "sent_by_pigeon"
+	if err := sales.QueueAnswerForTest(&queued); err != nil {
+		t.Errorf("queued: %v", err)
+	}
+	if err := sales.QueueAnswerForTest(&odd); err == nil || conflictCode(err) != "" {
+		t.Errorf("an unknown answer: %v, want a plain error", err)
+	}
+	if err := sales.QueueAnswerForTest(nil); !errors.Is(err, errNotFound) {
+		t.Errorf("null: %v, want ErrNotFound", err)
+	}
 }
 
 // An order the job finds with nothing to send must not stay "on its way",
@@ -189,7 +224,9 @@ func TestResendTicketEmail(t *testing.T) {
 				t.Fatalf("again at once: %v, want email_on_its_way", err)
 			}
 			f.exec(t, `update orders set mail_status = 'sent', mail_requested_at = now() - interval '5 minutes' where id = $1`, order)
-			if err := resend(s, f, order); conflictCode(err) != "too_soon" {
+			var c catalogue.ErrConflict
+			if err := resend(s, f, order); !errors.As(err, &c) || c.Code != "too_soon" ||
+				c.Message != "You asked us to send these less than 10 minutes ago. Wait until it's been 10 minutes, then try again." {
 				t.Fatalf("5 minutes on: %v, want too_soon", err)
 			}
 			f.exec(t, `update orders set status = 'refunded', mail_requested_at = now() - interval '11 minutes' where id = $1`, order)
