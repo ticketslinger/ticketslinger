@@ -650,3 +650,7 @@ button.danger-button {
   color: var(--staff-banner-text);
   border-color: var(--staff-banner-text);
 }
+
+.staff-banner button:focus-visible {
+  outline-color: var(--staff-banner-text);
+}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, must } from "./api";
+import { ApiFailure, api, must } from "./api";
 import { FormDialog } from "./forms";
 import { type Me, navigate, useAction } from "./ui";
 
@@ -30,12 +30,10 @@ export function StaffBanner({
     const t = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(t);
   }, []);
-  // The hour ran out: ask the server what's true now, then go back to /staff.
+  // The hour ran out here: ask the server. The app goes back to /staff once /me says so,
+  // so a fast clock on this device can't bounce someone out of a session that still runs.
   useEffect(() => {
-    if (new Date(session.expires_at).getTime() <= now) {
-      onChanged();
-      navigate("/staff", true, true);
-    }
+    if (new Date(session.expires_at).getTime() <= now) onChanged();
   }, [session.expires_at, now, onChanged]);
 
   return (
@@ -55,11 +53,16 @@ export function StaffBanner({
           submitLabel="End support mode"
           onSubmit={() =>
             end.run(async () => {
-              must(
-                await api.DELETE("/staff/sessions/current", {
-                  body: note.trim() ? { note: note.trim() } : {},
-                }),
-              );
+              try {
+                must(
+                  await api.DELETE("/staff/sessions/current", {
+                    body: note.trim() ? { note: note.trim() } : {},
+                  }),
+                );
+              } catch (e) {
+                // 404: it already ended (expired, or ended in another tab). Same destination.
+                if (!(e instanceof ApiFailure && e.status === 404)) throw e;
+              }
               setEnding(false);
               onChanged();
               navigate("/staff", false, true);

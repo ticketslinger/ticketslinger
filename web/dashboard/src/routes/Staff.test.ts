@@ -1,8 +1,12 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { bannerText, minutesLeft } from "../StaffBanner";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import { bannerText, minutesLeft, StaffBanner } from "../StaffBanner";
 import { staffRow } from "./Audit";
-import { menuItems } from "./Home";
+import { eventTabs } from "./Events";
+import { Home } from "./Home";
+import { canEdit, canRead, navFor, type Org } from "./Organizer";
 import { reasonOk, staffAuditLine } from "./Staff";
 
 test("minutesLeft rounds down and never goes below 0", () => {
@@ -18,9 +22,59 @@ test("the banner says what the spec says", () => {
   );
 });
 
-test("only staff get a Support menu item", () => {
-  expect(menuItems({ staff: false })).not.toContain("Support");
-  expect(menuItems({ staff: true })).toContain("Support");
+const me = (staff: boolean) =>
+  ({
+    id: "u",
+    email: "a@b.c",
+    name: "Sam Support",
+    email_verified: true,
+    mfa: true,
+    staff,
+  }) as unknown as Parameters<typeof Home>[0]["me"];
+
+test("only staff get a Support link", () => {
+  const html = (staff: boolean) =>
+    renderToString(createElement(Home, { me: me(staff), onSignedOut: () => {} }));
+  expect(html(false)).not.toContain("/staff");
+  expect(html(true)).toContain('href="/staff"');
+});
+
+test("the banner is a status with the copy and one End button, nothing to dismiss", () => {
+  const html = renderToString(
+    createElement(StaffBanner, {
+      session: {
+        id: "s",
+        organizer_slug: "acme",
+        organizer_name: "Acme Events",
+        reason: "r",
+        expires_at: new Date(Date.now() + 47.5 * 60_000).toISOString(),
+      },
+      onChanged: () => {},
+    }),
+  );
+  expect(html).toContain('role="status"');
+  expect(html).toContain("Support mode: viewing Acme Events, read-only. 47 min left.");
+  expect(html.match(/<button/g)?.length).toBe(1);
+  expect(html).toContain(">End<");
+});
+
+const org = (role: Org["role"]) => ({ role, slug: "acme", name: "Acme" }) as Org;
+
+test("staff read orders and reports but hold no write permission", () => {
+  const staff = org("staff");
+  expect(canEdit(staff)).toBe(false);
+  expect(canRead(staff)).toBe(true);
+  const labels = eventTabs(staff).map((t) => t.label);
+  expect(labels).toContain("Orders");
+  expect(labels).toContain("Report");
+  expect(navFor(staff).map((n) => n.label)).toEqual(["Events", "Payments"]);
+});
+
+test("check-in members still don't see orders, reports or editor pages", () => {
+  const door = org("checkin");
+  expect(canRead(door)).toBe(false);
+  expect(eventTabs(door).map((t) => t.label)).not.toContain("Orders");
+  expect(eventTabs(org("owner")).map((t) => t.label)).toContain("Report");
 });
 
 test("a reason under 10 characters, or over 500, keeps the button off", () => {

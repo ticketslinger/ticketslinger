@@ -112,6 +112,14 @@ function App() {
     navigate(here === "/" ? "/signin" : `/signin?next=${encodeURIComponent(here)}`);
   }, []);
 
+  // Support mode ended (End button elsewhere, expiry, revoked): back to /staff.
+  const hadStaff = useRef(false);
+  useEffect(() => {
+    const has = !!(me && me.staff_session);
+    if (hadStaff.current && !has && me) navigate("/staff", true, true);
+    hadStaff.current = has;
+  }, [me]);
+
   // Move focus to the new page's heading so screen readers announce the change.
   const first = useRef(true);
   // biome-ignore lint/correctness/useExhaustiveDependencies: path is the trigger, not a value used

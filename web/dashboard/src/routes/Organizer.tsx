@@ -10,6 +10,9 @@ export type Section = "events" | "payments" | "team" | "api-keys" | "audit";
 /** Owners and admins change things; check-in staff only look. */
 export const canEdit = (org: Org) => org.role === "owner" || org.role === "admin";
 
+/** Support staff read what owners and admins read, and change nothing. */
+export const canRead = (org: Org) => canEdit(org) || org.role === "staff";
+
 const NAV: { section: Section; label: string; path: string; editorsOnly?: boolean }[] = [
   { section: "events", label: "Events", path: "" },
   { section: "payments", label: "Payments", path: "/payments" },
@@ -17,6 +20,9 @@ const NAV: { section: Section; label: string; path: string; editorsOnly?: boolea
   { section: "api-keys", label: "API keys", path: "/api-keys", editorsOnly: true },
   { section: "audit", label: "Audit log", path: "/audit", editorsOnly: true },
 ];
+
+// Team, API keys and Audit log show write controls unconditionally, so staff don't get them.
+export const navFor = (org: Org) => NAV.filter((n) => !n.editorsOnly || canEdit(org));
 
 /** The frame around every /o/:slug page: which organizer, and where to go in it. */
 export function Organizer({
@@ -67,7 +73,7 @@ export function Organizer({
               {org.name} <span className="muted">· {ROLE[org.role]}</span>
             </p>
             <nav className="tabs" aria-label={org.name}>
-              {NAV.filter((n) => !n.editorsOnly || canEdit(org)).map((n) => (
+              {navFor(org).map((n) => (
                 <Link
                   key={n.section}
                   href={`/o/${org.slug}${n.path}`}

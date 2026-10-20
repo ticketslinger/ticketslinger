@@ -6,7 +6,7 @@ import { ErrorText, focusOnMount, Link, navigate, useAction, useLoad } from "../
 import { CancelEvent } from "./CancelEvent";
 import { type Event, EventForm } from "./EventForm";
 import { Orders } from "./Orders";
-import { canEdit, type Org } from "./Organizer";
+import { canEdit, canRead, type Org } from "./Organizer";
 import { Promos } from "./Promos";
 import { Questions } from "./Questions";
 import { Report } from "./Report";
@@ -96,19 +96,19 @@ export function NewEvent({ org }: { org: Org }) {
   );
 }
 
-const TABS: { path: string; label: string; editorsOnly?: boolean }[] = [
+const TABS: { path: string; label: string; readersOnly?: boolean }[] = [
   { path: "", label: "Details" },
   { path: "/tickets", label: "Tickets" },
   { path: "/promo-codes", label: "Promo codes" },
   { path: "/questions", label: "Questions" },
   // Orders show what people paid, which check-in staff don't see (spec D22).
-  { path: "/orders", label: "Orders", editorsOnly: true },
-  { path: "/report", label: "Report", editorsOnly: true },
+  { path: "/orders", label: "Orders", readersOnly: true },
+  { path: "/report", label: "Report", readersOnly: true },
   { path: "/checkin", label: "Check-in" },
 ];
 
 /** The event's tabs this member may open. */
-export const eventTabs = (org: Org) => TABS.filter((t) => !t.editorsOnly || canEdit(org));
+export const eventTabs = (org: Org) => TABS.filter((t) => !t.readersOnly || canRead(org));
 
 function PublicLink({ org, event }: { org: Org; event: Event }) {
   const [origin, setOrigin] = useState("");

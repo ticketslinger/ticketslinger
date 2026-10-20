@@ -14,9 +14,6 @@ export const ROLE = {
   staff: "TicketSlinger support",
 } as const;
 
-/** The account links beyond the basics: Support is for staff only. */
-export const menuItems = (me: Pick<Me, "staff">) => (me.staff ? ["Support"] : []);
-
 export function Home({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
   const [orgs, setOrgs] = useState<Organizer[] | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -83,7 +80,7 @@ export function Home({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
         <Link className="button secondary" href="/security">
           Sign-in and security
         </Link>
-        {menuItems(me).includes("Support") && (
+        {me.staff && (
           <Link className="button secondary" href="/staff">
             Support
           </Link>
