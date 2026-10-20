@@ -52,6 +52,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+	case "staff":
+		if err := runStaff(context.Background(), os.Getenv, os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 	}
@@ -68,7 +73,7 @@ func runMigrate(ctx context.Context, getenv func(string) string) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: ticketslinger <serve|migrate|version>")
+	fmt.Fprintln(os.Stderr, "usage: ticketslinger <serve|migrate|staff|version>")
 	os.Exit(2)
 }
 
