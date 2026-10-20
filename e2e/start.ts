@@ -1,17 +1,13 @@
 // Starts the whole stack for the end-to-end suite: a fresh database, the API
 // in test mode on :3001, the built storefront on :3003 and the built dashboard
 // on :3002. Playwright runs it.
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SQL } from "bun";
+import { bin, DB, url } from "./env";
 
 const root = join(import.meta.dir, "..");
 const dashboard = join(root, "web/dashboard");
 const storefront = join(root, "web/storefront");
-const pg = process.env.E2E_PG ?? "localhost:54329";
-const DB = "ticketslinger_e2e";
-const url = (role: string, db: string) => `postgres://${role}:${role}@${pg}/${db}?sslmode=disable`;
-const bin = join(tmpdir(), "ticketslinger-e2e");
 
 const apiEnv: Record<string, string | undefined> = {
   ...process.env,
@@ -27,6 +23,8 @@ const apiEnv: Record<string, string | undefined> = {
   // The storefront reaches the API on loopback and forwards each buyer's address.
   TS_TRUSTED_PROXIES: "127.0.0.1/32,::1/128",
   TS_WEBAUTHN_RPID: "localhost",
+  // Staff mode refuses to start without somewhere to send its alerts.
+  TS_MAIL_ALERT_TO: "alerts@example.com",
   TS_TEST_MODE: "1",
   // Test mode takes payments through the built-in fake provider, unless the
   // manual stripe-smoke run brings test keys (below).
