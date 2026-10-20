@@ -21,8 +21,6 @@ var (
 	ErrAlreadySuspended = errors.New("staff: already suspended")
 	// ErrNotSuspended: lift or refund_event on an organizer that isn't suspended.
 	ErrNotSuspended = errors.New("staff: not suspended")
-	// ErrAlreadyDone: a refund_event action that has already been carried out.
-	ErrAlreadyDone = errors.New("staff: already done")
 	// ErrBusy: the organizer row stayed locked past lock_timeout; try again.
 	ErrBusy = errors.New("staff: organizer busy")
 )
@@ -33,7 +31,6 @@ type Action struct {
 	Kind          string
 	OrganizerSlug string
 	Event         *uuid.UUID
-	Result        *RefundResult
 }
 
 // RefundResult is what a refund_event action did; staff_actions.result
@@ -93,8 +90,10 @@ What to do on the Stripe side, in this order:
 // Act takes one staff action on sess's organizer: staff_act re-checks the
 // staff session and records the action, and the alert email is queued in
 // the same transaction. The passkey touch is checked before this is called.
-// A refund_event is then carried out in a second transaction; if that one
-// fails, the action stays recorded and unfinished, and staff start again.
+// A refund_event is then carried out in the background, in a second
+// transaction, and Act returns without waiting: listStaffSessions shows it
+// finished, with its result. If it fails, the action stays recorded and
+// unfinished, and staff take it again.
 func (s *Service) Act(ctx context.Context, sess Session, kind string, event *uuid.UUID, reason string) (Action, error) {
 	if s.alertTo == "" {
 		return Action{}, ErrAlertsOff
@@ -144,25 +143,21 @@ func (s *Service) Act(ctx context.Context, sess Session, kind string, event *uui
 	if kind != "refund_event" {
 		return out, nil
 	}
-	// Not cancelled with the request: a client that goes away mid-refund
-	// mustn't roll it back. ponytail: 10 minutes, then it rolls back and
-	// stays unfinished; move it to a job if an event ever needs longer.
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
-	defer cancel()
-	r, err := s.refund(rctx, sess.OrganizerID, out.ID)
-	if pg, ok := errors.AsType[*pgconn.PgError](err); ok && pg.Code == "55000" {
-		switch pg.Message {
-		case "already_done":
-			return Action{}, ErrAlreadyDone
-		case "not_suspended":
-			return Action{}, ErrNotSuspended
+	// Not cancelled with the request, and not waited for: a big event
+	// outlasts nginx's 30 seconds. ponytail: 10 minutes, then it rolls back
+	// and stays unfinished; move it to a job if an event ever needs longer.
+	s.refunds.Add(1)
+	go func() {
+		defer s.refunds.Done()
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
+		defer cancel()
+		if _, err := s.refund(rctx, sess.OrganizerID, out.ID); err != nil {
+			// already_done or not_suspended included: either way it's ours to look at.
+			slog.ErrorContext(rctx, "staff_action: refund not carried out", "action", out.ID, "organizer", sess.OrganizerID, "event", event, "err", err)
 		}
-	}
-	if err != nil {
-		// Anything else is ours to look at: the action stays unfinished.
-		slog.ErrorContext(ctx, "staff_action: refund not carried out", "action", out.ID, "organizer", sess.OrganizerID, "event", event, "err", err)
-		return Action{}, err
-	}
-	out.Result = &r
+	}()
 	return out, nil
 }
+
+// Wait returns once every refund Act started has finished.
+func (s *Service) Wait() { s.refunds.Wait() }

@@ -6,7 +6,14 @@ import { ApiKeys } from "./ApiKeys";
 import { eventTabs } from "./Events";
 import { canEdit, navFor, type Org } from "./Organizer";
 import { SessionList } from "./Staff";
-import { ActionDialog, ActionLog, actionText, canConfirm, RefundResult } from "./StaffActions";
+import {
+  ActionDialog,
+  ActionLog,
+  actionText,
+  canConfirm,
+  RefundResult,
+  waitForRefund,
+} from "./StaffActions";
 
 const reason = "Chargebacks all week";
 
@@ -148,4 +155,50 @@ test("each session shows its actions with reason and refund totals", () => {
   expect(
     renderToString(createElement(SessionList, { sessions: [session], showOrganizer: true })),
   ).toContain("Fraud ring on this event");
+});
+
+test("a refund is followed in the staff log until it finishes, and given up on after 11 minutes", async () => {
+  const result = {
+    orders: 1,
+    amount_cents: 5200,
+    fee_cents: 200,
+    pending_orders: 0,
+    failed_orders: [],
+  };
+  const session = (finished: boolean) =>
+    [
+      {
+        actions: [
+          { id: "other", finished_at: "x", result: { ...result, orders: 9 } },
+          {
+            id: "a1",
+            finished_at: finished ? "2026-10-20T10:01:00Z" : null,
+            result: finished ? result : null,
+          },
+        ],
+      },
+    ] as unknown as Parameters<typeof SessionList>[0]["sessions"];
+  let polls = 0;
+  let t = 0;
+  const sleep = async (ms: number) => {
+    t += ms;
+  };
+  const list = async () => {
+    polls++;
+    if (polls === 2) throw new Error("network");
+    return session(polls >= 4);
+  };
+  expect(await waitForRefund("a1", list, sleep, () => t)).toEqual(result);
+  expect(polls).toBe(4);
+
+  t = 0;
+  expect(
+    await waitForRefund(
+      "a1",
+      async () => session(false),
+      sleep,
+      () => t,
+    ),
+  ).toBeUndefined();
+  expect(t).toBe(11 * 60_000);
 });

@@ -64,7 +64,10 @@ export function ActionLog({ actions }: { actions: components["schemas"]["StaffAc
           {KIND[a.kind]} <span className="muted">· {new Date(a.at).toLocaleString()}</span>
           <br />"{a.reason}"
           {a.kind === "refund_event" && !a.finished_at && (
-            <p className="muted">Not finished. Take it again to finish the refunds.</p>
+            <p className="muted">
+              Not finished yet. Still like this after 10 minutes? Take it again: nobody gets
+              refunded twice.
+            </p>
           )}
           {a.result && <RefundResult result={a.result} />}
         </li>
@@ -128,11 +131,44 @@ export function ActionDialog({
   );
 }
 
+type Sessions = components["schemas"]["StaffSessionLog"][];
+
+/**
+ * Polls the staff log until refund action id has finished and returns its
+ * result, or undefined once the refund's own 10 minutes are certainly up.
+ * A failed poll is just tried again.
+ */
+export async function waitForRefund(
+  id: string,
+  list: () => Promise<Sessions> = async () => must(await api.GET("/staff/sessions")),
+  sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)),
+  now = Date.now,
+): Promise<Result | undefined> {
+  const giveUp = now() + 11 * 60_000;
+  while (now() < giveUp) {
+    await sleep(1000);
+    const sessions = await list().catch(() => [] as Sessions);
+    const a = sessions.flatMap((s) => s.actions ?? []).find((a) => a.id === id);
+    if (a?.finished_at) return a.result ?? undefined;
+  }
+  return undefined;
+}
+
+export const REFUNDING =
+  "Refunding every order. A big event can take a few minutes, and it carries on if you leave this page.";
+export const REFUND_LATE =
+  "The refund didn't finish within 10 minutes, so it stopped. Take it again: nobody gets refunded twice.";
+
 /** Staff mode's takedown controls: suspend or lift, and once suspended, refund an event. */
-export function StaffActions({ slug, name }: { slug: string; name: string }) {
-  const org = useLoad(async () =>
-    must(await api.GET("/organizers/{organizer}", { params: { path: { organizer: slug } } })),
-  );
+export function StaffActions({
+  slug,
+  name,
+  org,
+}: {
+  slug: string;
+  name: string;
+  org: ReturnType<typeof useLoad<components["schemas"]["Organizer"]>>;
+}) {
   const suspended = org.data?.suspended === true;
   // Always fetched: reload() runs the last render's loader, which would still say "not suspended"
   // right after a suspend and leave the list empty.
@@ -145,7 +181,17 @@ export function StaffActions({ slug, name }: { slug: string; name: string }) {
     null,
   );
   const [result, setResult] = useState<Result>();
+  const [refunding, setRefunding] = useState("");
   const action = useAction();
+
+  // The refund answers 202 and runs on: follow it in the staff log.
+  const follow = async (id: string) => {
+    setResult(undefined);
+    setRefunding(REFUNDING);
+    const r = await waitForRefund(id);
+    if (r) setResult(r);
+    setRefunding(r ? "" : REFUND_LATE);
+  };
 
   const confirm = (reason: string) =>
     open &&
@@ -164,7 +210,7 @@ export function StaffActions({ slug, name }: { slug: string; name: string }) {
         }),
       );
       setOpen(null);
-      if (done.result) setResult(done.result);
+      if (done.kind === "refund_event") void follow(done.id);
       window.dispatchEvent(new Event(ORG_CHANGED));
       await org.reload();
       await events.reload();
@@ -190,6 +236,11 @@ export function StaffActions({ slug, name }: { slug: string; name: string }) {
             </li>
           ))}
         </ul>
+      )}
+      {refunding && (
+        <p className="muted" role="status">
+          {refunding}
+        </p>
       )}
       {result && <RefundResult result={result} />}
       {open && (

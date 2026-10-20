@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -62,6 +63,7 @@ type Service struct {
 	pool    *pgxpool.Pool
 	alertTo string
 	refund  Refunder
+	refunds sync.WaitGroup // refund_event actions running in the background
 }
 
 // Refunder carries out a refund_event action as the organizer's system
@@ -71,7 +73,7 @@ type Refunder func(ctx context.Context, org, action uuid.UUID) (RefundResult, er
 // New returns the service; alertTo is TS_MAIL_ALERT_TO, and without it
 // Start refuses. refund carries out refund_event actions.
 func New(pool *pgxpool.Pool, alertTo string, refund Refunder) *Service {
-	return &Service{pool, alertTo, refund}
+	return &Service{pool: pool, alertTo: alertTo, refund: refund}
 }
 
 // AlertsOff reports whether Start would refuse with ErrAlertsOff.

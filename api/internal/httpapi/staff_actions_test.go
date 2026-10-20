@@ -44,6 +44,31 @@ func (w staffWorld) actOn(tok, kind, event string) map[string]any {
 	return b
 }
 
+// refunded waits for the refund_event action id to finish, as the Staff
+// page does, and returns its result.
+func (w staffWorld) refunded(id string) map[string]any {
+	w.t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var sessions []map[string]any
+		if err := json.NewDecoder(w.do(w.staffTok, "GET", "/v1/staff/sessions", "").Body).Decode(&sessions); err != nil {
+			w.t.Fatal(err)
+		}
+		for _, s := range sessions {
+			acts, _ := s["actions"].([]any)
+			for _, a := range acts {
+				if m := asMap(a); m["id"] == id && m["finished_at"] != nil {
+					return asMap(m["result"])
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			w.t.Fatalf("refund %s didn't finish", id)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func (w staffWorld) orgID(slug string) uuid.UUID {
 	w.t.Helper()
 	var id uuid.UUID
@@ -173,8 +198,11 @@ func TestSuspendAndLift(t *testing.T) {
 	}
 	b = w.actOn(w.staffTok, "refund_event", w.fixture["event"])
 	want := map[string]any{"orders": 1.0, "amount_cents": 2600.0, "fee_cents": 100.0, "pending_orders": 0.0, "failed_orders": []any{}}
-	if b["status"] != 200 || b["kind"] != "refund_event" || b["event"] != w.fixture["event"] || !jsonEqual(asMap(b["result"]), want) {
-		t.Fatalf("refund_event: %v", b)
+	if b["status"] != 202 || b["kind"] != "refund_event" || b["event"] != w.fixture["event"] || b["result"] != nil {
+		t.Fatalf("refund_event: %v, want 202 with no result yet", b)
+	}
+	if r := w.refunded(b["id"].(string)); !jsonEqual(r, want) {
+		t.Fatalf("refund_event result: %v", r)
 	}
 	if alerts("Staff refunded an event of acme") != 1 || alerts("Refund finished on acme") != 1 {
 		t.Fatal("no refund alerts")
@@ -192,7 +220,10 @@ func TestSuspendAndLift(t *testing.T) {
 	// left to refund. (already_done is for the same action twice, which
 	// RefundEventForStaff's tests cover.)
 	b = w.actOn(w.staffTok, "refund_event", w.fixture["event"])
-	if want["orders"], want["amount_cents"], want["fee_cents"] = 0.0, 0.0, 0.0; b["status"] != 200 || !jsonEqual(asMap(b["result"]), want) {
+	if b["status"] != 202 {
+		t.Fatalf("refund_event again: %v", b)
+	}
+	if want["orders"], want["amount_cents"], want["fee_cents"] = 0.0, 0.0, 0.0; !jsonEqual(w.refunded(b["id"].(string)), want) {
 		t.Fatalf("refund_event again: %v", b)
 	}
 	if n := countRows(t, w.owner, `select count(*) from refunds where reason = 'platform'`); n != 1 {
