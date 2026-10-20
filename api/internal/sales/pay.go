@@ -93,6 +93,11 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 		if err != nil {
 			return err
 		}
+		// Before anything is written. A completed checkout (lockCheckout) still
+		// says so, so a buyer who paid finds their order.
+		if err := offSale(ctx, tx, org); err != nil {
+			return err
+		}
 		event = c.event
 		items, q, err := s.cart(ctx, tx, c.id, c.event, c.promo, c.feeMode)
 		if err != nil {
@@ -171,6 +176,9 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 		if status != "live" {
 			return catalogue.ErrNotFound
 		}
+		if err := offSale(ctx, tx, org); err != nil {
+			return err
+		}
 		err := tx.QueryRow(ctx, `insert into payments (organizer_id, order_id, provider, stripe_account_id, payment_intent_id, client_secret, amount_cents, application_fee_cents)
 			values ($1, $2, $3, $4, $5, $6, $7, $8) on conflict (order_id) do nothing
 			returning payment_intent_id, client_secret, stripe_account_id`,
@@ -181,7 +189,7 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 		}
 		return err
 	})
-	if errors.Is(err, errEventCancelled) || errors.Is(err, catalogue.ErrNotFound) {
+	if errors.Is(err, errEventCancelled) || errors.Is(err, catalogue.ErrNotFound) || errors.Is(err, ErrUnavailable) {
 		// Taken off sale while the intent was made: nobody gets to pay it.
 		if cerr := s.Payments.CancelPaymentIntent(ctx, pi.Account, pi.ID, "cancel-"+order.ID.String()); cerr != nil {
 			slog.WarnContext(ctx, "cancelling an intent made as its event went off sale", "order", order.ID, "intent", pi.ID, "err", cerr)

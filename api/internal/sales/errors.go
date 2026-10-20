@@ -28,6 +28,10 @@ func (busy) Error() string { return "Tickets are moving fast — please try agai
 // ErrCheckoutExpired is 410: the hold ran out before the buyer paid.
 var ErrCheckoutExpired = errors.New("sales: checkout expired")
 
+// ErrUnavailable is 410 event_unavailable: the organizer is suspended, so
+// its events sell nothing. It says nothing about why.
+var ErrUnavailable = errors.New("sales: event unavailable")
+
 // CheckoutCompleted is 409: this checkout already became an order.
 type CheckoutCompleted struct{ OrderCode string }
 

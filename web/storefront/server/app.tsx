@@ -12,7 +12,7 @@ import { ORDER, orderPath, TOKEN } from "../islands/links";
 import { csp } from "./csp";
 import { CheckoutPage } from "./pages/CheckoutPage";
 import { EventPage, type EventPageProps, type StorefrontEvent } from "./pages/EventPage";
-import { ErrorPage, NotFound } from "./pages/NotFound";
+import { ErrorPage, NotFound, Unavailable } from "./pages/NotFound";
 import { OrderLinkPage, type OrderLinkPageProps } from "./pages/OrderLinkPage";
 import { NoOrder, OrderPage, type Sent } from "./pages/OrderPage";
 import { Recent } from "./recent";
@@ -213,6 +213,9 @@ export function createApp(opts: StorefrontOptions): Hono {
 
   const notFound = (c: Context, what: "event" | "page" | "checkout" = "page") =>
     page(c, 404, <NotFound what={what} />);
+  // 410 from the storefront read, createCheckout, getCheckout or pay: the organizer is suspended.
+  const unavailable = (c: Context, charged = false) =>
+    page(c, 410, <Unavailable charged={charged} />);
   const trouble = (c: Context, status: Status = 502, message = GENERIC) =>
     page(c, status, <ErrorPage message={message} />);
 
@@ -323,6 +326,11 @@ export function createApp(opts: StorefrontOptions): Hono {
     if (!TOKEN.test(token)) return notFound(c, "checkout");
     const r = await getCheckout(c, token);
     if (r.status === 404) return notFound(c, "checkout");
+    if (r.status === 410) {
+      // Back from 3-D Secure (Stripe's return_url is this page): a card may have been charged.
+      const q = c.req.query();
+      return unavailable(c, "payment_intent" in q || "redirect_status" in q);
+    }
     if (r.status === 429) return trouble(c, 429, SLOW_DOWN);
     if (r.status === 409 && r.error?.error.code === "event_cancelled") {
       return trouble(c, 409, EVENT_CANCELLED);
@@ -487,6 +495,7 @@ export function createApp(opts: StorefrontOptions): Hono {
     const code = (c.req.query("code") ?? "").trim();
     const r = await load(c, organizer, event, code);
     if (r.status === 404) return notFound(c, "event");
+    if (r.status === 410) return unavailable(c);
     if (!r.data) return trouble(c);
     if (r.limited) {
       return eventPage(c, 429, { data: r.data, code: "", codeMessage: SLOW_DOWN });
@@ -509,13 +518,14 @@ export function createApp(opts: StorefrontOptions): Hono {
     if (RESERVED.has(organizer)) return notFound(c);
     const r = await read(c, organizer, event, "");
     if (r.status === 404) return notFound(c, "event");
-    if (!r.data) return trouble(c);
+    // Off sale, but buyers who already paid still get their links: just no event name.
+    if (!r.data && r.status !== 410) return trouble(c);
     const action = `/${encodeURIComponent(organizer)}/${encodeURIComponent(event)}/order-link`;
     const form = siteKey !== "" && !p.done;
     return page(
       c,
       status,
-      <OrderLinkPage {...p} eventName={r.data.event.name} action={action} siteKey={siteKey} />,
+      <OrderLinkPage {...p} eventName={r.data?.event.name} action={action} siteKey={siteKey} />,
       form ? "turnstile" : "plain",
     );
   }
@@ -597,6 +607,7 @@ export function createApp(opts: StorefrontOptions): Hono {
     ) => {
       const r = await load(c, organizer, event, code);
       if (r.status === 404) return notFound(c, "event");
+      if (r.status === 410) return unavailable(c);
       if (!r.data) return trouble(c, status);
       return eventPage(c, status, {
         data: r.data,
@@ -637,6 +648,7 @@ export function createApp(opts: StorefrontOptions): Hono {
       .POST("/checkouts", { body, headers: { ...apiHeaders(c), "Idempotency-Key": idem } })
       .catch(() => null);
     if (!res) return again(502, GENERIC);
+    if (res.response.status === 410) return unavailable(c);
     const err: Partial<ApiError> = res.error?.error ?? {};
     if (err.code === "idempotency_in_progress") {
       const first = await firstTap(key);

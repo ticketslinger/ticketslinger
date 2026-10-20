@@ -57,8 +57,8 @@ type StorefrontQuestion struct {
 
 // StorefrontEvent reads a live event by its storefront address. Hidden
 // ticket types, and questions asked only of hidden types, appear only when
-// code unlocks them. An unknown or draft event is ErrNotFound; a code that
-// doesn't work is simply no code.
+// code unlocks them. An unknown or draft event is ErrNotFound, a suspended
+// organizer's is ErrUnavailable; a code that doesn't work is simply no code.
 func (s *Service) StorefrontEvent(ctx context.Context, org, event, code string) (StorefrontEvent, error) {
 	orgID, eventID, err := s.resolveLive(ctx, org, event)
 	if err != nil {
@@ -68,6 +68,9 @@ func (s *Service) StorefrontEvent(ctx context.Context, org, event, code string) 
 	// The system role sees hidden types and promo codes; every query below
 	// names what a buyer may see.
 	err = system.Run(ctx, s.Pool, orgID, func(tx pgx.Tx) error {
+		if err := offSale(ctx, tx, orgID); err != nil {
+			return err
+		}
 		e := &out.Event
 		var running bool
 		err := tx.QueryRow(ctx, `select o.name, o.slug::text, e.id, e.slug, e.name, e.description, e.venue_name, e.venue_address,
