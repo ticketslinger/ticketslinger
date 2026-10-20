@@ -18,12 +18,15 @@ var (
 	ErrSlugTaken = errors.New("organizers: slug taken")
 	ErrNotFound  = errors.New("organizers: not found")
 	ErrInvalid   = errors.New("organizers: invalid name or slug")
+	// ErrSuspendedMember: the user owns or administers a suspended organizer.
+	ErrSuspendedMember = errors.New("organizers: member of a suspended organizer")
 )
 
 type Organizer struct {
 	ID         uuid.UUID
 	Name, Slug string
 	Role       string
+	Suspended  bool
 }
 
 type Service struct{ pool *pgxpool.Pool }
@@ -52,6 +55,9 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, name, slug strin
 	if errors.As(err, &pg) && pg.Code == "23505" {
 		return Organizer{}, ErrSlugTaken
 	}
+	if errors.As(err, &pg) && pg.Code == "42501" && pg.Message == "suspended_member" {
+		return Organizer{}, ErrSuspendedMember
+	}
 	if errors.As(err, &pg) && pg.Code == "23514" { // CHECK backstop
 		return Organizer{}, ErrInvalid
 	}
@@ -61,7 +67,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, name, slug strin
 	return o, nil
 }
 
-const selectOrgs = `select o.id, o.name, o.slug::text, m.role from organizers o
+const selectOrgs = `select o.id, o.name, o.slug::text, m.role, organizer_suspended(o.id) from organizers o
 	join memberships m on m.organizer_id = o.id and m.user_id = $1`
 
 // ListForUser returns the organizers the user belongs to, oldest first.
@@ -82,7 +88,7 @@ func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID) ([]Organize
 func (s *Service) Resolve(ctx context.Context, userID uuid.UUID, slug string) (Organizer, error) {
 	var o Organizer
 	err := db.WithUser(ctx, s.pool, userID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, selectOrgs+` where o.slug = $2`, userID, slug).Scan(&o.ID, &o.Name, &o.Slug, &o.Role)
+		return tx.QueryRow(ctx, selectOrgs+` where o.slug = $2`, userID, slug).Scan(&o.ID, &o.Name, &o.Slug, &o.Role, &o.Suspended)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Organizer{}, ErrNotFound

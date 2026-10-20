@@ -17,8 +17,10 @@ import (
 
 // staffTables are readable by every live staff user in any scope, by design
 // (their own session list), so the zero-rows walks leave them out and
-// TestStaffLogTablesShowTheirOrganizer covers them.
-var staffTables = map[string]bool{"staff_sessions": true, "staff_access_log": true}
+// TestStaffLogTablesShowTheirOrganizer covers them. The takedown tables are
+// left out too: no app role may read them at all (TestCatalogHardening).
+var staffTables = map[string]bool{"staff_sessions": true, "staff_access_log": true,
+	"organizer_suspensions": true, "staff_actions": true}
 
 type staffFixture struct {
 	pool        *pgxpool.Pool
