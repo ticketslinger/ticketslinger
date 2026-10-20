@@ -37,8 +37,14 @@ const DONE: Record<string, string> = {
   stripe_disconnected: "disconnected from Stripe",
 };
 
+/** Rows that need a whole sentence rather than thing + verb. */
+const SENTENCE: Record<string, string> = {
+  "event.refunded_by_support": "Every order of an event refunded in full, our fee too",
+};
+
 /** "ticket_type.updated" → "Ticket type changed"; anything unfamiliar shows as it is. */
 export function describeAction(action: string): string {
+  if (SENTENCE[action]) return SENTENCE[action];
   const [thing = "", done = ""] = action.split(".");
   return THING[thing] && DONE[done] ? `${THING[thing]} ${DONE[done]}` : action;
 }
@@ -51,26 +57,38 @@ const when = (iso: string) =>
 type Actor = Pick<
   components["schemas"]["AuditEntry"],
   "actor_type" | "actor_user_id" | "actor_api_key_id" | "actor_name" | "actor_email"
->;
+> & { action?: string };
 
 /**
  * The Who cell: a key by name, you as "You", a member by name with their
- * email beneath, and "Automatic" for what TicketSlinger did by itself.
+ * email beneath, support by name, and "Automatic" for what TicketSlinger
+ * did by itself (but a refund support asked for is support's).
  */
 export function who(e: Actor, meId: string) {
-  if (e.actor_type === "system") return "Automatic";
+  if (e.actor_type === "staff")
+    return e.actor_name ? `TicketSlinger support (${e.actor_name})` : "TicketSlinger support";
+  if (e.actor_type === "system")
+    return e.action === "event.refunded_by_support" ? "TicketSlinger support" : "Automatic";
   if (e.actor_api_key_id) return e.actor_name ? `API key: ${e.actor_name}` : "An API key";
   if (e.actor_user_id === meId) return "You";
   return e.actor_name ?? "Someone on your team";
 }
 
-/** What a support row says; the reason lives on the matching staff session. */
+/** What support did, for rows the Who cell already says were support's. */
+const STAFF_DID: Record<string, string> = {
+  "staff.session_started": "Opened your organizer in support mode",
+  "staff.suspended": "Suspended your organizer, so your events went off sale",
+  "staff.lifted": "Lifted your organizer's suspension",
+  "staff.refund_requested": "Started refunding every order of an event",
+};
+
+/** What a support row says; a start's reason lives on the matching staff session. */
 export function staffRow(e: { action: string; actor_name?: string | null }, reason?: string) {
   const name = e.actor_name ?? "someone";
   if (e.action === "staff.session_started" && reason) return staffAuditLine(name, reason);
   if (e.action === "staff.session_ended")
     return `TicketSlinger support (${name}) ended support mode`;
-  return null;
+  return STAFF_DID[e.action] ?? null;
 }
 
 export function Audit({ org, me }: { org: Org; me: Me }) {

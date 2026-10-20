@@ -6,7 +6,7 @@ import { bannerText, minutesLeft, StaffBanner } from "../StaffBanner";
 import { staffRow } from "./Audit";
 import { eventTabs } from "./Events";
 import { Home } from "./Home";
-import { canEdit, canRead, navFor, type Org } from "./Organizer";
+import { canEdit, canRead, membersBanner, navFor, type Org } from "./Organizer";
 import { reasonOk, staffAuditLine } from "./Staff";
 
 test("minutesLeft rounds down and never goes below 0", () => {
@@ -19,6 +19,9 @@ test("minutesLeft rounds down and never goes below 0", () => {
 test("the banner says what the spec says", () => {
   expect(bannerText({ organizer_name: "Acme Events" }, 47)).toBe(
     "Support mode: viewing Acme Events, read-only. 47 min left.",
+  );
+  expect(bannerText({ organizer_name: "Acme Events" }, 47, true)).toBe(
+    "Support mode: viewing Acme Events, read-only. 47 min left. This organizer is suspended.",
   );
 });
 
@@ -91,7 +94,9 @@ test("audit rows read as the spec sentence", () => {
   expect(
     staffRow({ action: "staff.session_started", actor_name: "Sam" }, "Checking a refund"),
   ).toBe('TicketSlinger support (Sam) viewed your organizer: "Checking a refund"');
-  expect(staffRow({ action: "staff.session_started", actor_name: "Sam" })).toBeNull();
+  expect(staffRow({ action: "staff.session_started", actor_name: "Sam" })).toBe(
+    "Opened your organizer in support mode",
+  );
 });
 
 // WCAG relative luminance.
@@ -113,4 +118,13 @@ test("the banner reads at 4.5:1 in light and dark, and the colour is used once",
   expect(pairs.length).toBe(2); // light, then dark
   for (const [, bg = "", fg = ""] of pairs) expect(ratio(bg, fg)).toBeGreaterThanOrEqual(4.5);
   expect(css.match(/var\(--staff-banner\)/g)?.length).toBe(1);
+});
+
+test("staff in support mode don't get the members' suspension banner", () => {
+  const o = (role: string, suspended: boolean) =>
+    ({ role, slug: "a", name: "A", suspended }) as Org;
+  expect(membersBanner(o("owner", true))).toBe(true);
+  expect(membersBanner(o("checkin", true))).toBe(true);
+  expect(membersBanner(o("owner", false))).toBe(false);
+  expect(membersBanner(o("staff", true))).toBe(false);
 });
