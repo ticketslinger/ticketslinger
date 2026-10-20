@@ -1,17 +1,20 @@
 import type { components } from "@ticketslinger/api-client";
 import { type ReactNode, useEffect } from "react";
 import { api, must } from "../api";
+import { SuspendedBanner } from "../SuspendedBanner";
 import { ErrorText, Link, type Me, NotFound, useLoad } from "../ui";
 import { ROLE, SecondStepNotice } from "./Home";
 
 export type Org = components["schemas"]["Organizer"];
 export type Section = "events" | "payments" | "team" | "api-keys" | "audit";
 
-/** Owners and admins change things; check-in staff only look. */
-export const canEdit = (org: Org) => org.role === "owner" || org.role === "admin";
+const isEditor = (org: Org) => org.role === "owner" || org.role === "admin";
+
+/** Owners and admins change things, unless the organizer is suspended; check-in staff only look. */
+export const canEdit = (org: Org) => isEditor(org) && !org.suspended;
 
 /** Support staff read what owners and admins read, and change nothing. */
-export const canRead = (org: Org) => canEdit(org) || org.role === "staff";
+export const canRead = (org: Org) => isEditor(org) || org.role === "staff";
 
 const NAV: { section: Section; label: string; path: string; editorsOnly?: boolean }[] = [
   { section: "events", label: "Events", path: "" },
@@ -72,6 +75,7 @@ export function Organizer({
             <p className="org-name">
               {org.name} <span className="muted">· {ROLE[org.role]}</span>
             </p>
+            {org.suspended && <SuspendedBanner organizer={org.name} />}
             <nav className="tabs" aria-label={org.name}>
               {navFor(org).map((n) => (
                 <Link

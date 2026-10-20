@@ -96,7 +96,7 @@ export function NewEvent({ org }: { org: Org }) {
   );
 }
 
-const TABS: { path: string; label: string; readersOnly?: boolean }[] = [
+const TABS: { path: string; label: string; readersOnly?: boolean; writesOnly?: boolean }[] = [
   { path: "", label: "Details" },
   { path: "/tickets", label: "Tickets" },
   { path: "/promo-codes", label: "Promo codes" },
@@ -104,11 +104,12 @@ const TABS: { path: string; label: string; readersOnly?: boolean }[] = [
   // Orders show what people paid, which check-in staff don't see (spec D22).
   { path: "/orders", label: "Orders", readersOnly: true },
   { path: "/report", label: "Report", readersOnly: true },
-  { path: "/checkin", label: "Check-in" },
+  { path: "/checkin", label: "Check-in", writesOnly: true },
 ];
 
 /** The event's tabs this member may open. */
-export const eventTabs = (org: Org) => TABS.filter((t) => !t.readersOnly || canRead(org));
+export const eventTabs = (org: Org) =>
+  TABS.filter((t) => (!t.readersOnly || canRead(org)) && (!t.writesOnly || !org.suspended));
 
 function PublicLink({ org, event }: { org: Org; event: Event }) {
   const [origin, setOrigin] = useState("");
