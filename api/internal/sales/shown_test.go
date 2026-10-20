@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ticketslinger/ticketslinger/api/internal/pricing"
 	"github.com/ticketslinger/ticketslinger/api/internal/sales"
 )
 
@@ -14,13 +15,22 @@ import (
 // checkout's all-in discount, is the checkout's total, the PaymentIntent's
 // amount and the stored order's total, to the cent.
 func TestShownEqualsCharged(t *testing.T) {
-	for _, feeMode := range []string{"pass", "absorb"} {
+	modes := []struct {
+		name, feeMode string
+		direct        bool // the server's own Stripe account: no fee at all
+	}{{"pass", "pass", false}, {"absorb", "absorb", false}, {"direct", "pass", true}}
+	for _, m := range modes {
 		for _, inclusive := range []bool{true, false} {
-			t.Run(fmt.Sprintf("%s/inclusive=%v", feeMode, inclusive), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s/inclusive=%v", m.name, inclusive), func(t *testing.T) {
 				s, f, rec := payService(t, seedOpts{quota: 100, price: 2500, taxBP: 825})
+				s.Direct = m.direct
 				ctx := context.Background()
-				f.exec(t, `update events set fee_mode = $2, prices_include_tax = $3 where id = $1`, f.event, feeMode, inclusive)
+				f.exec(t, `update events set fee_mode = $2, prices_include_tax = $3 where id = $1`, f.event, m.feeMode, inclusive)
+				// odd overrides the event's tax: 10%, included the other way round.
 				odd := f.addVIP(t, 2165, false)
+				f.exec(t, `update ticket_types set tax_rate_bp = 1000, prices_include_tax = $2 where id = $1`, odd, !inclusive)
+				free := f.ticketType(t, f.org, f.event, "Free", 0, false)
+				f.exec(t, `insert into quota_ticket_types(organizer_id, event_id, quota_id, ticket_type_id) values ($1, $2, $3, $4)`, f.org, f.event, f.hall, free)
 				f.promo(t, "TEN", "percent", 1000)
 
 				ev, err := s.StorefrontEvent(ctx, "acme", "gala", "")
@@ -29,11 +39,19 @@ func TestShownEqualsCharged(t *testing.T) {
 				for _, tt := range ev.TicketTypes {
 					allIn[tt.ID] = tt.Shown.AllInCents
 				}
-				for _, tt := range []uuid.UUID{f.general, odd} {
-					if allIn[tt] <= 0 {
-						t.Fatalf("all_in_cents for %s = %d, want it priced", tt, allIn[tt])
+				want := pricing.ShownPrice(pricing.Line{PriceCents: 2165, TaxRateBP: 1000, PricesIncludeTax: !inclusive}, m.feeMode, s.PlatformFee())
+				if allIn[odd] != want.AllInCents {
+					t.Fatalf("odd all_in_cents = %d, want %d at its own 10%% rate", allIn[odd], want.AllInCents)
+				}
+				if allIn[free] != 0 || allIn[f.general] <= 0 {
+					t.Fatalf("all_in_cents free %d, general %d; want 0 and priced", allIn[free], allIn[f.general])
+				}
+				for _, tt := range []uuid.UUID{f.general, odd, free} {
+					codes := []string{"", "TEN"}
+					if tt == free {
+						codes = codes[:1] // a code takes nothing off $0
 					}
-					for _, code := range []string{"", "TEN"} {
+					for _, code := range codes {
 						in := buy(sales.Item{TicketTypeID: tt, Quantity: 2})
 						in.PromoCode = code
 						c := f.open(t, s, in)
@@ -53,6 +71,14 @@ func TestShownEqualsCharged(t *testing.T) {
 						ps, err := s.Pay(ctx, c.Token, sales.Details{Email: "buyer@example.com", ExpectedTotalCents: &q.TotalCents})
 						f.must(t, err)
 						calls := rec.calls()
+						if q.TotalCents == 0 {
+							var stored int64
+							f.must(t, f.owner.QueryRow(ctx, `select total_cents from orders where checkout_id = $1`, c.ID).Scan(&stored))
+							if ps.Kind != "free" || len(calls) != before || stored != 0 {
+								t.Fatalf("free: kind %s, %d new intents, order %d; want free, none, 0", ps.Kind, len(calls)-before, stored)
+							}
+							continue
+						}
 						if len(calls) != before+1 {
 							t.Fatalf("%d intents, want %d", len(calls), before+1)
 						}
