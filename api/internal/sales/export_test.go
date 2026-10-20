@@ -33,3 +33,5 @@ var RefundDBErrorForTest = refundDBError
 func SetTicketsEmailForTest(s *Service, fn func(emails.TicketsData) (mailer.Message, error)) {
 	s.ticketsEmail = fn
 }
+
+var RefundEmailForTest = refundEmail

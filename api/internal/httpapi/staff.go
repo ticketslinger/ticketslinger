@@ -168,15 +168,10 @@ func (s *server) SearchStaffOrganizers(ctx context.Context, req SearchStaffOrgan
 }
 
 // checkStaffAction checks a staff action's kind and event: event goes with
-// refund_event and nothing else, and refund_event is refused until the
-// refund itself is wired up.
+// refund_event and nothing else.
 func checkStaffAction(kind StaffActionKind, event *uuid.UUID) error {
-	switch kind {
-	case "suspend", "lift":
-	case "refund_event":
-		return invalidField("invalid_kind", "kind", "Refunding an event from support mode isn't available yet.")
-	default:
-		return invalidField("invalid_kind", "kind", "Pick suspend or lift.")
+	if !kind.Valid() {
+		return invalidField("invalid_kind", "kind", "Pick suspend, lift or refund_event.")
 	}
 	if (kind == "refund_event") != (event != nil) {
 		return invalidField("invalid_event", "event", "Name the event to refund, and only for a refund.")
@@ -268,12 +263,27 @@ func (s *server) TakeStaffAction(ctx context.Context, req TakeStaffActionRequest
 		return nil, &apiError{409, "already_suspended", "This organizer is already suspended."}
 	case errors.Is(err, staff.ErrNotSuspended):
 		return nil, &apiError{409, "not_suspended", "This organizer isn't suspended."}
+	case errors.Is(err, staff.ErrAlreadyDone):
+		return nil, &apiError{409, "already_done", "That refund has already been made."}
 	case errors.Is(err, catalogue.ErrNotFound), errors.Is(err, staff.ErrNotAllowed):
 		return nil, notFound() // no such event here, or staff mode ended since Current looked
 	case err != nil:
 		return nil, err
 	}
-	return TakeStaffAction200JSONResponse{Id: a.ID, Kind: StaffActionKind(a.Kind), OrganizerSlug: a.OrganizerSlug, Event: a.Event}, nil
+	return TakeStaffAction200JSONResponse{Id: a.ID, Kind: StaffActionKind(a.Kind), OrganizerSlug: a.OrganizerSlug, Event: a.Event,
+		Result: toStaffRefundResult(a.Result)}, nil
+}
+
+func toStaffRefundResult(r *staff.RefundResult) *StaffRefundResult {
+	if r == nil {
+		return nil
+	}
+	out := &StaffRefundResult{Orders: r.Orders, AmountCents: r.AmountCents, FeeCents: r.FeeCents, PendingOrders: r.PendingOrders,
+		FailedOrders: make([]StaffRefusedOrder, 0, len(r.FailedOrders))}
+	for _, f := range r.FailedOrders {
+		out.FailedOrders = append(out.FailedOrders, StaffRefusedOrder{OrderId: f.Order, Reason: f.Reason})
+	}
+	return out
 }
 
 func (s *server) ListStaffSessions(ctx context.Context, _ ListStaffSessionsRequestObject) (ListStaffSessionsResponseObject, error) {
@@ -289,7 +299,8 @@ func (s *server) ListStaffSessions(ctx context.Context, _ ListStaffSessionsReque
 	for i, l := range list {
 		acts := make([]StaffActionLog, 0, len(l.Actions))
 		for _, a := range l.Actions {
-			acts = append(acts, StaffActionLog{Id: a.ID, Kind: StaffActionKind(a.Kind), Event: nullOf(a.Event), Reason: a.Reason, At: a.At, FinishedAt: nullOf(a.FinishedAt)})
+			acts = append(acts, StaffActionLog{Id: a.ID, Kind: StaffActionKind(a.Kind), Event: nullOf(a.Event), Reason: a.Reason, At: a.At, FinishedAt: nullOf(a.FinishedAt),
+				Result: toStaffRefundResult(a.Result)})
 		}
 		out[i].Actions = &acts
 	}

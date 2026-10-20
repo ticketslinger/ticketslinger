@@ -21,6 +21,8 @@ var (
 	ErrAlreadySuspended = errors.New("staff: already suspended")
 	// ErrNotSuspended: lift or refund_event on an organizer that isn't suspended.
 	ErrNotSuspended = errors.New("staff: not suspended")
+	// ErrAlreadyDone: a refund_event action that has already been carried out.
+	ErrAlreadyDone = errors.New("staff: already done")
 )
 
 // Action is one staff write: a suspension, a lift, or an event refund.
@@ -32,10 +34,20 @@ type Action struct {
 	Result        *RefundResult
 }
 
-// RefundResult is what a refund_event action did.
+// RefundResult is what a refund_event action did; staff_actions.result
+// holds it as JSON.
 type RefundResult struct {
-	Orders, PendingOrders int
-	AmountCents, FeeCents int64
+	Orders        int             `json:"orders"`
+	PendingOrders int             `json:"pending_orders"`
+	AmountCents   int64           `json:"amount_cents"`
+	FeeCents      int64           `json:"fee_cents"`
+	FailedOrders  []RefusedRefund `json:"failed_orders"`
+}
+
+// RefusedRefund is an order the refund left out, for someone to refund by hand.
+type RefusedRefund struct {
+	Order  uuid.UUID `json:"order_id"`
+	Reason string    `json:"reason"`
 }
 
 // ActionLog is a staff action as the staff log shows it.
@@ -46,6 +58,7 @@ type ActionLog struct {
 	Reason     string
 	At         time.Time
 	FinishedAt *time.Time
+	Result     *RefundResult // refund_event, once finished
 }
 
 // Purpose is what a staff action's passkey touch is for, so a touch made
@@ -78,6 +91,8 @@ What to do on the Stripe side, in this order:
 // Act takes one staff action on sess's organizer: staff_act re-checks the
 // staff session and records the action, and the alert email is queued in
 // the same transaction. The passkey touch is checked before this is called.
+// A refund_event is then carried out in a second transaction; if that one
+// fails, the action stays recorded and unfinished, and staff start again.
 func (s *Service) Act(ctx context.Context, sess Session, kind string, event *uuid.UUID, reason string) (Action, error) {
 	if s.alertTo == "" {
 		return Action{}, ErrAlertsOff
@@ -117,5 +132,28 @@ func (s *Service) Act(ctx context.Context, sess Session, kind string, event *uui
 		return Action{}, err
 	}
 	slog.WarnContext(ctx, "staff_action", "action", out.ID, "kind", kind, "staff_session", sess.ID, "user", sess.UserID, "organizer", sess.OrganizerID, "event", event)
+	if kind != "refund_event" {
+		return out, nil
+	}
+	// Not cancelled with the request: a client that goes away mid-refund
+	// mustn't roll it back. ponytail: 10 minutes, then it rolls back and
+	// stays unfinished; move it to a job if an event ever needs longer.
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
+	defer cancel()
+	r, err := s.refund(rctx, sess.OrganizerID, out.ID)
+	if pg, ok := errors.AsType[*pgconn.PgError](err); ok && pg.Code == "55000" {
+		switch pg.Message {
+		case "already_done":
+			return Action{}, ErrAlreadyDone
+		case "not_suspended":
+			return Action{}, ErrNotSuspended
+		}
+	}
+	if err != nil {
+		// Anything else is ours to look at: the action stays unfinished.
+		slog.ErrorContext(ctx, "staff_action: refund not carried out", "action", out.ID, "organizer", sess.OrganizerID, "event", event, "err", err)
+		return Action{}, err
+	}
+	out.Result = &r
 	return out, nil
 }

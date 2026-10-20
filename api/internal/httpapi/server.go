@@ -68,12 +68,21 @@ func New(d Deps) http.Handler {
 	if d.Keys == nil {
 		d.Keys = apikeys.New(d.Pool)
 	}
-	if d.Staff == nil {
-		d.Staff = staff.New(d.Pool, d.Config.MailAlertTo)
-	}
 	if d.Sales == nil {
 		d.Sales = &sales.Service{Pool: d.Pool, Fee: pricing.Fee{BP: d.Config.PlatformFeeBP, Cents: d.Config.PlatformFeeCents},
 			Payments: d.Payments, Direct: d.Config.PaymentsMode == "direct", StorefrontURL: d.Config.StorefrontURL, SecretKey: d.Config.SecretKey}
+	}
+	if d.Staff == nil {
+		sv, alertTo := d.Sales, d.Config.MailAlertTo
+		d.Staff = staff.New(d.Pool, alertTo, func(ctx context.Context, org, action uuid.UUID) (staff.RefundResult, error) {
+			r, err := sv.RefundEventForStaff(ctx, org, action, alertTo)
+			out := staff.RefundResult{Orders: r.Orders, PendingOrders: r.PendingOrders, AmountCents: r.AmountCents, FeeCents: r.FeeCents,
+				FailedOrders: make([]staff.RefusedRefund, 0, len(r.Failed))}
+			for _, f := range r.Failed {
+				out.FailedOrders = append(out.FailedOrders, staff.RefusedRefund{Order: f.Order, Reason: f.Reason})
+			}
+			return out, err
+		})
 	}
 	noStore := noStoreRoutes()
 	s := &server{Deps: d, public: publicRoutes(), opIDs: operationIDs(), checkoutLimit: ratelimit.New(10, time.Minute), payLimit: ratelimit.New(20, time.Minute),

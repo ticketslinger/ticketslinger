@@ -32,6 +32,17 @@ func (w staffWorld) act(tok, kind string) map[string]any {
 	return b
 }
 
+// actOn takes a staff action naming event.
+func (w staffWorld) actOn(tok, kind, event string) map[string]any {
+	w.t.Helper()
+	ch := w.must(w.do(tok, "POST", "/v1/staff/actions/challenge", `{"kind":"`+kind+`","event":"`+event+`"}`), 200)
+	body := actBody(ch["challenge_id"].(string), w.dev.assert(w.t, ch["options"]), kind, takedownReason)
+	res := w.do(tok, "POST", "/v1/staff/actions", strings.Replace(body, `"kind"`, `"event":"`+event+`","kind"`, 1))
+	b := w.json(res)
+	b["status"] = res.StatusCode
+	return b
+}
+
 func (w staffWorld) orgID(slug string) uuid.UUID {
 	w.t.Helper()
 	var id uuid.UUID
@@ -92,7 +103,7 @@ func TestStaffActionAssertionIsBound(t *testing.T) {
 	}
 }
 
-// Test 27, and the refund_event refusal until the refund itself lands.
+// Tests 27 and 28.
 func TestSuspendAndLift(t *testing.T) {
 	w := newStaffWorld(t)
 	alerts := func(subject string) int {
@@ -149,14 +160,42 @@ func TestSuspendAndLift(t *testing.T) {
 	if b := w.act(w.staffTok, "suspend"); b["status"] != 409 || errCode(b) != "already_suspended" {
 		t.Fatalf("suspend again: %v", b)
 	}
-	// Refunds aren't wired up yet: refused before anything is written.
-	before := countRows(t, w.owner, `select count(*) from jobs`)
-	res = w.do(w.staffTok, "POST", "/v1/staff/actions", strings.Replace(actBody(uuid.NewString(), "", "refund_event", takedownReason), `"kind"`, `"event":"`+w.fixture["event"]+`","kind"`, 1))
-	if e, _ := w.json(res)["error"].(map[string]any); res.StatusCode != 422 || e["field"] != "kind" {
-		t.Fatalf("refund_event: %d %v", res.StatusCode, e)
+	// Spec test 28 end to end: give the seeded paid order a ticket to refund.
+	if _, err := w.owner.Exec(context.Background(), `insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents,
+			tax_cents, fee_cents, charge_cents, secret)
+		select organizer_id, event_id, id, $2, 2500, 0, 0, 100, 2500, decode(md5(random()::text), 'hex') from orders where id = $1`,
+		w.fixture["order"], w.fixture["ticketType"]); err != nil {
+		t.Fatal(err)
 	}
-	if after := countRows(t, w.owner, `select count(*) from jobs`); after != before || countRows(t, w.owner, `select count(*) from staff_actions`) != 1 {
-		t.Fatal("refund_event wrote something")
+	if b := w.actOn(w.staffTok, "refund_event", uuid.NewString()); b["status"] != 404 {
+		t.Fatalf("refund of another organizer's event: %v", b)
+	}
+	b = w.actOn(w.staffTok, "refund_event", w.fixture["event"])
+	want := map[string]any{"orders": 1.0, "amount_cents": 2600.0, "fee_cents": 100.0, "pending_orders": 0.0, "failed_orders": []any{}}
+	if b["status"] != 200 || b["kind"] != "refund_event" || b["event"] != w.fixture["event"] || !jsonEqual(asMap(b["result"]), want) {
+		t.Fatalf("refund_event: %v", b)
+	}
+	if alerts("Staff refunded an event of acme") != 1 || alerts("Refund finished on acme") != 1 {
+		t.Fatal("no refund alerts")
+	}
+	if n := countRows(t, w.owner, `select count(*) from refunds where reason = 'platform' and fee_refunded and amount_cents = 2600`); n != 1 {
+		t.Fatalf("platform refunds = %d", n)
+	}
+	if n := countRows(t, w.owner, `select count(*) from staff_actions where kind = 'refund_event' and finished_at is not null`); n != 1 {
+		t.Fatal("the refund action isn't finished")
+	}
+	if n := countRows(t, w.owner, `select count(*) from events where status = 'draft'`); n != 1 {
+		t.Fatal("the event's status changed")
+	}
+	// Pressed again, it's a new action with a new touch: it finds nothing
+	// left to refund. (already_done is for the same action twice, which
+	// RefundEventForStaff's tests cover.)
+	b = w.actOn(w.staffTok, "refund_event", w.fixture["event"])
+	if want["orders"], want["amount_cents"], want["fee_cents"] = 0.0, 0.0, 0.0; b["status"] != 200 || !jsonEqual(asMap(b["result"]), want) {
+		t.Fatalf("refund_event again: %v", b)
+	}
+	if n := countRows(t, w.owner, `select count(*) from refunds where reason = 'platform'`); n != 1 {
+		t.Fatalf("platform refunds after a second press = %d", n)
 	}
 
 	if b := w.act(w.staffTok, "lift"); b["status"] != 200 || b["kind"] != "lift" {
@@ -197,7 +236,8 @@ func TestSuspendAndLift(t *testing.T) {
 	}
 	for _, s := range sessions {
 		acts, _ := s["actions"].([]any)
-		if s["id"] == w.session && (len(acts) != 2 || acts[0].(map[string]any)["kind"] != "suspend" || acts[1].(map[string]any)["kind"] != "lift") {
+		if s["id"] == w.session && (len(acts) != 4 || acts[0].(map[string]any)["kind"] != "suspend" || acts[1].(map[string]any)["finished_at"] == nil || asMap(acts[1].(map[string]any)["result"])["orders"] != 1.0 ||
+			acts[3].(map[string]any)["kind"] != "lift") {
 			t.Errorf("staff session log: %v", s)
 		}
 	}
@@ -242,3 +282,5 @@ func TestStaffActionsNeedAnAlertAddress(t *testing.T) {
 		t.Fatalf("staff_actions = %d", n)
 	}
 }
+
+func asMap(v any) map[string]any { m, _ := v.(map[string]any); return m }

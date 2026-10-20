@@ -32,6 +32,7 @@ const REASON: Record<Refund["reason"], string> = {
   organizer: "You refunded it",
   event_cancelled: "Event cancelled",
   late_payment: "Paid after the tickets had gone",
+  platform: "TicketSlinger refunded it",
 };
 const STATE: Record<Refund["status"], string> = {
   requested: "On its way",

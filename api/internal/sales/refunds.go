@@ -41,13 +41,18 @@ func requestRefund(ctx context.Context, tx pgx.Tx, org, payment uuid.UUID, amoun
 	return id, jobs.Enqueue(ctx, tx, RefundJob, refundJob{Organizer: org, Refund: id})
 }
 
+// errPaymentUsedUp is errNotRefundable from the database: the payment has
+// less left than the refund needs.
+var errPaymentUsedUp = fmt.Errorf("refunds_within_payment: %w", errNotRefundable)
+
 // refundDBError maps the refunds_within_payment trigger (00034, named since
-// 00041), and only it, to errNotRefundable: more than the payment has left.
-// Any other check that fails is a bug, not the buyer's answer.
+// 00041), and only it, to errPaymentUsedUp (an errNotRefundable): more than
+// the payment has left. Any other check that fails is a bug, not the
+// buyer's answer.
 func refundDBError(err error) error {
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) && pg.Code == "23514" && pg.ConstraintName == "refunds_within_payment" {
-		return errNotRefundable
+		return errPaymentUsedUp
 	}
 	return err
 }
@@ -265,12 +270,14 @@ func (s *Service) finishRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID
 	var status, reason string
 	var failure *string
 	var amount, fee int64
-	var feeDone bool
+	var feeDone, whole bool
 	// fee is 0 when the payment took none (direct mode): nothing to give back.
+	// whole: this refund is everything the buyer paid.
 	if err := tx.QueryRow(ctx, `select status, failure, reason, amount_cents,
 			case when (select application_fee_cents from payments where id = refunds.payment_id) > 0 then fee_cents else 0 end,
-			fee_refunded_at is not null from refunds where id = $1 for update`, id).
-		Scan(&status, &failure, &reason, &amount, &fee, &feeDone); err != nil {
+			fee_refunded_at is not null, amount_cents = (select amount_cents from payments where id = refunds.payment_id)
+		from refunds where id = $1 for update`, id).
+		Scan(&status, &failure, &reason, &amount, &fee, &feeDone, &whole); err != nil {
 		return err
 	}
 	switch stripeStatus {
@@ -303,7 +310,7 @@ func (s *Service) finishRefund(ctx context.Context, tx pgx.Tx, org, id uuid.UUID
 			}
 		}
 		// No link in it: nothing in this job's payload is a key to anything.
-		subject, text := refundEmail(reason, cancelled, event, organizer, amount)
+		subject, text := refundEmail(reason, cancelled, whole, event, organizer, amount)
 		return jobs.Enqueue(ctx, tx, "send_email", map[string]string{"to": email, "subject": subject, "text": text})
 	case "failed", "canceled":
 		// A row we gave up on, or couldn't reach, becomes stripe_failed:
@@ -408,7 +415,9 @@ func RefundParked(s *Service) func(ctx context.Context, payload []byte, cause st
 
 // refundEmail is what the buyer reads once the money is on its way back. A
 // payment that arrived after the event was cancelled is refunded for that.
-func refundEmail(reason string, cancelled bool, event, organizer string, amount int64) (subject, text string) {
+// whole: amount is everything they paid (a platform refund says "in full"
+// only then).
+func refundEmail(reason string, cancelled, whole bool, event, organizer string, amount int64) (subject, text string) {
 	subject = "Your refund for " + event
 	switch {
 	case reason == "late_payment" && cancelled:
@@ -417,6 +426,12 @@ func refundEmail(reason string, cancelled bool, event, organizer string, amount 
 	case reason == "late_payment":
 		text = "Sorry, we couldn't keep your tickets for " + event + ". By the time your payment reached us, they weren't available any more, " +
 			"so we've refunded you in full: " + dollars(amount) + " back to your card. It usually shows up in 5 to 10 days."
+	case reason == "platform" && whole:
+		text = event + " isn't being sold through TicketSlinger any more, so we've refunded you " + dollars(amount) +
+			" in full. It goes back to the card you paid with and usually shows up in 5 to 10 days."
+	case reason == "platform": // part was refunded before (or failed), so not "in full"
+		text = event + " isn't being sold through TicketSlinger any more, so we've refunded you " + dollars(amount) +
+			". It goes back to the card you paid with and usually shows up in 5 to 10 days."
 	case reason == "event_cancelled":
 		text = event + " has been cancelled, and " + organizer + " has refunded you " + dollars(amount) +
 			". It goes back to the card you paid with and usually shows up in 5 to 10 days."

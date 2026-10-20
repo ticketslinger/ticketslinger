@@ -61,11 +61,18 @@ type SessionLog struct {
 type Service struct {
 	pool    *pgxpool.Pool
 	alertTo string
+	refund  Refunder
 }
 
+// Refunder carries out a refund_event action as the organizer's system
+// role (sales.Service.RefundEventForStaff, which this package can't import).
+type Refunder func(ctx context.Context, org, action uuid.UUID) (RefundResult, error)
+
 // New returns the service; alertTo is TS_MAIL_ALERT_TO, and without it
-// Start refuses.
-func New(pool *pgxpool.Pool, alertTo string) *Service { return &Service{pool, alertTo} }
+// Start refuses. refund carries out refund_event actions.
+func New(pool *pgxpool.Pool, alertTo string, refund Refunder) *Service {
+	return &Service{pool, alertTo, refund}
+}
 
 // AlertsOff reports whether Start would refuse with ErrAlertsOff.
 func (s *Service) AlertsOff() bool { return s.alertTo == "" }
@@ -221,7 +228,7 @@ func sessionLogs(ctx context.Context, tx pgx.Tx, names string) ([]SessionLog, er
 			ss.ended_at, ss.ended_how, ss.end_note,
 			coalesce((select jsonb_agg(jsonb_build_object('Method', l.method, 'Route', l.route, 'At', l.at) order by l.at, l.id)
 			            from staff_access_log l where l.staff_session_id = ss.id), '[]'),
-			coalesce((select jsonb_agg(jsonb_build_object('ID', a.id, 'Kind', a.kind, 'Event', a.event_id, 'Reason', a.reason, 'At', a.at, 'FinishedAt', a.finished_at) order by a.at, a.id)
+			coalesce((select jsonb_agg(jsonb_build_object('ID', a.id, 'Kind', a.kind, 'Event', a.event_id, 'Reason', a.reason, 'At', a.at, 'FinishedAt', a.finished_at, 'Result', a.result) order by a.at, a.id)
 			            from staff_session_actions(ss.id) a), '[]')
 		  from staff_sessions ss join `+names+`
 		 order by ss.started_at desc, ss.id desc limit 100`)
