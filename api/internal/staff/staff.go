@@ -96,8 +96,9 @@ func (s *Service) Status(ctx context.Context, user, loginSession uuid.UUID) (boo
 	)
 	err := db.WithUser(ctx, s.pool, user, func(tx pgx.Tx) error {
 		// staff_sessions' policy shows rows only to live staff, so a revoked
-		// user's session is gone here at once.
-		return tx.QueryRow(ctx, `select app_is_staff(), ss.id, ss.organizer_id, ss.organizer_slug::text, ss.organizer_name, ss.reason, ss.expires_at
+		// user's session is gone here at once. The slug is the organizer's
+		// current one, not the one staff mode was started with.
+		return tx.QueryRow(ctx, `select app_is_staff(), ss.id, ss.organizer_id, coalesce(staff_session_slug(ss.id), ss.organizer_slug::text), ss.organizer_name, ss.reason, ss.expires_at
 			  from (select 1) one
 			  left join staff_sessions ss on ss.session_id = $1 and ss.user_id = app_user() and ss.organizer_id is not null
 			   and ss.ended_at is null and ss.expires_at > now()`, loginSession).

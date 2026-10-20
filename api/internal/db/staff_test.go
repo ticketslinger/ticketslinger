@@ -432,6 +432,45 @@ func TestStaffLogTablesShowTheirOrganizer(t *testing.T) {
 	}
 }
 
+// Final review Minor 8: where staff mode was started from (ip, user agent)
+// is for the server's owner only. Organizers, members or keys, read the
+// rest of the row; so do staff.
+func TestStaffSessionAddressIsHidden(t *testing.T) {
+	f := newStaffFixture(t)
+	ctx := context.Background()
+	key := seedKey(t, f.pool, f.oa, "read", false)
+	runs := map[string]func(func(pgx.Tx) error) error{
+		"owner": func(fn func(pgx.Tx) error) error {
+			return db.WithOrganizer(ctx, f.pool, f.ua, f.oa, func(tx pgx.Tx, _ string) error { return fn(tx) })
+		},
+		"read key": func(fn func(pgx.Tx) error) error {
+			return db.WithPrincipal(ctx, f.pool, db.Principal{KeyID: key, KeyOrg: f.oa, KeyScope: "read"}, f.oa, func(tx pgx.Tx, _ string) error { return fn(tx) })
+		},
+		"staff": func(fn func(pgx.Tx) error) error { return db.WithUser(ctx, f.pool, f.staff, fn) },
+	}
+	for name, run := range runs {
+		for _, col := range []string{"ip::text", "user_agent", "*"} {
+			err := run(func(tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, `select `+col+` from staff_sessions`)
+				return err
+			})
+			if code, _ := pgCode(err); code != "42501" {
+				t.Errorf("%s: select %s: %v, want 42501", name, col, err)
+			}
+		}
+		var n int
+		if err := run(func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `select count(*) from staff_sessions where organizer_slug is not null and reason <> '' and started_at < now()`).Scan(&n)
+		}); err != nil || n != 1 {
+			t.Errorf("%s: the rest of the row: %d %v, want 1", name, n, err)
+		}
+	}
+	var ip string
+	if err := f.owner.QueryRow(ctx, `select ip::text from staff_sessions`).Scan(&ip); err != nil || ip != "192.0.2.1/32" && ip != "192.0.2.1" {
+		t.Fatalf("the owner role's ip: %q %v", ip, err)
+	}
+}
+
 // S1: a member can't write an audit row that claims to be staff.
 func TestMembersCannotForgeStaffAudit(t *testing.T) {
 	f := newStaffFixture(t)

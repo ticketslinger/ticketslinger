@@ -138,7 +138,7 @@ func TestCatalogHardening(t *testing.T) {
 	// app_organizer() calls, and neither sale role runs any.
 	for _, fn := range []string{"app_staff_organizer()", "app_is_staff()", "start_staff_session(uuid,citext,text,inet,text)",
 		"end_staff_session(uuid,text,text)", "log_staff_access(uuid,text,text)", "close_expired_staff_sessions(integer)",
-		"staff_search_organizers(text)", "app_staff_directory()", "staff_session_actions(uuid)"} {
+		"staff_search_organizers(text)", "app_staff_directory()", "staff_session_actions(uuid)", "staff_session_slug(uuid)"} {
 		var definer, app, public, system bool
 		err := owner.QueryRow(ctx, `select p.prosecdef, has_function_privilege('ts_app', p.oid, 'EXECUTE'),
 				has_function_privilege('ts_public', p.oid, 'EXECUTE'), has_function_privilege('ts_system', p.oid, 'EXECUTE')

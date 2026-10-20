@@ -112,7 +112,7 @@ func (s *Service) Act(ctx context.Context, sess Session, kind string, event *uui
 		var email, name, slug string
 		var at time.Time
 		// staff_actions.at is now(), too.
-		if err := tx.QueryRow(ctx, `select u.email, ss.organizer_name, ss.organizer_slug::text, now()
+		if err := tx.QueryRow(ctx, `select u.email, ss.organizer_name, coalesce(staff_session_slug(ss.id), ss.organizer_slug::text), now()
 			  from staff_sessions ss join users u on u.id = ss.user_id where ss.id = $1`, sess.ID).Scan(&email, &name, &slug, &at); err != nil {
 			return err
 		}

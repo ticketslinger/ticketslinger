@@ -743,7 +743,10 @@ func (s *server) inOrganizerAsStaff(ctx context.Context, a authed, slug string, 
 	if err != nil {
 		return err
 	}
-	// Slugs are ASCII; EqualFold alone would also fold, say, the Kelvin sign into k.
+	// cur.OrganizerSlug is the organizer's current slug, so an old one is a
+	// 404 here even once another organizer takes it, and the log below
+	// names the organizer staff actually read. Slugs are ASCII; EqualFold
+	// alone would also fold, say, the Kelvin sign into k.
 	if cur == nil || !isASCII(slug) || !strings.EqualFold(cur.OrganizerSlug, slug) {
 		return notFound()
 	}
@@ -771,6 +774,9 @@ func (s *server) inOrganizerAsStaff(ctx context.Context, a authed, slug string, 
 		org := organizers.Organizer{ID: cur.OrganizerID, Role: "staff"}
 		if err := tx.QueryRow(ctx, `select name, slug::text, organizer_suspended(id) from organizers where id = $1`, org.ID).Scan(&org.Name, &org.Slug, &org.Suspended); err != nil {
 			return err
+		}
+		if !strings.EqualFold(org.Slug, slug) {
+			return db.ErrNotMember // renamed since Current looked
 		}
 		return fn(org, tx)
 	})

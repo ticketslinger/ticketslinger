@@ -238,3 +238,33 @@ func TestAuditNamesStaff(t *testing.T) {
 		t.Fatalf("no staff.session_started row: %v", all)
 	}
 }
+
+// Final review Minor 9: staff mode follows its organizer, not the slug it
+// was started with. After a rename the new slug works and is what the log
+// names, and the old one is a 404 even once someone else takes it.
+func TestStaffModeFollowsARename(t *testing.T) {
+	ctx := context.Background()
+	w := newStaffWorld(t)
+	acme := w.orgID("acme")
+	if _, err := w.owner.Exec(ctx, `update organizers set slug = 'acme-events' where id = $1`, acme); err != nil {
+		t.Fatal(err)
+	}
+	w.createOrganizer(w.stranger, "acme")
+	before := accessRows(t, w.owner, w.session)
+	if res := w.do(w.staffTok, "GET", "/v1/organizers/acme", ""); res.StatusCode != 404 {
+		t.Fatalf("the old slug, now someone else's: got %d, want 404", res.StatusCode)
+	}
+	if n := accessRows(t, w.owner, w.session); n != before {
+		t.Fatalf("a refused slug was logged: %d rows, want %d", n, before)
+	}
+	if b := w.must(w.do(w.staffTok, "GET", "/v1/organizers/acme-events", ""), 200); b["id"] != acme.String() {
+		t.Fatalf("the new slug: %v", b)
+	}
+	if n := countRows(t, w.owner, `select count(*) from staff_access_log where staff_session_id = $1 and route = 'getOrganizer organizer=acme-events'`, w.session); n != 1 {
+		t.Fatalf("logged routes naming the current slug: %d, want 1", n)
+	}
+	me := w.must(w.do(w.staffTok, "GET", "/v1/me", ""), 200)
+	if s := asMap(me["staff_session"]); s["organizer_slug"] != "acme-events" {
+		t.Fatalf("me's staff session: %v", s)
+	}
+}
