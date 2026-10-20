@@ -11,6 +11,7 @@ export const ROLE = {
   checkin: "Check-in",
   "key:read": "API key, read only",
   "key:write": "API key",
+  staff: "TicketSlinger support",
 } as const;
 
 export function Home({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {

@@ -336,6 +336,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/staff-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Owners and admins only, from a signed-in session. Every time TicketSlinger support looked at this organizer, newest first (up to 100): who, why, when it ended and how, and each request it made. Names only, never emails. An API key gets 403 session_required. */
+        get: operations["listStaffAccess"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/api-keys": {
         parameters: {
             query?: never;
@@ -1769,10 +1786,10 @@ export interface components {
             name: string;
             slug: string;
             /**
-             * @description Your role here. An API key sees its own scope as key:read or key:write.
+             * @description Your role here. An API key sees its own scope as key:read or key:write; TicketSlinger support in support mode sees staff.
              * @enum {string}
              */
-            role: "owner" | "admin" | "checkin" | "key:read" | "key:write";
+            role: "owner" | "admin" | "checkin" | "key:read" | "key:write" | "staff";
         };
         AuditEntry: {
             /** Format: uuid */
@@ -1789,13 +1806,13 @@ export interface components {
              */
             actor_api_key_id?: string;
             /**
-             * @description Who did it: a person, an API key, or TicketSlinger itself (say, cancelling and refunding an order whose payment arrived after its tickets had gone).
+             * @description Who did it: a person, an API key, TicketSlinger itself (say, cancelling and refunding an order whose payment arrived after its tickets had gone), or TicketSlinger support starting or ending support mode.
              * @enum {string}
              */
-            actor_type: "user" | "api_key" | "system";
-            /** @description The person's name if they are still a member of this organizer, or the API key's name. Null for former members. */
+            actor_type: "user" | "api_key" | "system" | "staff";
+            /** @description The person's name if they are still a member of this organizer, the support person's name, or the API key's name. Null for former members. */
             actor_name?: string | null;
-            /** @description The person's email if they are still a member of this organizer. Null for API keys and former members. */
+            /** @description The person's email if they are still a member of this organizer. Null for support, API keys and former members. */
             actor_email?: string | null;
             /** Format: date-time */
             at: string;
@@ -2752,6 +2769,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     listAudit: {
@@ -2777,6 +2795,33 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    listStaffAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffSessionLog"][];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     listApiKeys: {
@@ -2802,6 +2847,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     createApiKey: {
@@ -2837,6 +2883,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     revokeApiKey: {
@@ -2867,6 +2914,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     listMembers: {
@@ -2892,6 +2940,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     addMember: {
@@ -2927,6 +2976,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     removeMember: {
@@ -2958,6 +3008,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getPayments: {
@@ -2983,6 +3034,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     connectPayments: {
@@ -3168,6 +3220,7 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     createEvent: {
@@ -3203,6 +3256,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getEvent: {
@@ -3228,6 +3282,7 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     deleteEvent: {
@@ -3258,6 +3313,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     updateEvent: {
@@ -3294,6 +3350,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     listTicketTypes: {
@@ -3319,6 +3376,7 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     createTicketType: {
@@ -3355,6 +3413,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     reorderTicketTypes: {
@@ -3391,6 +3450,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getTicketType: {
@@ -3417,6 +3477,7 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     deleteTicketType: {
@@ -3448,6 +3509,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     updateTicketType: {
@@ -3485,6 +3547,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     listQuotas: {
@@ -3510,6 +3573,7 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     createQuota: {
@@ -3546,6 +3610,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getQuota: {
@@ -3572,6 +3637,7 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     deleteQuota: {
@@ -3603,6 +3669,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     updateQuota: {
@@ -3640,6 +3707,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     listOrders: {
@@ -3666,6 +3734,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getOrderDetail: {
@@ -3693,6 +3762,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     refundOrder: {
@@ -3730,6 +3800,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     retryRefund: {
@@ -3764,6 +3835,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     resendTicketEmail: {
@@ -3797,6 +3869,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     cancelEvent: {
@@ -3833,6 +3906,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     createCheckin: {
@@ -3869,6 +3943,7 @@ export interface operations {
             404: components["responses"]["Error"];
             422: components["responses"]["Error"];
             429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     searchCheckinTickets: {
@@ -3900,6 +3975,7 @@ export interface operations {
             404: components["responses"]["Error"];
             422: components["responses"]["Error"];
             429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getCheckinSummary: {
@@ -3926,6 +4002,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getEventReport: {
@@ -3952,6 +4029,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     exportEventCsv: {
@@ -3981,6 +4059,7 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     listPromoCodes: {
@@ -4006,6 +4085,7 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     createPromoCode: {
@@ -4042,6 +4122,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getPromoCode: {
@@ -4068,6 +4149,7 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     deletePromoCode: {
@@ -4099,6 +4181,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     updatePromoCode: {
@@ -4136,6 +4219,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     listQuestions: {
@@ -4161,6 +4245,7 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     createQuestion: {
@@ -4197,6 +4282,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     reorderQuestions: {
@@ -4233,6 +4319,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getQuestion: {
@@ -4259,6 +4346,7 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     deleteQuestion: {
@@ -4290,6 +4378,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     updateQuestion: {
@@ -4327,6 +4416,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getStorefrontEvent: {

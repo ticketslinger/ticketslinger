@@ -53,6 +53,7 @@ var sessionOnly = map[string]string{
 	"listMembers":        "who is on the team is for people, not integrations",
 	"addMember":          "giving someone access to the organizer is a person's call",
 	"removeMember":       "taking someone's access away is a person's call",
+	"listStaffAccess":    "who from TicketSlinger looked at the organizer is for its owners, not integrations",
 }
 
 // Every secured operation not in userScoped, called by a signed-in mfa user
@@ -136,41 +137,20 @@ func seedCatalogue(h *harness, owner, slug, apiKey string) map[string]string {
 func walk(t *testing.T, h *harness, token string, fixture map[string]string, want func(id string) (int, string)) {
 	defer func(old *testing.T) { h.t = old }(h.t)
 	h.t = t
-	spec, err := httpapi.GetSwagger()
-	if err != nil {
-		t.Fatal(err)
-	}
-	param := regexp.MustCompile(`\{([^}]*)\}`)
 	seen := map[string]bool{}
 	checked := 0
-	for path, item := range spec.Paths.Map() {
-		for method, op := range item.Operations() {
-			id := opID(op)
-			seen[id] = true
-			if op.Security != nil && len(*op.Security) == 0 {
-				continue // public; TestPublicOperationsAreExactlyThese pins the set
-			}
-			status, code := want(id)
-			if status == 0 {
-				continue
-			}
-			url := param.ReplaceAllStringFunc(path, func(m string) string {
-				v, ok := fixture[m[1:len(m)-1]]
-				if !ok {
-					t.Errorf("%s: no fixture for path parameter %s; seed another tenant's real one", id, m)
-				}
-				return v
-			})
-			// Without its required query parameters the generated wrapper
-			// answers 400 before the handler can say 404.
-			url += requiredQuery(t, op, fixture)
-			res := h.do(token, method, "/v1"+url, `{}`)
-			if got := h.errorCode(res); res.StatusCode != status || (code != "" && got != code) {
-				t.Errorf("%s %s (%s): got %d %q, want %d %q", method, url, id, res.StatusCode, got, status, code)
-			}
-			checked++
+	eachOp(t, fixture, func(id, method, _, url string) {
+		seen[id] = true
+		status, code := want(id)
+		if status == 0 {
+			return
 		}
-	}
+		res := h.do(token, method, "/v1"+url, `{}`)
+		if got := h.errorCode(res); res.StatusCode != status || (code != "" && got != code) {
+			t.Errorf("%s %s (%s): got %d %q, want %d %q", method, url, id, res.StatusCode, got, status, code)
+		}
+		checked++
+	})
 	for _, list := range []map[string]string{userScoped, sessionOnly} {
 		for id := range list {
 			if !seen[id] {
@@ -180,6 +160,35 @@ func walk(t *testing.T, h *harness, token string, fixture map[string]string, wan
 	}
 	if checked == 0 {
 		t.Fatal("no operations checked; the walk is broken")
+	}
+}
+
+// eachOp calls fn for every secured operation in the spec, with its path
+// template and a URL whose path and required query parameters come from
+// fixture.
+func eachOp(t *testing.T, fixture map[string]string, fn func(id, method, path, url string)) {
+	t.Helper()
+	spec, err := httpapi.GetSwagger()
+	if err != nil {
+		t.Fatal(err)
+	}
+	param := regexp.MustCompile(`\{([^}]*)\}`)
+	for path, item := range spec.Paths.Map() {
+		for method, op := range item.Operations() {
+			if op.Security != nil && len(*op.Security) == 0 {
+				continue // public; TestPublicOperationsAreExactlyThese pins the set
+			}
+			url := param.ReplaceAllStringFunc(path, func(m string) string {
+				v, ok := fixture[m[1:len(m)-1]]
+				if !ok {
+					t.Errorf("%s: no fixture for path parameter %s; seed another tenant's real one", opID(op), m)
+				}
+				return v
+			})
+			// Without its required query parameters the generated wrapper
+			// answers 400 before the handler can say 404.
+			fn(opID(op), method, path, url+requiredQuery(t, op, fixture))
+		}
 	}
 }
 
