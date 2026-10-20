@@ -1,6 +1,8 @@
 // Checkout holds and storefront reads against the load instance on the droplet
 // (infra scripts/load-test.sh). Never point it at production: it sells out an event.
-// Env: BASE (e.g. http://127.0.0.1:3100), TICKET_TYPE (the seeded ticket type's id).
+// Env: BASE (e.g. http://127.0.0.1:3100), TICKET_TYPE (the seeded ticket type's id),
+// HOLD_RATE (holds per second, 10-200, default 200), READ_RATE (reads per second,
+// default HOLD_RATE / 2).
 import { check } from "k6";
 import http from "k6/http";
 import { Counter } from "k6/metrics";
@@ -10,6 +12,20 @@ const BASE = __ENV.BASE;
 if (BASE !== "http://127.0.0.1:3100") {
   throw new Error("BASE must be the load instance, http://127.0.0.1:3100");
 }
+const num = (v, d) => (v === undefined || v === "" ? d : Number(v));
+const HOLD_RATE = num(__ENV.HOLD_RATE, 200);
+const READ_RATE = num(__ENV.READ_RATE, Math.floor(HOLD_RATE / 2));
+if (!Number.isInteger(HOLD_RATE) || HOLD_RATE < 10 || HOLD_RATE > 200) {
+  throw new Error("HOLD_RATE must be a whole number from 10 to 200");
+}
+if (!Number.isInteger(READ_RATE) || READ_RATE < 1 || READ_RATE > 200) {
+  throw new Error("READ_RATE must be a whole number from 1 to 200");
+}
+// VUs scale with the rate (about a quarter of it up front, four times that at most), never past 200.
+const vus = (rate) => ({
+  preAllocatedVUs: Math.ceil(rate / 4),
+  maxVUs: Math.min(200, Math.ceil(rate / 4) * 4),
+});
 const held = new Counter("held");
 const soldOut = new Counter("sold_out");
 
@@ -17,19 +33,18 @@ export const options = {
   scenarios: {
     holds: {
       executor: "constant-arrival-rate",
-      rate: 200,
+      rate: HOLD_RATE,
       timeUnit: "1s",
       duration: "60s",
-      preAllocatedVUs: 50,
-      maxVUs: 200,
+      ...vus(HOLD_RATE),
       exec: "hold",
     },
     reads: {
       executor: "constant-arrival-rate",
-      rate: 100,
+      rate: READ_RATE,
       timeUnit: "1s",
       duration: "60s",
-      preAllocatedVUs: 20,
+      ...vus(READ_RATE),
       exec: "read",
     },
   },
@@ -83,6 +98,7 @@ export function handleSummary(data) {
     .map(([k]) => k);
   return {
     stdout: [
+      `HOLD_RATE=${HOLD_RATE}`,
       `HELD=${count("held")}`,
       `SOLD_OUT=${count("sold_out")}`,
       `HOLD_P95_MS=${p95("http_req_duration{name:hold}")}`,
