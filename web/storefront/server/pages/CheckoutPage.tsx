@@ -47,7 +47,13 @@ function Quote({ c, e }: { c: Checkout; e: CheckoutEvent }) {
       .reduce((sum, t) => sum + (allIn ? t.all_in_cents : t.price_cents), 0);
     return [`${it.quantity} × ${names.get(it.ticket_type_id) ?? "Ticket"}`, formatCents(cents)];
   });
-  const off = allIn ? q.all_in_discount_cents : q.discount_cents;
+  // Derive the discount if the API sent all-in prices but not the all-in discount.
+  const sum = q.tickets.reduce((n, t) => n + (t.all_in_cents ?? 0), 0);
+  const off = !allIn
+    ? q.discount_cents
+    : typeof q.all_in_discount_cents === "number"
+      ? q.all_in_discount_cents
+      : Math.max(0, sum - q.total_cents);
   if (off > 0) lines.push(["Discount", `−${formatCents(off)}`]);
   const fee = q.fee_mode === "pass" ? q.fee_cents : 0;
   if (!allIn) {

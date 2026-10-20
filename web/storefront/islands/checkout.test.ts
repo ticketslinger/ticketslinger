@@ -14,6 +14,7 @@ import {
   overMessage,
   PENDING,
   Pending,
+  payBody,
   payload,
   waitStep,
 } from "./checkout";
@@ -228,4 +229,9 @@ test("a suspended organizer ends the checkout; once the card went to Stripe it p
   expect(overMessage("event_cancelled", true)).toBe(EVENT_CANCELLED);
   expect(overMessage("checkout_expired", true)).toBeUndefined();
   expect(overMessage(undefined, false)).toBeUndefined();
+});
+
+test("Pay carries the total the page displayed", () => {
+  const data = { quote: { total_cents: 4690 } } as CheckoutData;
+  expect(payBody(data, new FormData(), []).expected_total_cents).toBe(4690);
 });

@@ -1637,3 +1637,13 @@ test("priceNote words what's inside the price", () => {
   expect(priceNote(0, 165)).toBe("Includes $1.65 tax");
   expect(priceNote(0, 0)).toBe("");
 });
+
+test("a discount is derived when the API sends all-in prices but no all-in discount", async () => {
+  const c = checkout();
+  const { all_in_discount_cents, ...quote } = c.quote;
+  const html = await (
+    await app(() => Response.json({ ...c, quote })).a.request(`/checkout/${TOK}`)
+  ).text();
+  expect(html).toContain("−$5.10");
+  expect(html).not.toMatch(/NaN|undefined/);
+});

@@ -81,6 +81,10 @@ export function payload(form: FormData, fields: Field[], expectedTotal: number):
   };
 }
 
+/** What Pay sends: the form, and the total this page showed the buyer. */
+export const payBody = (data: CheckoutData, form: FormData, fields: Field[]): PayRequest =>
+  payload(form, fields, data.quote.total_cents);
+
 // Our words, by error code. The API's own message never reaches the page.
 const FIELD_COPY: Record<string, string> = {
   bad_email: "That email doesn't look right. It should look like ada@example.com.",
@@ -434,11 +438,7 @@ function Checkout({ data }: { data: CheckoutData }) {
   async function submit(e: Event) {
     e.preventDefault();
     if (sending) return;
-    const body = payload(
-      new FormData(e.currentTarget as HTMLFormElement),
-      fields,
-      data.quote.total_cents,
-    );
+    const body = payBody(data, new FormData(e.currentTarget as HTMLFormElement), fields);
     setSending(true);
     setMessage(undefined);
     setErrors({});

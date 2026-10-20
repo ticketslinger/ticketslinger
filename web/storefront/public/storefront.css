@@ -63,8 +63,7 @@ p {
 .organizer,
 .when,
 .where,
-.status,
-.price-note {
+.status {
   color: var(--muted);
 }
 
@@ -74,6 +73,7 @@ p {
 
 .price-note {
   margin: 0 0 8px;
+  color: var(--muted);
   font-size: 0.875rem;
 }
 
@@ -101,6 +101,7 @@ p {
 }
 
 .price {
+  font-size: 1.125rem;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -216,6 +217,7 @@ button:disabled {
 }
 
 .quote .total {
+  font-size: 1.25rem;
   font-weight: 700;
 }
 
