@@ -2,6 +2,7 @@ import type { components } from "@ticketslinger/api-client";
 import { api, must } from "../api";
 import { ErrorText, type Me, useLoad } from "../ui";
 import type { Org } from "./Organizer";
+import { SessionList, staffAuditLine } from "./Staff";
 
 const THING: Record<string, string> = {
   organizer: "Organizer",
@@ -63,17 +64,35 @@ export function who(e: Actor, meId: string) {
   return e.actor_name ?? "Someone on your team";
 }
 
+/** What a support row says; the reason lives on the matching staff session. */
+export function staffRow(e: { action: string; actor_name?: string | null }, reason?: string) {
+  const name = e.actor_name ?? "someone";
+  if (e.action === "staff.session_started" && reason) return staffAuditLine(name, reason);
+  if (e.action === "staff.session_ended")
+    return `TicketSlinger support (${name}) ended support mode`;
+  return null;
+}
+
 export function Audit({ org, me }: { org: Org; me: Me }) {
   const path = { organizer: org.slug };
   const { data, error } = useLoad(async () =>
     must(await api.GET("/organizers/{organizer}/audit", { params: { path } })),
   );
 
+  // Owners and admins only, which is who can see this page.
+  const access = useLoad(async () =>
+    must(await api.GET("/organizers/{organizer}/staff-access", { params: { path } })),
+  );
+  const reasons = new Map(access.data?.map((a) => [a.id, a.reason]));
+
   return (
     <>
       <h1 tabIndex={-1}>Audit log</h1>
       <p className="lede">The latest changes to {org.name}, newest first. We show up to 100.</p>
       <ErrorText>{error?.message}</ErrorText>
+      <p>
+        <a href="#support-access">See every support request</a>
+      </p>
       {!data && !error && <p className="muted">Loading…</p>}
       {data?.length === 0 && <p>Nothing has changed yet.</p>}
       {data && data.length > 0 && (
@@ -90,7 +109,10 @@ export function Audit({ org, me }: { org: Org; me: Me }) {
               {data.map((e) => (
                 <tr key={e.id}>
                   <td>{when(e.at)}</td>
-                  <td>{describeAction(e.action)}</td>
+                  <td>
+                    {(e.actor_type === "staff" && staffRow(e, reasons.get(e.entity_id))) ||
+                      describeAction(e.action)}
+                  </td>
                   <td>
                     {who(e, me.id)}
                     {e.actor_email && (
@@ -106,6 +128,12 @@ export function Audit({ org, me }: { org: Org; me: Me }) {
           </table>
         </div>
       )}
+      <h2 id="support-access">TicketSlinger support access</h2>
+      <p className="lede">
+        Every time our support team has opened {org.name}, and what they looked at.
+      </p>
+      <ErrorText>{access.error?.message}</ErrorText>
+      {access.data && <SessionList sessions={access.data} showOrganizer={false} />}
     </>
   );
 }

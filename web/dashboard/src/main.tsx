@@ -22,9 +22,11 @@ import { Payments } from "./routes/Payments";
 import { Security } from "./routes/Security";
 import { SignIn } from "./routes/SignIn";
 import { SignUp } from "./routes/SignUp";
+import { Staff } from "./routes/Staff";
 import { StripeCallback } from "./routes/StripeCallback";
 import { Team } from "./routes/Team";
 import { VerifyEmail } from "./routes/VerifyEmail";
+import { StaffBanner } from "./StaffBanner";
 import { type Me, match, NotFound, navigate, safeNext, usePath } from "./ui";
 import "./styles.css";
 
@@ -150,28 +152,40 @@ function App() {
   if (me === null) {
     return path === "/signup" ? <SignUp onSignedIn={signedIn} /> : <SignIn onSignedIn={signedIn} />;
   }
-  switch (path) {
-    case "/security":
-      return <Security me={me} onChanged={loadMe} onSignedIn={signedIn} onSignedOut={signedOut} />;
-    case "/organizers/new":
-      return <NewOrganizer me={me} />;
-    case "/stripe/oauth/callback":
-      return <StripeCallback />;
-    case "/":
-      return <Home me={me} onSignedOut={signedOut} />;
-  }
-  for (const [pattern, section, page] of ORGANIZER) {
-    const p = match(pattern, path);
-    if (!p?.slug) continue;
-    return (
-      // Keyed by organizer so the frame keeps its data while you move around inside it.
-      <Organizer key={p.slug} slug={p.slug} section={section} me={me} onSignedOut={signedOut}>
-        {/* Keyed by path: each page loads its own data fresh. */}
-        {(org) => <Fragment key={path}>{page(org, me, p)}</Fragment>}
-      </Organizer>
-    );
-  }
-  return <NotFound />;
+  const page = (): ReactNode => {
+    switch (path) {
+      case "/staff":
+        return me.staff ? <Staff onStarted={loadMe} /> : <NotFound />;
+      case "/security":
+        return (
+          <Security me={me} onChanged={loadMe} onSignedIn={signedIn} onSignedOut={signedOut} />
+        );
+      case "/organizers/new":
+        return <NewOrganizer me={me} />;
+      case "/stripe/oauth/callback":
+        return <StripeCallback />;
+      case "/":
+        return <Home me={me} onSignedOut={signedOut} />;
+    }
+    for (const [pattern, section, page] of ORGANIZER) {
+      const p = match(pattern, path);
+      if (!p?.slug) continue;
+      return (
+        // Keyed by organizer so the frame keeps its data while you move around inside it.
+        <Organizer key={p.slug} slug={p.slug} section={section} me={me} onSignedOut={signedOut}>
+          {/* Keyed by path: each page loads its own data fresh. */}
+          {(org) => <Fragment key={path}>{page(org, me, p)}</Fragment>}
+        </Organizer>
+      );
+    }
+    return <NotFound />;
+  };
+  return (
+    <>
+      {me.staff_session && <StaffBanner session={me.staff_session} onChanged={loadMe} />}
+      {page()}
+    </>
+  );
 }
 
 const root = document.getElementById("root");
