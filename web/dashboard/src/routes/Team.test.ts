@@ -28,7 +28,7 @@ test("team errors carry the spec's copy exactly", () => {
 
 test("check-in staff get no Orders tab; editors do", () => {
   const tabs = (role: Org["role"]) =>
-    eventTabs({ id: "o", name: "Acme", slug: "acme", role }).map((t) => t.label);
+    eventTabs({ id: "o", name: "Acme", slug: "acme", role, suspended: false }).map((t) => t.label);
   expect(tabs("checkin")).not.toContain("Orders");
   expect(tabs("checkin")).not.toContain("Report");
   expect(tabs("admin")).toContain("Report");

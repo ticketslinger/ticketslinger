@@ -3,9 +3,11 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -22,6 +24,10 @@ func WithUser(ctx context.Context, pool *pgxpool.Pool, user uuid.UUID, fn func(p
 // ErrNotMember means the principal has no access to the requested organizer:
 // a user without a membership, or an API key of another organizer.
 var ErrNotMember = errors.New("db: principal is not a member of the organizer")
+
+// ErrOrganizerSuspended means fn tried to write to a suspended organizer:
+// the transaction was READ ONLY for that reason, and Postgres refused.
+var ErrOrganizerSuspended = errors.New("db: organizer is suspended")
 
 // Principal is who a request acts as: a user, or an organizer's API key.
 // Exactly one of UserID and KeyID is set.
@@ -62,7 +68,8 @@ func WithPrincipal(ctx context.Context, pool *pgxpool.Pool, p Principal, org uui
 	if p.KeyScope == "read" {
 		opts.AccessMode = pgx.ReadOnly
 	}
-	return pgx.BeginTxFunc(ctx, pool, opts, func(tx pgx.Tx) error {
+	suspended := false
+	err := pgx.BeginTxFunc(ctx, pool, opts, func(tx pgx.Tx) error {
 		guc, id := `select set_config('app.user_id', $1, true), set_config('app.organizer_id', $2, true)`, p.UserID
 		if p.KeyID != uuid.Nil {
 			guc, id = `select set_config('app.api_key_id', $1, true), set_config('app.organizer_id', $2, true)`, p.KeyID
@@ -80,7 +87,6 @@ func WithPrincipal(ctx context.Context, pool *pgxpool.Pool, p Principal, org uui
 			if _, err := tx.Exec(ctx, `select 1 from organizers where id = $1 for key share`, org); err != nil {
 				return err
 			}
-			var suspended bool
 			if err := tx.QueryRow(ctx, `select organizer_suspended($1)`, org).Scan(&suspended); err != nil {
 				return err
 			}
@@ -103,6 +109,12 @@ func WithPrincipal(ctx context.Context, pool *pgxpool.Pool, p Principal, org uui
 		}
 		return fn(tx, role)
 	})
+	// Callers check suspension before writing, but one can commit after
+	// that check: the backstop's refusal still says why.
+	if pg, ok := errors.AsType[*pgconn.PgError](err); ok && suspended && pg.Code == "25006" {
+		return fmt.Errorf("%w: %w", ErrOrganizerSuspended, err)
+	}
+	return err
 }
 
 // WithStaff runs fn in a READ ONLY transaction scoped to org through the

@@ -26,6 +26,8 @@ var staffOps = []struct{ method, path, body string }{
 	{"DELETE", "/v1/staff/sessions/current", `{}`},
 	{"GET", "/v1/staff/organizers?q=acme", ""},
 	{"GET", "/v1/staff/sessions", ""},
+	{"POST", "/v1/staff/actions/challenge", `{"kind":"suspend"}`},
+	{"POST", "/v1/staff/actions", `{"challenge_id":"0190a0a0-0000-7000-8000-000000000000","credential":{},"kind":"suspend","reason":"Selling tickets to an illegal event"}`},
 }
 
 type staffHarness struct {

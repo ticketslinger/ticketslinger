@@ -7,10 +7,12 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/oapi-codegen/nullable"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
+	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
 	"github.com/ticketslinger/ticketslinger/api/internal/organizers"
 	"github.com/ticketslinger/ticketslinger/api/internal/staff"
 )
@@ -20,6 +22,7 @@ var (
 	errStaffPasskey  = &apiError{403, "passkey_required", "Touch your passkey to start support mode."}
 	errNoOrganizer   = &apiError{404, "no_organizer", "No organizer has that web address. Search for it again."}
 	errInvalidReason = invalidField("invalid_reason", "reason", "Say why you need to look, in 10 to 500 characters. The organizer's owners will read it.")
+	errActionPasskey = &apiError{403, "passkey_required", "Touch your passkey to confirm."}
 )
 
 // staffCaller is the caller of a /staff/* route: live staff, signed in with
@@ -164,6 +167,115 @@ func (s *server) SearchStaffOrganizers(ctx context.Context, req SearchStaffOrgan
 	return out, nil
 }
 
+// checkStaffAction checks a staff action's kind and event: event goes with
+// refund_event and nothing else, and refund_event is refused until the
+// refund itself is wired up.
+func checkStaffAction(kind StaffActionKind, event *uuid.UUID) error {
+	switch kind {
+	case "suspend", "lift":
+	case "refund_event":
+		return invalidField("invalid_kind", "kind", "Refunding an event from support mode isn't available yet.")
+	default:
+		return invalidField("invalid_kind", "kind", "Pick suspend or lift.")
+	}
+	if (kind == "refund_event") != (event != nil) {
+		return invalidField("invalid_event", "event", "Name the event to refund, and only for a refund.")
+	}
+	return nil
+}
+
+// currentStaff is the login session's live staff session; staff outside
+// staff mode get 404, as there is nothing here for them to act on.
+func (s *server) currentStaff(ctx context.Context, u auth.User, sess auth.Session) (*staff.Session, error) {
+	cur, err := s.Staff.Current(ctx, u.ID, sess.ID)
+	if err == nil && cur == nil {
+		err = notFound()
+	}
+	return cur, err
+}
+
+func (s *server) BeginStaffAction(ctx context.Context, req BeginStaffActionRequestObject) (BeginStaffActionResponseObject, error) {
+	u, sess, err := s.staffCaller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkStaffAction(req.Body.Kind, req.Body.Event); err != nil {
+		return nil, err
+	}
+	cur, err := s.currentStaff(ctx, u, sess)
+	if err != nil {
+		return nil, err
+	}
+	if s.Staff.AlertsOff() {
+		return nil, errAlertsOff
+	}
+	id, opts, err := s.Auth.BeginStaffAssertion(ctx, u.ID, sess.ID, "staff_action", staff.Purpose(string(req.Body.Kind), cur.OrganizerID, req.Body.Event))
+	switch {
+	case errors.Is(err, auth.ErrPasskeyRequired):
+		return nil, errActionPasskey
+	case errors.Is(err, auth.ErrRateLimited):
+		return nil, tooManyAttempts()
+	case err != nil:
+		return nil, err
+	}
+	m, err := toMap(opts)
+	if err != nil {
+		return nil, err
+	}
+	return BeginStaffAction200JSONResponse{ChallengeId: id, Options: m}, nil
+}
+
+func (s *server) TakeStaffAction(ctx context.Context, req TakeStaffActionRequestObject) (TakeStaffActionResponseObject, error) {
+	b := req.Body
+	// The route-hiding gate, then the body, then staff mode and the touch.
+	u, sess, err := s.staffCaller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkStaffAction(b.Kind, b.Event); err != nil {
+		return nil, err
+	}
+	reason := strings.TrimSpace(b.Reason)
+	if n := utf8.RuneCountInString(reason); n < 10 || n > 500 {
+		return nil, invalidField("invalid_reason", "reason", "Say why, in 10 to 500 characters. The organizer's owners will read it.")
+	}
+	cur, err := s.currentStaff(ctx, u, sess)
+	if err != nil {
+		return nil, err
+	}
+	// Before the touch is spent: nothing is written when alerts are off.
+	if s.Staff.AlertsOff() {
+		return nil, errAlertsOff
+	}
+	body, err := json.Marshal(b.Credential)
+	if err != nil {
+		return nil, err
+	}
+	err = s.Auth.VerifyStaffAssertion(ctx, u.ID, sess.ID, b.ChallengeId, "staff_action", staff.Purpose(string(b.Kind), cur.OrganizerID, b.Event), body, clientFrom(ctx).ip)
+	switch {
+	case errors.Is(err, auth.ErrPasskeyRequired):
+		return nil, errActionPasskey
+	case errors.Is(err, auth.ErrRateLimited):
+		return nil, tooManyAttempts()
+	case err != nil:
+		return nil, err
+	}
+	a, err := s.Staff.Act(ctx, *cur, string(b.Kind), b.Event, reason)
+	switch {
+	case errors.Is(err, staff.ErrAlertsOff):
+		return nil, errAlertsOff
+	case errors.Is(err, staff.ErrAlreadySuspended):
+		return nil, &apiError{409, "already_suspended", "This organizer is already suspended."}
+	case errors.Is(err, staff.ErrNotSuspended):
+		return nil, &apiError{409, "not_suspended", "This organizer isn't suspended."}
+	case errors.Is(err, catalogue.ErrNotFound), errors.Is(err, staff.ErrNotAllowed):
+		return nil, notFound() // no such event here, or staff mode ended since Current looked
+	case err != nil:
+		return nil, err
+	}
+	return TakeStaffAction200JSONResponse{Id: a.ID, Kind: StaffActionKind(a.Kind), OrganizerSlug: a.OrganizerSlug, Event: a.Event}, nil
+}
+
 func (s *server) ListStaffSessions(ctx context.Context, _ ListStaffSessionsRequestObject) (ListStaffSessionsResponseObject, error) {
 	u, _, err := s.staffCaller(ctx)
 	if err != nil {
@@ -173,7 +285,15 @@ func (s *server) ListStaffSessions(ctx context.Context, _ ListStaffSessionsReque
 	if err != nil {
 		return nil, err
 	}
-	return ListStaffSessions200JSONResponse(toStaffSessionLogs(list)), nil
+	out := toStaffSessionLogs(list)
+	for i, l := range list {
+		acts := make([]StaffActionLog, 0, len(l.Actions))
+		for _, a := range l.Actions {
+			acts = append(acts, StaffActionLog{Id: a.ID, Kind: StaffActionKind(a.Kind), Event: nullOf(a.Event), Reason: a.Reason, At: a.At, FinishedAt: nullOf(a.FinishedAt)})
+		}
+		out[i].Actions = &acts
+	}
+	return ListStaffSessions200JSONResponse(out), nil
 }
 
 func toStaffSessionLogs(list []staff.SessionLog) []StaffSessionLog {

@@ -46,7 +46,8 @@ type Request struct {
 	At            time.Time
 }
 
-// SessionLog is a staff session, live or ended, with its requests.
+// SessionLog is a staff session, live or ended, with its requests and,
+// for a staff reader, its actions.
 type SessionLog struct {
 	ID                                              uuid.UUID
 	StaffName, OrganizerSlug, OrganizerName, Reason string
@@ -54,6 +55,7 @@ type SessionLog struct {
 	EndedAt                                         *time.Time
 	EndedHow, EndNote                               *string
 	Requests                                        []Request
+	Actions                                         []ActionLog
 }
 
 type Service struct {
@@ -218,7 +220,9 @@ func sessionLogs(ctx context.Context, tx pgx.Tx, names string) ([]SessionLog, er
 	rows, err := tx.Query(ctx, `select ss.id, u.name, ss.organizer_slug::text, ss.organizer_name, ss.reason, ss.started_at, ss.expires_at,
 			ss.ended_at, ss.ended_how, ss.end_note,
 			coalesce((select jsonb_agg(jsonb_build_object('Method', l.method, 'Route', l.route, 'At', l.at) order by l.at, l.id)
-			            from staff_access_log l where l.staff_session_id = ss.id), '[]')
+			            from staff_access_log l where l.staff_session_id = ss.id), '[]'),
+			coalesce((select jsonb_agg(jsonb_build_object('ID', a.id, 'Kind', a.kind, 'Event', a.event_id, 'Reason', a.reason, 'At', a.at, 'FinishedAt', a.finished_at) order by a.at, a.id)
+			            from staff_session_actions(ss.id) a), '[]')
 		  from staff_sessions ss join `+names+`
 		 order by ss.started_at desc, ss.id desc limit 100`)
 	if err != nil {

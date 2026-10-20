@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/ticketslinger/ticketslinger/api/internal/db"
 	"github.com/ticketslinger/ticketslinger/api/internal/sales"
 )
 
@@ -106,6 +107,9 @@ func writeError(w http.ResponseWriter, err error) {
 		// Not stored by Idempotency-Key (5xx), so the buyer's retry runs fresh.
 		w.Header().Set("Retry-After", "1")
 		err = &apiError{503, "try_again", "Tickets are moving fast. Give it a second and try again."}
+	}
+	if errors.Is(err, db.ErrOrganizerSuspended) {
+		err = errOrganizerSuspended
 	}
 	if !errors.As(err, &ae) {
 		slog.Error("unhandled error", "err", err)

@@ -28,6 +28,7 @@ type staffWorld struct {
 	staffIdle                string // the same staff member, not in staff mode
 	session                  string // staffTok's staff session
 	fixture                  map[string]string
+	dev                      *passkeyDevice // the staff member's passkey
 }
 
 // newStaffWorld: acme with one of everything, bravo with nothing, and one
@@ -48,6 +49,7 @@ func newStaffWorld(t *testing.T) staffWorld {
 	if _, err := h.owner.Exec(context.Background(), `update users set name = 'Sam Support' where email = 'staff@example.com'`); err != nil {
 		t.Fatal(err)
 	}
+	w.dev = dev
 	w.staffTok, w.staffElsewhere, w.staffIdle = tok, h.passkeyLogin(dev), h.passkeyLogin(dev)
 	w.session = startStaff(h, dev, w.staffTok, "acme")
 	startStaff(h, dev, w.staffElsewhere, "bravo")
