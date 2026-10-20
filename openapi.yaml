@@ -174,6 +174,71 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+  /staff/sessions/challenge:
+    post:
+      operationId: beginStaffSession
+      description: "Staff only, from a session that passed a second factor; anyone else, and every API key, gets 404 as for a route that doesn't exist. WebAuthn request options for one of your own passkeys, with user verification, good for two minutes and only for this session's startStaffSession. 503 alerts_off when the server has no TS_MAIL_ALERT_TO: staff mode never starts unannounced."
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      responses:
+        "200": { description: Options, content: { application/json: { schema: { $ref: "#/components/schemas/WebAuthnChallenge" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /staff/sessions:
+    get:
+      operationId: listStaffSessions
+      description: "Staff only, from a session that passed a second factor; anyone else gets 404. The newest 100 staff sessions, by every staff member, newest first, each with the requests made in it."
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/StaffSessionLog" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: startStaffSession
+      description: "Staff only, from a session that passed a second factor; anyone else gets 404. Starts read-only staff mode on one organizer for 60 minutes, ending any staff session this login session already had. Send the challenge from beginStaffSession and the passkey's answer to it; anything else (no answer, another session's, one already used, a sign-in one) is 403 passkey_required. The reason (10 to 500 characters) goes into the organizer's audit log and an alert email. 404 no_organizer when no organizer has that web address. 429 rate_limited after too many passkey attempts. 503 alerts_off when the server has no TS_MAIL_ALERT_TO."
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/StartStaffSession" } } } }
+      responses:
+        "201": { description: Started, content: { application/json: { schema: { $ref: "#/components/schemas/StaffSession" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /staff/sessions/current:
+    delete:
+      operationId: endStaffSession
+      description: "Staff only, from a session that passed a second factor; anyone else gets 404. Ends this login session's staff mode, with an optional note (up to 2,000 characters) for the record. 404 when it has none running."
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody: { required: false, content: { application/json: { schema: { $ref: "#/components/schemas/EndStaffSession" } } } }
+      responses:
+        "204": { description: Ended }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /staff/organizers:
+    get:
+      operationId: searchStaffOrganizers
+      description: "Staff only, from a session that passed a second factor; anyone else gets 404. Up to 20 organizers whose name or web address contains q, in any case: the name and the web address, nothing more. 422 (field q) if q is over 120 characters, or under 2 once spaces around it are dropped."
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2, maxLength: 120 } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/StaffOrganizer" } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /organizers:
     get:
       operationId: listOrganizers
@@ -1518,7 +1583,7 @@ components:
       properties: { session_token: { type: string }, user: { $ref: "#/components/schemas/Me" } }
     Me:
       type: object
-      required: [id, email, name, email_verified, totp_enabled, has_passkey, has_second_factor, mfa]
+      required: [id, email, name, email_verified, totp_enabled, has_passkey, has_second_factor, mfa, staff, staff_session]
       properties:
         id: { type: string, format: uuid }
         email: { type: string }
@@ -1528,6 +1593,57 @@ components:
         has_passkey: { type: boolean }
         has_second_factor: { type: boolean, description: Whether the account has a passkey or an authenticator app. }
         mfa: { type: boolean, description: Whether this session passed a second factor or a passkey. }
+        staff: { type: boolean, description: "Whether this account is TicketSlinger staff and this session passed a second factor. Staff routes answer only then." }
+        staff_session:
+          description: This login session's running staff mode, or null.
+          oneOf: [{ $ref: "#/components/schemas/StaffSession" }, { type: "null" }]
+    StaffSession:
+      type: object
+      required: [id, organizer_slug, organizer_name, reason, expires_at]
+      properties:
+        id: { type: string, format: uuid }
+        organizer_slug: { type: string }
+        organizer_name: { type: string }
+        reason: { type: string }
+        expires_at: { type: string, format: date-time, description: "When it ends by itself, 60 minutes after it started." }
+    StartStaffSession:
+      type: object
+      required: [challenge_id, credential, organizer, reason]
+      properties:
+        challenge_id: { type: string, format: uuid }
+        credential: { type: object, additionalProperties: true, description: What navigator.credentials.get returned for beginStaffSession's options. }
+        organizer: { type: string, maxLength: 40, description: The organizer's web address (slug). }
+        reason: { type: string, minLength: 10, maxLength: 500, description: Why you need to look. The organizer's owners read it in their audit log. }
+    EndStaffSession:
+      type: object
+      properties:
+        note: { type: string, maxLength: 2000 }
+    StaffOrganizer:
+      type: object
+      required: [name, slug]
+      properties: { name: { type: string }, slug: { type: string } }
+    StaffSessionLog:
+      type: object
+      required: [id, staff_name, organizer_slug, organizer_name, reason, started_at, expires_at, ended_at, ended_how, end_note, requests]
+      properties:
+        id: { type: string, format: uuid }
+        staff_name: { type: string }
+        organizer_slug: { type: string }
+        organizer_name: { type: string }
+        reason: { type: string }
+        started_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        ended_at: { type: [string, "null"], format: date-time }
+        ended_how: { type: [string, "null"], enum: [staff, logout, revoked, expired, null], description: "staff: ended with the End button (or by starting another). logout: signed out. revoked: staff access taken away on the server. expired: the hour ran out." }
+        end_note: { type: [string, "null"] }
+        requests: { type: array, items: { $ref: "#/components/schemas/StaffRequest" } }
+    StaffRequest:
+      type: object
+      required: [method, route, at]
+      properties:
+        method: { type: string }
+        route: { type: string, description: "The operation and its path parameters, never the query string." }
+        at: { type: string, format: date-time }
     TotpSetup:
       type: object
       required: [secret, otpauth_url]

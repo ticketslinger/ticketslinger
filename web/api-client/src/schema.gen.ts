@@ -219,6 +219,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/staff/sessions/challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Staff only, from a session that passed a second factor; anyone else, and every API key, gets 404 as for a route that doesn't exist. WebAuthn request options for one of your own passkeys, with user verification, good for two minutes and only for this session's startStaffSession. 503 alerts_off when the server has no TS_MAIL_ALERT_TO: staff mode never starts unannounced. */
+        post: operations["beginStaffSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/staff/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Staff only, from a session that passed a second factor; anyone else gets 404. The newest 100 staff sessions, by every staff member, newest first, each with the requests made in it. */
+        get: operations["listStaffSessions"];
+        put?: never;
+        /** @description Staff only, from a session that passed a second factor; anyone else gets 404. Starts read-only staff mode on one organizer for 60 minutes, ending any staff session this login session already had. Send the challenge from beginStaffSession and the passkey's answer to it; anything else (no answer, another session's, one already used, a sign-in one) is 403 passkey_required. The reason (10 to 500 characters) goes into the organizer's audit log and an alert email. 404 no_organizer when no organizer has that web address. 429 rate_limited after too many passkey attempts. 503 alerts_off when the server has no TS_MAIL_ALERT_TO. */
+        post: operations["startStaffSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/staff/sessions/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Staff only, from a session that passed a second factor; anyone else gets 404. Ends this login session's staff mode, with an optional note (up to 2,000 characters) for the record. 404 when it has none running. */
+        delete: operations["endStaffSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/staff/organizers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Staff only, from a session that passed a second factor; anyone else gets 404. Up to 20 organizers whose name or web address contains q, in any case: the name and the web address, nothing more. 422 (field q) if q is over 120 characters, or under 2 once spaces around it are dropped. */
+        get: operations["searchStaffOrganizers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers": {
         parameters: {
             query?: never;
@@ -1607,6 +1676,69 @@ export interface components {
             has_second_factor: boolean;
             /** @description Whether this session passed a second factor or a passkey. */
             mfa: boolean;
+            /** @description Whether this account is TicketSlinger staff and this session passed a second factor. Staff routes answer only then. */
+            staff: boolean;
+            /** @description This login session's running staff mode, or null. */
+            staff_session: components["schemas"]["StaffSession"] | null;
+        };
+        StaffSession: {
+            /** Format: uuid */
+            id: string;
+            organizer_slug: string;
+            organizer_name: string;
+            reason: string;
+            /**
+             * Format: date-time
+             * @description When it ends by itself, 60 minutes after it started.
+             */
+            expires_at: string;
+        };
+        StartStaffSession: {
+            /** Format: uuid */
+            challenge_id: string;
+            /** @description What navigator.credentials.get returned for beginStaffSession's options. */
+            credential: {
+                [key: string]: unknown;
+            };
+            /** @description The organizer's web address (slug). */
+            organizer: string;
+            /** @description Why you need to look. The organizer's owners read it in their audit log. */
+            reason: string;
+        };
+        EndStaffSession: {
+            note?: string;
+        };
+        StaffOrganizer: {
+            name: string;
+            slug: string;
+        };
+        StaffSessionLog: {
+            /** Format: uuid */
+            id: string;
+            staff_name: string;
+            organizer_slug: string;
+            organizer_name: string;
+            reason: string;
+            /** Format: date-time */
+            started_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: date-time */
+            ended_at: string | null;
+            /**
+             * @description staff: ended with the End button (or by starting another). logout: signed out. revoked: staff access taken away on the server. expired: the hour ran out.
+             * @enum {string|null}
+             */
+            ended_how: "staff" | "logout" | "revoked" | "expired" | null;
+            end_note: string | null;
+            requests: components["schemas"]["StaffRequest"][];
+        };
+        StaffRequest: {
+            method: string;
+            /** @description The operation and its path parameters, never the query string. */
+            route: string;
+            /** Format: date-time */
+            at: string;
         };
         TotpSetup: {
             secret: string;
@@ -2394,6 +2526,152 @@ export interface operations {
             };
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+        };
+    };
+    beginStaffSession: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Options */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebAuthnChallenge"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    listStaffSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffSessionLog"][];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    startStaffSession: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartStaffSession"];
+            };
+        };
+        responses: {
+            /** @description Started */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffSession"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    endStaffSession: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["EndStaffSession"];
+            };
+        };
+        responses: {
+            /** @description Ended */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    searchStaffOrganizers: {
+        parameters: {
+            query: {
+                q: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffOrganizer"][];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     listOrganizers: {
