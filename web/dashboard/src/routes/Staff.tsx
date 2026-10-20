@@ -69,9 +69,39 @@ export function SessionList({
   );
 }
 
+/** Nothing before a search (null); a plain "no match" after one that found nothing. */
+export function Found({
+  found,
+  picked,
+  onPick,
+}: {
+  found: components["schemas"]["StaffOrganizer"][] | null;
+  picked: string;
+  onPick: (slug: string) => void;
+}) {
+  if (found === null) return null;
+  if (found.length === 0) return <p role="status">No organizer matches that.</p>;
+  return (
+    <fieldset>
+      <legend>Pick one</legend>
+      {found.map((o) => (
+        <label key={o.slug} className="check">
+          <input
+            type="radio"
+            name="staff-org"
+            checked={picked === o.slug}
+            onChange={() => onPick(o.slug)}
+          />
+          {o.name} <span className="muted">· {o.slug}</span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 export function Staff({ onStarted }: { onStarted: () => Promise<void> }) {
   const [q, setQ] = useState("");
-  const [found, setFound] = useState<components["schemas"]["StaffOrganizer"][]>([]);
+  const [found, setFound] = useState<components["schemas"]["StaffOrganizer"][] | null>(null);
   const [picked, setPicked] = useState("");
   const [reason, setReason] = useState("");
   const search = useAction();
@@ -114,22 +144,7 @@ export function Staff({ onStarted }: { onStarted: () => Promise<void> }) {
         </button>
         <ErrorText>{search.error}</ErrorText>
       </form>
-      {found.length > 0 && (
-        <fieldset>
-          <legend>Pick one</legend>
-          {found.map((o) => (
-            <label key={o.slug} className="check">
-              <input
-                type="radio"
-                name="staff-org"
-                checked={picked === o.slug}
-                onChange={() => setPicked(o.slug)}
-              />
-              {o.name} <span className="muted">· {o.slug}</span>
-            </label>
-          ))}
-        </fieldset>
-      )}
+      <Found found={found} picked={picked} onPick={setPicked} />
       <form
         onSubmit={(e) => {
           e.preventDefault();

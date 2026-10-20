@@ -137,6 +137,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/passkeys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The caller's own passkeys, oldest first. Session only (403 session_required for an API key). Never includes the credential itself. */
+        get: operations["listPasskeys"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/passkeys/register": {
         parameters: {
             query?: never;
@@ -1892,6 +1909,18 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
+        PasskeySummary: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When it last signed you in. Left out if it never has.
+             */
+            last_used_at?: string;
+        };
         CreateOrganizer: {
             name: string;
             /** @description The organizer's storefront address. checkout, orders, assets, api and healthz belong to the storefront itself (422 invalid_slug). */
@@ -2503,6 +2532,28 @@ export interface operations {
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
             429: components["responses"]["Error"];
+        };
+    };
+    listPasskeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Passkeys */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasskeySummary"][];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     beginPasskeyRegistration: {

@@ -549,6 +549,22 @@ func (s *server) BeginPasskeyRegistration(ctx context.Context, req BeginPasskeyR
 	return BeginPasskeyRegistration200JSONResponse{ChallengeId: id, Options: m}, nil
 }
 
+func (s *server) ListPasskeys(ctx context.Context, _ ListPasskeysRequestObject) (ListPasskeysResponseObject, error) {
+	u, _, err := userFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+	pks, err := s.Auth.ListPasskeys(ctx, u.ID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(ListPasskeys200JSONResponse, 0, len(pks))
+	for _, p := range pks {
+		out = append(out, PasskeySummary{Id: p.ID, Name: p.Name, CreatedAt: p.CreatedAt, LastUsedAt: p.LastUsedAt})
+	}
+	return out, nil
+}
+
 func (s *server) FinishPasskeyRegistration(ctx context.Context, req FinishPasskeyRegistrationRequestObject) (FinishPasskeyRegistrationResponseObject, error) {
 	u, sess, err := userFrom(ctx)
 	if err != nil {

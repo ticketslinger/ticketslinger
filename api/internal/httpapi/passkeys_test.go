@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/url"
 	"testing"
 	"time"
@@ -45,6 +46,19 @@ func TestPasskeyEndpoints(t *testing.T) {
 	st, pk := do(t, "POST", srv.URL+"/v1/auth/passkeys/register/"+ch["challenge_id"].(string)+"?name="+url.QueryEscape("Work laptop"), tok, attResp)
 	if st != 201 || pk["name"] != "Work laptop" {
 		t.Fatalf("finish register: %d %v", st, pk)
+	}
+
+	// The list shows this account's passkey, and nothing of anyone else's.
+	if st, _ := do(t, "GET", srv.URL+"/v1/auth/passkeys", "", ""); st != 401 {
+		t.Fatalf("list without a session: %d", st)
+	}
+	st, list := doList(t, clientFor(t, srv.URL), srv.URL+"/v1/auth/passkeys", tok)
+	if st != 200 || len(list) != 1 || list[0]["name"] != "Work laptop" || list[0]["id"] != pk["id"] || list[0]["last_used_at"] != nil || list[0]["credential"] != nil {
+		t.Fatalf("list: %d %v", st, list)
+	}
+	_, other := do(t, "POST", srv.URL+"/v1/auth/signup", "", `{"email":"b@example.com","password":"a long passphrase","name":"B"}`)
+	if st, list := doList(t, clientFor(t, srv.URL), srv.URL+"/v1/auth/passkeys", other["session_token"].(string)); st != 200 || len(list) != 0 {
+		t.Fatalf("stranger's list: %d %v", st, list)
 	}
 
 	st, ch = do(t, "POST", srv.URL+"/v1/auth/passkeys/login", "", "")
@@ -97,4 +111,21 @@ func TestPublicPasskeyLoginNeedsNoSession(t *testing.T) {
 	if st, b := do(t, "POST", srv.URL+"/v1/auth/passkeys/login", "", ""); st != 200 {
 		t.Fatalf("begin login without a token: %d %v", st, b)
 	}
+}
+
+func doList(t *testing.T, c *http.Client, url, tok string) (int, []map[string]any) {
+	t.Helper()
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	res, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	var out []map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return res.StatusCode, out
 }

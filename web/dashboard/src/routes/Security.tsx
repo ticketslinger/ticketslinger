@@ -2,7 +2,21 @@ import { startRegistration } from "@simplewebauthn/browser";
 import qrcode from "qrcode-generator";
 import { useEffect, useState } from "react";
 import { ApiFailure, api, must, session } from "../api";
-import { ErrorText, Field, Link, type Me, useAction } from "../ui";
+import { ErrorText, Field, Link, type Me, useAction, useLoad } from "../ui";
+
+const GENERIC_PASSKEY_FAILURE =
+  "Your device didn't save the passkey. Give it another go when you're ready.";
+
+/** What to tell them when the browser refuses to make a passkey. InvalidStateError
+ * means excludeCredentials matched: this device already holds one for the account.
+ * Anything else (NotAllowedError is a cancel or a timeout) gets the generic line. */
+export const passkeyFailureMessage = (e: unknown) =>
+  e instanceof Error && e.name === "InvalidStateError"
+    ? "This device already has a passkey for your account."
+    : GENERIC_PASSKEY_FAILURE;
+
+const day = (iso: string) =>
+  new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(iso));
 
 /** QR code as SVG elements: the CSP allows neither data: images nor injected markup. */
 export function QrCode({ text, label }: { text: string; label: string }) {
@@ -39,6 +53,7 @@ export function Security({
   const [passkeyAdded, setPasskeyAdded] = useState(false);
   const totpAction = useAction();
   const passkeyAction = useAction();
+  const passkeys = useLoad(async () => must(await api.GET("/auth/passkeys")));
   const recoveryAction = useAction();
   const [recovery, setRecovery] = useState<string[] | null>(null);
   const [copied, setCopied] = useState(false);
@@ -83,12 +98,8 @@ export function Security({
       let credential: Awaited<ReturnType<typeof startRegistration>>;
       try {
         credential = await startRegistration({ optionsJSON });
-      } catch {
-        throw new ApiFailure(
-          "cancelled",
-          "Your device didn't save the passkey. Give it another go when you're ready.",
-          0,
-        );
+      } catch (e) {
+        throw new ApiFailure("cancelled", passkeyFailureMessage(e), 0);
       }
       must(
         await api.POST("/auth/passkeys/register/{challengeId}", {
@@ -97,6 +108,7 @@ export function Security({
         }),
       );
       setPasskeyAdded(true);
+      passkeys.reload();
     });
 
   const createRecovery = () =>
@@ -156,6 +168,21 @@ export function Security({
       <section aria-labelledby="passkey-h">
         <h2 id="passkey-h">Passkeys</h2>
         <p>Sign in with your fingerprint, face or device PIN. No password to type.</p>
+        {passkeys.data && passkeys.data.length > 0 && (
+          <ul aria-label="Your passkeys">
+            {passkeys.data.map((p) => (
+              <li key={p.id}>
+                <strong>{p.name}</strong>{" "}
+                <span className="muted">
+                  · added {day(p.created_at)}
+                  {p.last_used_at
+                    ? `, last used ${day(p.last_used_at)}`
+                    : ", not used to sign in yet"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
         <ErrorText>{passkeyAction.error}</ErrorText>
         <p className="success" role="status">
           {passkeyAdded &&
