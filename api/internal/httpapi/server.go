@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/oapi-codegen/nullable"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/apikeys"
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
@@ -28,6 +29,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/pricing"
 	"github.com/ticketslinger/ticketslinger/api/internal/ratelimit"
 	"github.com/ticketslinger/ticketslinger/api/internal/sales"
+	"github.com/ticketslinger/ticketslinger/api/internal/staff"
 	"github.com/ticketslinger/ticketslinger/api/internal/turnstile"
 )
 
@@ -43,6 +45,8 @@ type Deps struct {
 	Sales *sales.Service
 	// Turnstile guards checkout creation; nil turns it off.
 	Turnstile *turnstile.Verifier
+	// Staff runs staff mode; nil builds one from Pool and Config.MailAlertTo.
+	Staff *staff.Service
 }
 
 type server struct {
@@ -61,6 +65,9 @@ func New(d Deps) http.Handler {
 	}
 	if d.Keys == nil {
 		d.Keys = apikeys.New(d.Pool)
+	}
+	if d.Staff == nil {
+		d.Staff = staff.New(d.Pool, d.Config.MailAlertTo)
 	}
 	if d.Sales == nil {
 		d.Sales = &sales.Service{Pool: d.Pool, Fee: pricing.Fee{BP: d.Config.PlatformFeeBP, Cents: d.Config.PlatformFeeCents},
@@ -179,6 +186,14 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 				return
 			}
 			ctx = context.WithValue(ctx, authKey, a)
+			// Staff routes answer anyone else as an unknown route would,
+			// before the body is read or an Idempotency-Key is looked at.
+			if strings.HasPrefix(r.URL.Path, "/v1/staff/") {
+				if _, _, err := s.staffCaller(ctx); err != nil {
+					writeError(w, err)
+					return
+				}
+			}
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -263,8 +278,16 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func me(u auth.User, sess auth.Session) Me {
-	return Me{Id: u.ID, Email: u.Email, Name: u.Name, EmailVerified: u.EmailVerified, TotpEnabled: u.TOTPEnabled, HasPasskey: u.HasPasskey, HasSecondFactor: u.HasPasskey || u.TOTPEnabled, Mfa: sess.MFA}
+// me describes the caller's account and session, staff mode included. A
+// staff member on a session without a second factor is an ordinary user.
+func (s *server) me(ctx context.Context, u auth.User, sess auth.Session) (Me, error) {
+	isStaff, cur, err := s.Staff.Status(ctx, u.ID, sess.ID)
+	out := Me{Id: u.ID, Email: u.Email, Name: u.Name, EmailVerified: u.EmailVerified, TotpEnabled: u.TOTPEnabled, HasPasskey: u.HasPasskey,
+		HasSecondFactor: u.HasPasskey || u.TOTPEnabled, Mfa: sess.MFA, Staff: isStaff && sess.MFA, StaffSession: nullable.NewNullNullable[StaffSession]()}
+	if cur != nil {
+		out.StaffSession.Set(toStaffSession(*cur))
+	}
+	return out, err
 }
 
 // turnstileError maps a Turnstile answer; nil when err isn't one. An outage
@@ -320,7 +343,11 @@ func (s *server) Signup(ctx context.Context, req SignupRequestObject) (SignupRes
 	case err != nil:
 		return nil, err
 	}
-	return Signup201JSONResponse{SessionToken: sess.Token, User: me(u, sess)}, nil
+	m, err := s.me(ctx, u, sess)
+	if err != nil {
+		return nil, err
+	}
+	return Signup201JSONResponse{SessionToken: sess.Token, User: m}, nil
 }
 
 func (s *server) Login(ctx context.Context, req LoginRequestObject) (LoginResponseObject, error) {
@@ -365,11 +392,20 @@ func (s *server) Login(ctx context.Context, req LoginRequestObject) (LoginRespon
 	case err != nil:
 		return nil, err
 	}
-	return Login200JSONResponse{SessionToken: sess.Token, User: me(u, sess)}, nil
+	m, err := s.me(ctx, u, sess)
+	if err != nil {
+		return nil, err
+	}
+	return Login200JSONResponse{SessionToken: sess.Token, User: m}, nil
 }
 
 func (s *server) Logout(ctx context.Context, _ LogoutRequestObject) (LogoutResponseObject, error) {
-	if _, _, err := userFrom(ctx); err != nil {
+	u, sess, err := userFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Staff mode ends first, while the login session it names still exists.
+	if err := s.Staff.End(ctx, u.ID, sess.ID, "logout", ""); err != nil && !errors.Is(err, staff.ErrNoSession) {
 		return nil, err
 	}
 	a, _ := ctx.Value(authKey).(authed)
@@ -395,7 +431,11 @@ func (s *server) GetMe(ctx context.Context, _ GetMeRequestObject) (GetMeResponse
 	if err != nil {
 		return nil, err
 	}
-	return GetMe200JSONResponse(me(u, sess)), nil
+	m, err := s.me(ctx, u, sess)
+	if err != nil {
+		return nil, err
+	}
+	return GetMe200JSONResponse(m), nil
 }
 
 // passkeyError maps passkey failures; badCreds is the message for
@@ -495,7 +535,11 @@ func (s *server) FinishPasskeyLogin(ctx context.Context, req FinishPasskeyLoginR
 	if err != nil {
 		return nil, passkeyError(err, "We couldn't sign you in with that passkey. Try another, or use your password.")
 	}
-	return FinishPasskeyLogin200JSONResponse{SessionToken: sess.Token, User: me(u, sess)}, nil
+	m, err := s.me(ctx, u, sess)
+	if err != nil {
+		return nil, err
+	}
+	return FinishPasskeyLogin200JSONResponse{SessionToken: sess.Token, User: m}, nil
 }
 
 // errEnrolNeedsMFA refuses a new second factor from a session that hasn't

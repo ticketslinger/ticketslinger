@@ -274,18 +274,8 @@ func (s *Service) FinishPasskeyLogin(ctx context.Context, challengeID uuid.UUID,
 	}
 	var sess Session
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		// The stored count must still be below the new one: of two sign-ins
-		// racing with one counter value, only one gets the row.
-		tag, err := tx.Exec(ctx,
-			`UPDATE passkeys SET credential = $3, last_used_at = now()
-			  WHERE credential_id = $1 AND user_id = $2
-			    AND ($4::bigint = 0 OR coalesce((credential #>> '{authenticator,signCount}')::bigint, 0) < $4::bigint)`,
-			cred.ID, owner.ID, cred, int64(cred.Authenticator.SignCount))
-		if err != nil {
+		if err := bumpSignCount(ctx, tx, owner.ID, cred); err != nil {
 			return err
-		}
-		if tag.RowsAffected() == 0 {
-			return ErrBadCredentials
 		}
 		sess, err = createSession(ctx, tx, owner.ID, true, ip, ua)
 		return err
@@ -294,4 +284,112 @@ func (s *Service) FinishPasskeyLogin(ctx context.Context, challengeID uuid.UUID,
 		return Session{}, User{}, err
 	}
 	return sess, owner.User, nil
+}
+
+// bumpSignCount stores the credential as it was just used. The stored count
+// must still be below the new one: of two assertions racing with one
+// counter value, only one gets the row; the other is ErrBadCredentials.
+func bumpSignCount(ctx context.Context, q interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}, user uuid.UUID, cred *webauthn.Credential) error {
+	tag, err := q.Exec(ctx,
+		`UPDATE passkeys SET credential = $3, last_used_at = now()
+		  WHERE credential_id = $1 AND user_id = $2
+		    AND ($4::bigint = 0 OR coalesce((credential #>> '{authenticator,signCount}')::bigint, 0) < $4::bigint)`,
+		cred.ID, user, cred, int64(cred.Authenticator.SignCount))
+	if err == nil && tag.RowsAffected() == 0 {
+		err = ErrBadCredentials
+	}
+	return err
+}
+
+// ErrPasskeyRequired refuses a staff assertion: missing, of another kind,
+// purpose or login session, already used, expired, or not the user's passkey.
+var ErrPasskeyRequired = errors.New("auth: passkey required")
+
+const staffChallengeLifetime = 2 * time.Minute
+
+// BeginStaffAssertion asks the signed-in user to touch one of their own
+// passkeys, with user verification, for one purpose on one login session:
+// kind "staff" starts staff mode, "staff_action" confirms a staff action.
+// The challenge lives two minutes. Each user may ask ten times a minute.
+func (s *Service) BeginStaffAssertion(ctx context.Context, user, loginSession uuid.UUID, kind, purpose string) (uuid.UUID, *protocol.CredentialAssertion, error) {
+	if s.waErr != nil {
+		return uuid.Nil, nil, s.waErr
+	}
+	if !s.emLimit.Allow("staff-begin:"+user.String(), time.Now()) {
+		return uuid.Nil, nil, ErrRateLimited
+	}
+	u, err := s.loadWebAuthnUser(ctx, user)
+	if err != nil {
+		return uuid.Nil, nil, err
+	}
+	if len(u.creds) == 0 {
+		return uuid.Nil, nil, ErrPasskeyRequired
+	}
+	assertion, sd, err := s.wa.BeginLogin(u, webauthn.WithUserVerification(protocol.VerificationRequired))
+	if err != nil {
+		return uuid.Nil, nil, err
+	}
+	var id uuid.UUID
+	err = s.pool.QueryRow(ctx,
+		`WITH gone AS (DELETE FROM webauthn_challenges WHERE expires_at <= now())
+		 INSERT INTO webauthn_challenges (user_id, kind, data, expires_at, session_id, purpose)
+		 VALUES ($1, $2, $3, now() + $4::interval, $5, $6) RETURNING id`,
+		user, kind, sd, staffChallengeLifetime.String(), loginSession, purpose).Scan(&id)
+	return id, assertion, err
+}
+
+// VerifyStaffAssertion checks the assertion (the JSON body from
+// navigator.credentials.get) against a challenge from BeginStaffAssertion.
+// The challenge is spent by any attempt from its user, and every mismatch
+// of login session, kind or purpose is ErrPasskeyRequired. Failures count
+// against the address and the user, never against the account's sign-in
+// lockout: a stolen session must not be able to lock its owner out.
+func (s *Service) VerifyStaffAssertion(ctx context.Context, user, loginSession, challenge uuid.UUID, kind, purpose string, body []byte, ip string) error {
+	if s.waErr != nil {
+		return s.waErr
+	}
+	now := time.Now()
+	if !s.ipLimit.Allow("staff:"+ratelimit.AddrKey(ip), now) || !s.emLimit.Allow("staff:"+user.String(), now) {
+		return ErrRateLimited
+	}
+	var (
+		sd  webauthn.SessionData
+		ok  bool
+		err = s.pool.QueryRow(ctx,
+			`DELETE FROM webauthn_challenges WHERE id = $1 AND user_id = $2
+			 RETURNING data, coalesce(kind = $3 AND session_id = $4 AND purpose = $5 AND expires_at > now(), false)`,
+			challenge, user, kind, loginSession, purpose).Scan(&sd, &ok)
+	)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && !ok {
+		return ErrPasskeyRequired
+	}
+	if err != nil {
+		return err
+	}
+	u, err := s.loadWebAuthnUser(ctx, user)
+	if err != nil {
+		return err
+	}
+	parsed, err := protocol.ParseCredentialRequestResponseBytes(body)
+	if err != nil {
+		slog.InfoContext(ctx, "staff assertion unreadable", "user", user, "err", err)
+		return ErrPasskeyRequired
+	}
+	cred, err := s.wa.ValidateLogin(u, sd, parsed)
+	if err != nil {
+		slog.InfoContext(ctx, "staff assertion rejected", "user", user, "err", err)
+		return ErrPasskeyRequired
+	}
+	if cred.Authenticator.CloneWarning {
+		slog.WarnContext(ctx, "passkey sign count did not advance; possible cloned authenticator", "user", user)
+		return ErrPasskeyRequired
+	}
+	if err := bumpSignCount(ctx, s.pool, user, cred); errors.Is(err, ErrBadCredentials) {
+		return ErrPasskeyRequired
+	} else if err != nil {
+		return err
+	}
+	return nil
 }

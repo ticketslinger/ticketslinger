@@ -29,7 +29,7 @@ func newAuthServerPool(t *testing.T) (*httptest.Server, *mailer.Memory, *pgxpool
 	pool := testdb.New(t)
 	m := &mailer.Memory{}
 	svc := auth.NewService(pool, m, auth.Options{RPID: "localhost", Origin: "http://localhost:5173", SecretKey: []byte("0123456789abcdef0123456789abcdef")})
-	srv := startServer(t, httpapi.New(httpapi.Deps{Pool: pool, Auth: svc}))
+	srv := startServer(t, httpapi.New(httpapi.Deps{Pool: pool, Auth: svc, Config: config.Config{MailAlertTo: "alerts@example.com"}}))
 	return srv, m, pool
 }
 

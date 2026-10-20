@@ -23,6 +23,7 @@ import (
 	"github.com/getkin/kin-openapi/routers/legacy"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/httpapi"
+	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
 )
 
 // unspecified are paths the API serves on purpose outside openapi.yaml.
@@ -190,6 +191,10 @@ func sample(t *testing.T, name string, parts []*openapi3.Schema) any {
 		return 2500 // a paid ticket costs at least 50
 	case "email":
 		return "walk@example.com"
+	case "challenge_id":
+		return "0190a0a0-0000-7000-8000-000000000000"
+	case "credential":
+		return map[string]any{} // a passkey's answer; staff routes check it after the bounds
 	case "confirm_name":
 		return "Gala" // the fixture event's name
 	case "items":
@@ -258,6 +263,17 @@ func TestEveryBoundAnswers422(t *testing.T) {
 	h.createOrganizer(owner, "acme")
 	acmeKey, _ := h.createKey(owner, "acme", "write")
 	f := seedCatalogue(h, owner, "acme", acmeKey)
+	// Staff routes answer 404 to everyone else before they look at a body,
+	// so the caller is staff, in staff mode on an organizer it isn't in.
+	other := h.signupWithMFA("other@example.com")
+	h.createOrganizer(other, "other")
+	if _, err := testdb.Owner(t, h.pool).Exec(context.Background(), `
+		with u as (insert into staff(user_id, granted_by) select id, 'james' from users where email = 'owner@example.com' returning user_id)
+		insert into staff_sessions(user_id, session_id, organizer_id, organizer_slug, organizer_name, reason, expires_at)
+		select u.user_id, s.id, o.id, o.slug, o.name, 'Walking every bound', now() + interval '30 minutes'
+		  from u, sessions s, organizers o where s.token_hash = sha256(convert_to($1, 'UTF8')) and o.slug = 'other'`, owner); err != nil {
+		t.Fatal(err)
+	}
 	spec, err := httpapi.GetSwagger()
 	if err != nil {
 		t.Fatal(err)
