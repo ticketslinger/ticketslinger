@@ -122,8 +122,8 @@ type unsellable struct {
 }
 
 // stillSellable checks, under the quota locks, that the order's tickets can
-// still be sold: the event is live and not over, every ticket type is still
-// there and counted by a quota, the quotas have room (leaving out this
+// still be sold: its organizer isn't suspended, the event is live and not
+// over, every ticket type is still there and counted by a quota, the quotas have room (leaving out this
 // order's own checkout), every question answered is still there, and the
 // promo code has a use left. The promo row is locked after the quotas, as
 // CreateCheckout locks it. nil means it can.
@@ -135,9 +135,13 @@ type unsellable struct {
 // question gone.
 func stillSellable(ctx context.Context, tx pgx.Tx, event uuid.UUID, promo *uuid.UUID, q pricing.Quote, d Details,
 	links map[uuid.UUID][]uuid.UUID, sizes map[uuid.UUID]int, except uuid.UUID) (*unsellable, error) {
-	var live, running bool
-	if err := tx.QueryRow(ctx, `select status = 'live', statement_timestamp() < ends_at from events where id = $1`, event).Scan(&live, &running); err != nil {
+	var suspended, live, running bool
+	if err := tx.QueryRow(ctx, `select organizer_suspended(organizer_id), status = 'live', statement_timestamp() < ends_at from events where id = $1`, event).
+		Scan(&suspended, &live, &running); err != nil {
 		return nil, err
+	}
+	if suspended {
+		return &unsellable{"organizer_suspended", ErrUnavailable}, nil
 	}
 	if !live {
 		return &unsellable{"event_not_live", catalogue.ErrNotFound}, nil

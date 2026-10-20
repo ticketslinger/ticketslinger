@@ -1493,3 +1493,48 @@ test("asking for the email again answers on the order page", async () => {
   );
   expect(await notice("other")).not.toContain('role="status"');
 });
+
+// Spec §13.7: a suspended organizer's event is the same plain page for every
+// way in, and says nothing about who or why.
+const UNAVAILABLE = [
+  "<title>Not available",
+  "This event isn't available.",
+  "You can't buy tickets for it here. Already have an order? Your order link still works.",
+];
+const unavailable = () => apiError(410, "event_unavailable");
+
+for (const [name, path, api, init] of [
+  ["the event page", "/acme/gala", unavailable, undefined],
+  ["buying", "/acme/gala/checkout", routes(unavailable), form({ qty_t1: "2", idem: KEY })],
+  ["the checkout page", `/checkout/${TOK}`, unavailable, undefined],
+] as const) {
+  test(`a suspended organizer's event: ${name} is the 410 unavailable page`, async () => {
+    const { a } = app(api);
+    const res = await a.request(path, init);
+    const html = await res.text();
+    expect(res.status).toBe(410);
+    for (const words of UNAVAILABLE) expect(html).toContain(words);
+    expect(html).not.toContain("Acme");
+    expect(html).not.toContain("Spring Gala");
+    expect(html).not.toContain("API words");
+  });
+}
+
+test("a suspended organizer's buyers can still ask for their link again", async () => {
+  const { a, calls } = app((r) =>
+    new URL(r.url).pathname.endsWith("/order-links")
+      ? new Response(null, { status: 204 })
+      : unavailable(),
+  );
+  const res = await a.request("/acme/gala/order-link");
+  const html = await res.text();
+  expect(res.status).toBe(200);
+  expect(html).toContain("Get your ticket link again");
+  expect(html).toContain('action="/acme/gala/order-link"');
+  const sent = await a.request("/acme/gala/order-link", form({ email: "ada@example.com" }));
+  expect(sent.status).toBe(200);
+  expect(await sent.text()).toContain(
+    "Done. If that address bought tickets for this event, the link is on its way.",
+  );
+  expect(calls.some((c) => new URL(c.url).pathname.endsWith("/order-links"))).toBe(true);
+});

@@ -39,6 +39,13 @@ func providerError(ctx context.Context, op string, err error) error {
 	return errPaymentsUnavailable
 }
 
+// suspendedSale: the refuse_suspended_sales trigger (00044) stopped a
+// checkout or order the Go checks let through.
+func suspendedSale(err error) bool {
+	var pe *pgconn.PgError
+	return errors.As(err, &pe) && pe.Code == "P0001" && pe.Message == "organizer_suspended"
+}
+
 // accountInUse: a write would make one Stripe account live for two organizers.
 func accountInUse(err error) bool {
 	var pe *pgconn.PgError
@@ -464,6 +471,8 @@ func salesError(err error) error {
 			map[string]any{"order_code": done.OrderCode}}
 	case errors.Is(err, sales.ErrCheckoutExpired):
 		return &apiError{410, "checkout_expired", "Your 15 minutes ran out and the tickets went back on sale. Start again and we'll hold them for you."}
+	case errors.Is(err, sales.ErrUnavailable), suspendedSale(err):
+		return &apiError{410, "event_unavailable", "This event isn't available."}
 	case errors.Is(err, sales.ErrPaymentsNotConfigured):
 		return errPaymentsNotConfigured
 	case errors.Is(err, sales.ErrPaymentsUnavailable):

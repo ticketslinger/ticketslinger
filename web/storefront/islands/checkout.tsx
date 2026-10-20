@@ -124,11 +124,14 @@ export const LINK_BY_EMAIL =
 /** The organizer cancelled the event; the API says the same in its 409. */
 export const EVENT_CANCELLED =
   "This event has been cancelled, so it isn't selling tickets any more. If you'd already paid, we're refunding you in full.";
+/** The organizer is suspended; the API says the same in its 410 event_unavailable. */
+export const UNAVAILABLE = "This event isn't available.";
 // Answers that end this checkout: the buyer has to start again from the event.
 // checkout_expired isn't one: a payment may already exist, so we ask the checkout first.
 const OVER: Record<string, string> = {
   price_changed: PRICE_CHANGED,
   event_cancelled: EVENT_CANCELLED,
+  event_unavailable: UNAVAILABLE,
 };
 
 /**
@@ -369,11 +372,10 @@ function Checkout({ data }: { data: CheckoutData }) {
           const r = await fetch(`/api/checkouts/${data.token}`, {
             signal: AbortSignal.timeout(10_000),
           });
-          if (r.status === 409) {
+          if (r.status === 409 || r.status === 410) {
             const e = await r.json().catch(() => ({}));
-            if (e?.error?.code === "event_cancelled") {
-              return setPhase({ kind: "over", message: EVENT_CANCELLED });
-            }
+            const over = OVER[e?.error?.code ?? ""];
+            if (over) return setPhase({ kind: "over", message: over });
           }
           if (r.ok) {
             const c = await r.json();

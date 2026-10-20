@@ -2,7 +2,8 @@
 import { Layout } from "./Layout";
 
 export type OrderLinkPageProps = {
-  eventName: string;
+  /** Missing while the event is off sale: the page still works, just unnamed. */
+  eventName?: string;
   /** Where the form posts: this page's own path. */
   action: string;
   siteKey: string;
@@ -18,13 +19,17 @@ export type OrderLinkPageProps = {
 
 export function OrderLinkPage(p: OrderLinkPageProps) {
   return (
-    <Layout title={`Get your ticket link again · ${p.eventName}`}>
-      <p class="organizer">{p.eventName}</p>
+    <Layout
+      title={
+        p.eventName ? `Get your ticket link again · ${p.eventName}` : "Get your ticket link again"
+      }
+    >
+      {p.eventName && <p class="organizer">{p.eventName}</p>}
       <h1>Get your ticket link again</h1>
       {p.done ? (
         <p role="status">
-          Done. If that address bought tickets for {p.eventName}, the link is on its way. It can
-          take a minute or two.
+          Done. If that address bought tickets for {p.eventName ?? "this event"}, the link is on its
+          way. It can take a minute or two.
         </p>
       ) : (
         <>

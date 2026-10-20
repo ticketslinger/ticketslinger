@@ -182,6 +182,9 @@ func (s *Service) resolveLive(ctx context.Context, orgSlug, eventSlug string) (o
 func (s *Service) hold(ctx context.Context, org, event uuid.UUID, hash []byte, in CheckoutInput) (Checkout, error) {
 	out := Checkout{OrganizerID: org, EventID: event, Status: "open", Items: in.Items}
 	err := system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error {
+		if err := offSale(ctx, tx, org); err != nil {
+			return err
+		}
 		ids := itemIDs(in.Items)
 		// 1. The one lock order: quotas of every requested type, ascending id.
 		sizes, links, err := lockQuotas(ctx, tx, event, ids)
@@ -283,6 +286,20 @@ func lockQuotas(ctx context.Context, tx pgx.Tx, event uuid.UUID, ticketTypes []u
 		return nil, nil, errQuotasMoved
 	}
 	return sizes, links, nil
+}
+
+// offSale is ErrUnavailable while org is suspended. Every sale transaction
+// asks first: they all run as ts_system, which may call
+// organizer_suspended (the storefront role may not).
+func offSale(ctx context.Context, tx pgx.Tx, org uuid.UUID) error {
+	var suspended bool
+	if err := tx.QueryRow(ctx, `select organizer_suspended($1)`, org).Scan(&suspended); err != nil {
+		return err
+	}
+	if suspended {
+		return ErrUnavailable
+	}
+	return nil
 }
 
 type eventTerms struct{ feeMode, timezone string }
@@ -501,7 +518,8 @@ func (s *Service) checkoutOrg(ctx context.Context, token string) (uuid.UUID, err
 }
 
 // GetCheckout finds a checkout by its token. Unknown tokens are ErrNotFound,
-// and a cancelled event's are errEventCancelled. A hold that ran out reads as
+// a cancelled event's are errEventCancelled, and a suspended organizer's are
+// ErrUnavailable unless completed. A hold that ran out reads as
 // expired, unless the order already has a payment: then the card may be
 // charged, and it stays paying until the payment is settled. One stopped
 // unpaid (SettleOrder) reads as cancelled.
@@ -539,6 +557,10 @@ func (s *Service) GetCheckout(ctx context.Context, token string) (Checkout, erro
 			return errEventCancelled
 		}
 		if out.Status != "completed" {
+			// Off sale; a buyer who already paid keeps the road to their order.
+			if err := offSale(ctx, tx, org); err != nil {
+				return err
+			}
 			out.OrderCode = "" // pending: not the buyer's yet
 		} else if orderID != nil && version == 0 {
 			// The checkout's address never expires, so it hands out only the
