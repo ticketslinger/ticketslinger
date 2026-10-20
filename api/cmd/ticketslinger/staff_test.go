@@ -136,14 +136,102 @@ func TestStaffGrantNeedsSudoUser(t *testing.T) {
 }
 
 func TestStaffCommandUsesOnlyTheOwnerURL(t *testing.T) {
-	// staffEnv hands runStaff nothing but TS_MIGRATE_DATABASE_URL and SUDO_USER.
 	getenv, owner := staffEnv(t, "james")
 	mkUser(t, owner, "s@example.com", true, true)
-	if _, err := runStaffCmd(getenv, "grant", "s@example.com"); err != nil {
+	junk := func(k string) string {
+		switch k {
+		case "TS_DATABASE_URL":
+			return "postgres://nobody:x@127.0.0.1:1/none"
+		case "TS_SECRET_KEY", "TS_PUBLIC_URL", "TS_HTTP_ADDR", "TS_MAIL":
+			return "!!junk!!"
+		}
+		return getenv(k)
+	}
+	if _, err := runStaffCmd(junk, "grant", "s@example.com"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runStaffCmd(func(string) string { return "" }, "list"); err == nil || !strings.Contains(err.Error(), "TS_MIGRATE_DATABASE_URL") {
 		t.Errorf("no URL: err = %v", err)
+	}
+}
+
+func mkLive(t *testing.T, owner *pgxpool.Pool, user uuid.UUID, slug string, token byte, expires string) (ss uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	var org, sess uuid.UUID
+	if err := owner.QueryRow(ctx, `insert into organizers(name, slug) values ($1::text, $1::citext) returning id`, slug).Scan(&org); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.QueryRow(ctx, `insert into sessions(user_id, token_hash, mfa, expires_at) values ($1, $2, true, now() + interval '1 day') returning id`, user, []byte{token}).Scan(&sess); err != nil {
+		t.Fatal(err)
+	}
+	// started_at is backdated so expires_at can be in the past within the 60 minute CHECK.
+	if err := owner.QueryRow(ctx, `insert into staff_sessions(user_id, session_id, organizer_id, organizer_slug, organizer_name, reason, started_at, expires_at)
+		values ($1, $2, $3, $4::citext, $4::text, 'investigating ticket 42', now() - interval '50 minutes', now() + $5::interval) returning id`, user, sess, org, slug, expires).Scan(&ss); err != nil {
+		t.Fatal(err)
+	}
+	return ss
+}
+
+func TestStaffRevokeEndsLiveSessionsOnly(t *testing.T) {
+	getenv, owner := staffEnv(t, "james")
+	ctx := context.Background()
+	user := mkUser(t, owner, "s@example.com", true, true)
+	if _, err := runStaffCmd(getenv, "grant", "S@Example.com"); err != nil { // citext
+		t.Fatal(err)
+	}
+	a := mkLive(t, owner, user, "org-a", 1, "5 minutes")
+	b := mkLive(t, owner, user, "org-b", 2, "5 minutes")
+	old := mkLive(t, owner, user, "org-c", 3, "5 minutes")
+	lapsed := mkLive(t, owner, user, "org-d", 4, "-1 minute")
+	if _, err := owner.Exec(ctx, `update staff_sessions set ended_at = now() - interval '1 minute', ended_how = 'staff' where id = $1`, old); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runStaffCmd(getenv, "revoke", "S@EXAMPLE.COM")
+	if err != nil || out != "revoked S@EXAMPLE.COM, ended 2 session(s)\n" {
+		t.Fatalf("revoke = %q, %v", out, err)
+	}
+	for id, want := range map[uuid.UUID]string{a: "revoked", b: "revoked", old: "staff", lapsed: "expired"} {
+		var how string
+		if err := owner.QueryRow(ctx, `select ended_how from staff_sessions where id = $1`, id).Scan(&how); err != nil || how != want {
+			t.Errorf("session %s ended_how = %q (%v), want %q", id, how, err, want)
+		}
+	}
+	var n int
+	if err := owner.QueryRow(ctx, `select count(*) from audit_log where action = 'staff.session_ended' and after->>'how' = 'revoked'`).Scan(&n); err != nil || n != 2 {
+		t.Errorf("revoked audit rows = %d, %v; want 2", n, err)
+	}
+	// Revoking again is idempotent: nothing left to end.
+	out, err = runStaffCmd(getenv, "revoke", "s@example.com")
+	if err != nil || out != "revoked s@example.com, ended 0 session(s)\n" {
+		t.Errorf("second revoke = %q, %v", out, err)
+	}
+	if _, err := runStaffCmd(getenv, "revoke", "nobody@example.com"); err == nil || err.Error() != "that account isn't staff" {
+		t.Errorf("non-staff revoke: %v", err)
+	}
+}
+
+func TestStaffRegrantEndsSessionsThatSlippedIn(t *testing.T) {
+	getenv, owner := staffEnv(t, "james")
+	ctx := context.Background()
+	user := mkUser(t, owner, "s@example.com", true, true)
+	if _, err := runStaffCmd(getenv, "grant", "s@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runStaffCmd(getenv, "revoke", "s@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	ss := mkLive(t, owner, user, "org-a", 1, "5 minutes")
+	if _, err := runStaffCmd(getenv, "grant", "s@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	var how string
+	if err := owner.QueryRow(ctx, `select ended_how from staff_sessions where id = $1 and ended_at is not null`, ss).Scan(&how); err != nil || how != "revoked" {
+		t.Fatalf("ended_how = %q, %v", how, err)
+	}
+	var n int
+	if err := owner.QueryRow(ctx, `select count(*) from audit_log where actor_staff_session_id = $1 and action = 'staff.session_ended'`, ss).Scan(&n); err != nil || n != 1 {
+		t.Errorf("audit rows = %d, %v", n, err)
 	}
 }
 
@@ -167,7 +255,7 @@ func TestStaffList(t *testing.T) {
 	if len(lines) != 2 || !strings.HasPrefix(lines[0], "a@example.com") || !strings.HasPrefix(lines[1], "b@example.com") {
 		t.Fatalf("list = %q", out)
 	}
-	if strings.Count(lines[0], "james") != 1 || len(strings.Fields(lines[1])) <= len(strings.Fields(lines[0])) {
-		t.Errorf("revoked line should carry a revoked_at: %q", out)
+	if len(strings.Fields(lines[0])) != 3 || len(strings.Fields(lines[1])) != 4 {
+		t.Errorf("only the revoked line carries a revoked_at: %q", out)
 	}
 }

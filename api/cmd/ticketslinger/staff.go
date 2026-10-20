@@ -65,8 +65,29 @@ func staffGrant(ctx context.Context, p *pgxpool.Pool, out io.Writer, email, by s
 	case !passkey:
 		return errors.New("that account has no passkey: add one in Dashboard → Security, then grant again")
 	}
-	if _, err := p.Exec(ctx, `INSERT INTO staff(user_id, granted_by) SELECT id, $2 FROM users WHERE email = $1
-		ON CONFLICT (user_id) DO UPDATE SET revoked_at = NULL, granted_at = now(), granted_by = EXCLUDED.granted_by`, email, by); err != nil {
+	tx, err := p.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var was bool
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT revoked_at IS NOT NULL FROM staff s JOIN users u ON u.id = s.user_id
+		WHERE u.email = $1 FOR UPDATE OF s), false)`, email).Scan(&was); err != nil {
+		return err
+	}
+	var uid string
+	if err := tx.QueryRow(ctx, `INSERT INTO staff(user_id, granted_by) SELECT id, $2 FROM users WHERE email = $1
+		ON CONFLICT (user_id) DO UPDATE SET revoked_at = NULL, granted_at = now(), granted_by = EXCLUDED.granted_by
+		RETURNING user_id::text`, email, by).Scan(&uid); err != nil {
+		return err
+	}
+	// A session that began while the revoke ran must not come back to life.
+	if was {
+		if _, err := endLiveSessions(ctx, tx, uid); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(out, "granted %s\n", email)
@@ -91,15 +112,7 @@ func staffRevoke(ctx context.Context, p *pgxpool.Pool, out io.Writer, email stri
 	} else if err != nil {
 		return err
 	}
-	var n int
-	err = tx.QueryRow(ctx, `WITH ended AS (
-		UPDATE staff_sessions SET ended_at = now(), ended_how = 'revoked'
-		 WHERE user_id = $1 AND ended_at IS NULL RETURNING id, user_id, organizer_id),
-	logged AS (
-		INSERT INTO audit_log(organizer_id, actor_user_id, actor_staff_session_id, action, entity_type, entity_id, after)
-		SELECT organizer_id, user_id, id, 'staff.session_ended', 'staff_session', id, '{"how": "revoked"}'
-		  FROM ended WHERE organizer_id IS NOT NULL)
-	SELECT count(*)::int FROM ended`, uid).Scan(&n)
+	n, err := endLiveSessions(ctx, tx, uid)
 	if err != nil {
 		return err
 	}
@@ -108,6 +121,23 @@ func staffRevoke(ctx context.Context, p *pgxpool.Pool, out io.Writer, email stri
 	}
 	_, err = fmt.Fprintf(out, "revoked %s, ended %d session(s)\n", email, n)
 	return err
+}
+
+// endLiveSessions ends the user's live staff sessions, with an audit row each
+// on its organizer. One that ran out before the sweeper reached it ends as
+// 'expired' at its expiry and isn't counted. It returns how many it revoked.
+func endLiveSessions(ctx context.Context, tx pgx.Tx, uid string) (n int, err error) {
+	err = tx.QueryRow(ctx, `WITH ended AS (
+		UPDATE staff_sessions
+		   SET ended_at = LEAST(clock_timestamp(), expires_at),
+		       ended_how = CASE WHEN expires_at <= clock_timestamp() THEN 'expired' ELSE 'revoked' END
+		 WHERE user_id = $1 AND ended_at IS NULL RETURNING id, user_id, organizer_id, ended_how),
+	logged AS (
+		INSERT INTO audit_log(organizer_id, actor_user_id, actor_staff_session_id, action, entity_type, entity_id, after)
+		SELECT organizer_id, user_id, id, 'staff.session_ended', 'staff_session', id, jsonb_build_object('how', ended_how)
+		  FROM ended WHERE organizer_id IS NOT NULL)
+	SELECT count(*) FILTER (WHERE ended_how = 'revoked')::int FROM ended`, uid).Scan(&n)
+	return n, err
 }
 
 func staffList(ctx context.Context, p *pgxpool.Pool, out io.Writer) error {
