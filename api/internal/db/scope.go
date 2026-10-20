@@ -70,14 +70,24 @@ func WithPrincipal(ctx context.Context, pool *pgxpool.Pool, p Principal, org uui
 		if _, err := tx.Exec(ctx, guc, id.String(), org.String()); err != nil {
 			return err
 		}
-		// Going read-only after a query is allowed; going back is not.
-		var suspended bool
-		if err := tx.QueryRow(ctx, `select organizer_suspended($1)`, org).Scan(&suspended); err != nil {
-			return err
-		}
-		if suspended {
-			if _, err := tx.Exec(ctx, `set transaction read only`); err != nil {
+		// A transaction that may write holds the organizer row (KEY SHARE)
+		// first, so it and staff_act's FOR UPDATE run one after the other:
+		// it either finishes before a suspension commits or starts after it
+		// and sees it. The check is its own statement for a fresh snapshot.
+		// Going read-only after a query is allowed; going back is not. A read
+		// key's transaction is read-only already and can't take row locks.
+		if p.KeyScope != "read" {
+			if _, err := tx.Exec(ctx, `select 1 from organizers where id = $1 for key share`, org); err != nil {
 				return err
+			}
+			var suspended bool
+			if err := tx.QueryRow(ctx, `select organizer_suspended($1)`, org).Scan(&suspended); err != nil {
+				return err
+			}
+			if suspended {
+				if _, err := tx.Exec(ctx, `set transaction read only`); err != nil {
+					return err
+				}
 			}
 		}
 		if p.KeyID != uuid.Nil {

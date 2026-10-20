@@ -296,8 +296,15 @@ func TestSuspendedMemberCantCreateOrganizer(t *testing.T) {
 	h := newHarness(t)
 	tok := h.signupWithMFA("owner@example.com")
 	h.createOrganizer(tok, "acme")
-	if _, err := testdb.Owner(t, h.pool).Exec(context.Background(), `insert into organizer_suspensions(organizer_id, staff_action_id)
-		select id, gen_random_uuid() from organizers where slug = 'acme'`); err != nil {
+	if _, err := testdb.Owner(t, h.pool).Exec(context.Background(), `with
+		o as (select id from organizers where slug = 'acme'),
+		u as (insert into users(email, name, email_verified_at) values ('staff@example.com', 'Staff', now()) returning id),
+		st as (insert into staff(user_id, granted_by) select id, 'test' from u returning user_id),
+		ss as (insert into staff_sessions(user_id, session_id, organizer_id, organizer_slug, organizer_name, reason, expires_at)
+			select st.user_id, gen_random_uuid(), o.id, 'acme', 'Acme', 'Checking a takedown report', now() + interval '1 hour' from st, o returning id, user_id, organizer_id),
+		a as (insert into staff_actions(staff_session_id, user_id, organizer_id, kind, reason)
+			select id, user_id, organizer_id, 'suspend', 'Checking a takedown report' from ss returning id, organizer_id)
+		insert into organizer_suspensions(organizer_id, staff_action_id) select organizer_id, id from a`); err != nil {
 		t.Fatal(err)
 	}
 	if res := h.do(tok, "POST", "/v1/organizers", `{"name":"Again","slug":"acme-two"}`); res.StatusCode != 403 || h.errorCode(res) != "suspended_member" {

@@ -5,15 +5,6 @@
 -- deleted: the action rows and the takedown's targets stay as evidence.
 -- search_path ends in pg_temp so a temp table cannot shadow a real one.
 
--- One row while an organizer is suspended. ts_app and ts_system may only
--- read it through organizer_suspended(); nobody but the definer functions
--- below writes it.
-CREATE TABLE organizer_suspensions (
-  organizer_id    uuid PRIMARY KEY REFERENCES organizers ON DELETE RESTRICT,
-  staff_action_id uuid NOT NULL,     -- the suspend action
-  suspended_at    timestamptz NOT NULL DEFAULT now()
-);
-
 -- Every staff write, ever. Append-only for every app role.
 CREATE TABLE staff_actions (
   id               uuid PRIMARY KEY DEFAULT uuidv7(),
@@ -29,6 +20,15 @@ CREATE TABLE staff_actions (
   result           jsonb,            -- refund_event only: orders, amount_cents, fee_cents, pending_orders
   CHECK ((kind = 'refund_event') = (event_id IS NOT NULL)),
   CHECK (kind = 'refund_event' OR finished_at IS NULL)
+);
+
+-- One row while an organizer is suspended. ts_app and ts_system may only
+-- read it through organizer_suspended(); nobody but the definer functions
+-- below writes it.
+CREATE TABLE organizer_suspensions (
+  organizer_id    uuid PRIMARY KEY REFERENCES organizers ON DELETE RESTRICT,
+  staff_action_id uuid NOT NULL REFERENCES staff_actions, -- the suspend action
+  suspended_at    timestamptz NOT NULL DEFAULT now()
 );
 
 -- No role but the owner touches either table. Row security with no policy
@@ -60,19 +60,21 @@ DECLARE usr uuid := public.app_user();
         org uuid;
         aid uuid;
 BEGIN
-  SELECT ss.organizer_id INTO org
-    FROM public.staff_sessions ss
-    JOIN public.sessions se ON se.id = ss.session_id AND se.user_id = ss.user_id
-                            AND se.mfa AND se.expires_at > pg_catalog.now()
-   WHERE ss.id = p_staff_session
-     AND ss.user_id = usr
-     AND ss.session_id = p_login_session
-     AND ss.ended_at IS NULL
-     AND ss.expires_at > pg_catalog.clock_timestamp();
-  IF usr IS NULL OR NOT public.app_is_staff() OR org IS NULL THEN
+  -- Lock first, check after: a session ended while this waited doesn't act.
+  SELECT ss.organizer_id INTO org FROM public.staff_sessions ss WHERE ss.id = p_staff_session AND ss.user_id = usr;
+  PERFORM 1 FROM public.organizers WHERE id = org FOR UPDATE;
+  IF usr IS NULL OR org IS NULL OR NOT public.app_is_staff() OR NOT EXISTS (
+       SELECT 1 FROM public.staff_sessions ss
+         JOIN public.sessions se ON se.id = ss.session_id AND se.user_id = ss.user_id
+                                 AND se.mfa AND se.expires_at > pg_catalog.clock_timestamp()
+        WHERE ss.id = p_staff_session
+          AND ss.organizer_id = org
+          AND ss.user_id = usr
+          AND ss.session_id = p_login_session
+          AND ss.ended_at IS NULL
+          AND ss.expires_at > pg_catalog.clock_timestamp()) THEN
     RAISE EXCEPTION 'staff_act: not allowed' USING ERRCODE = '42501';
   END IF;
-  PERFORM 1 FROM public.organizers WHERE id = org FOR UPDATE;
   IF p_kind = 'suspend' AND public.organizer_suspended(org) THEN
     RAISE EXCEPTION 'already_suspended' USING ERRCODE = '55000';
   END IF;

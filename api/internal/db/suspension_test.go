@@ -308,63 +308,110 @@ func TestSuspendedScopeIsReadOnly(t *testing.T) {
 	}
 }
 
-// A member write that locked the organizer row first runs to the end; the
-// suspension waits for it, and every transaction after is read-only.
-func TestSuspendWaitsForOrganizerLock(t *testing.T) {
-	f := newStaffFixture(t)
-	ctx := context.Background()
-	member, err := f.pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = member.Rollback(ctx) }()
-	if _, err := member.Exec(ctx, `select set_config('app.user_id', $1, true), set_config('app.organizer_id', $2, true)`, f.ua.String(), f.oa.String()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := member.Exec(ctx, `select id from organizers where id = $1 for no key update`, f.oa); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := staffAct(ctx, f.pool, f.staff, f.staffSessA, f.login, "suspend", uuid.NullUUID{}, takedownReason)
-		done <- err
-	}()
+// waitForLockWait returns once some backend of this test's database waits
+// on a lock, and fails the test after ten seconds.
+func waitForLockWait(t *testing.T, owner *pgxpool.Pool) {
+	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		var waiting int
-		if err := f.owner.QueryRow(ctx, `select count(*) from pg_locks where not granted
+		if err := owner.QueryRow(context.Background(), `select count(*) from pg_locks where not granted
 			and pid in (select pid from pg_stat_activity where datname = current_database())`).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting > 0 {
-			break
+			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("staff_act never waited on the organizer lock")
+			t.Fatal("nothing waited on a lock")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	select {
-	case err := <-done:
-		t.Fatalf("suspend finished while a member held the organizer: %v", err)
-	default:
+}
+
+// Plan edge case 5, through the real WithPrincipal: a member write already
+// in flight finishes before the suspension, and one that starts while the
+// suspension holds the organizer waits for it and is then read-only.
+func TestSuspendWaitsForOrganizerLock(t *testing.T) {
+	f := newStaffFixture(t)
+	ctx := context.Background()
+	rename := func(name string) func(pgx.Tx, string) error {
+		return func(tx pgx.Tx, _ string) error {
+			_, err := tx.Exec(ctx, `update events set name = $1 where organizer_id = $2`, name, f.oa)
+			return err
+		}
 	}
-	if _, err := member.Exec(ctx, `update events set name = 'Renamed' where organizer_id = $1`, f.oa); err != nil {
-		t.Fatalf("member write before the suspension: %v", err)
-	}
-	if err := member.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-done; err != nil {
-		t.Fatalf("suspend after the member committed: %v", err)
-	}
-	err = db.WithOrganizer(ctx, f.pool, f.ua, f.oa, func(tx pgx.Tx, _ string) error {
-		_, err := tx.Exec(ctx, `update events set name = 'Again' where organizer_id = $1`, f.oa)
-		return err
+
+	t.Run("in-flight write goes first", func(t *testing.T) {
+		wrote, release, memberDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+		defer func() {
+			select {
+			case <-release:
+			default:
+				close(release)
+			}
+		}()
+		go func() {
+			memberDone <- db.WithOrganizer(ctx, f.pool, f.ua, f.oa, func(tx pgx.Tx, role string) error {
+				err := rename("Renamed")(tx, role)
+				close(wrote)
+				<-release
+				return err
+			})
+		}()
+		select {
+		case <-wrote:
+		case err := <-memberDone:
+			t.Fatalf("member write: %v", err)
+		}
+		suspended := make(chan error, 1)
+		go func() {
+			_, err := staffAct(ctx, f.pool, f.staff, f.staffSessA, f.login, "suspend", uuid.NullUUID{}, takedownReason)
+			suspended <- err
+		}()
+		waitForLockWait(t, f.owner)
+		select {
+		case err := <-suspended:
+			t.Fatalf("suspend finished while a member write was in flight: %v", err)
+		default:
+		}
+		close(release)
+		if err := <-memberDone; err != nil {
+			t.Fatalf("member write that started first: %v", err)
+		}
+		if err := <-suspended; err != nil {
+			t.Fatalf("suspend after the member committed: %v", err)
+		}
 	})
-	if code, _ := pgCode(err); code != "25006" {
-		t.Fatalf("write after the suspension: %v, want 25006", err)
-	}
+	f.act(t, "lift", uuid.NullUUID{})
+
+	t.Run("write started during the suspend waits, then is read-only", func(t *testing.T) {
+		staffTx, err := f.pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = staffTx.Rollback(ctx) }()
+		if _, err := staffTx.Exec(ctx, `select set_config('app.user_id', $1, true)`, f.staff.String()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := staffTx.Exec(ctx, `select staff_act($1, $2, 'suspend', null, $3)`, f.staffSessA, f.login, takedownReason); err != nil {
+			t.Fatal(err)
+		}
+		memberDone := make(chan error, 1)
+		go func() { memberDone <- db.WithOrganizer(ctx, f.pool, f.ua, f.oa, rename("Again")) }()
+		waitForLockWait(t, f.owner)
+		select {
+		case err := <-memberDone:
+			t.Fatalf("member write ran while the suspend held the organizer: %v", err)
+		default:
+		}
+		if err := staffTx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if code, _ := pgCode(<-memberDone); code != "25006" {
+			t.Fatalf("member write after the suspend committed: %v, want 25006", code)
+		}
+	})
 }
 
 // Spec test 19: the trigger refuses new checkouts and orders whatever the Go
@@ -468,6 +515,53 @@ func TestClaimStaffRefundOnce(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Errorf("ts_system asking organizer_suspended: %v", err)
+	}
+}
+
+// A double submit: the second claim waits for the first transaction, then
+// finds the action finished. Exactly one wins.
+func TestClaimStaffRefundRace(t *testing.T) {
+	f := newStaffFixture(t)
+	ctx := context.Background()
+	f.act(t, "suspend", uuid.NullUUID{})
+	action := f.act(t, "refund_event", f.eventOf(t, f.oa))
+	claimed, release, firstDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	go func() {
+		firstDone <- system.Run(ctx, f.pool, f.oa, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `select claim_staff_refund($1)`, action); err != nil {
+				return err
+			}
+			close(claimed)
+			<-release
+			_, err := tx.Exec(ctx, `select finish_staff_refund($1, '{}')`, action)
+			return err
+		})
+	}()
+	<-claimed
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- system.Run(ctx, f.pool, f.oa, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `select claim_staff_refund($1)`, action); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `select finish_staff_refund($1, '{}')`, action)
+			return err
+		})
+	}()
+	waitForLockWait(t, f.owner)
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+	if _, msg := pgCode(<-secondDone); msg != "already_done" {
+		t.Fatalf("second claim: %q, want already_done", msg)
 	}
 }
 
