@@ -86,3 +86,26 @@ func WithPrincipal(ctx context.Context, pool *pgxpool.Pool, p Principal, org uui
 		return fn(tx, role)
 	})
 }
+
+// WithStaff runs fn in a READ ONLY transaction scoped to org through the
+// user's live staff session. It returns ErrNotMember unless the database
+// agrees: app_organizer() names org only while the staff session is live,
+// the user's, on org, and the transaction is read-only, re-checked on every
+// statement. This is the only code that sets app.staff_session_id.
+func WithStaff(ctx context.Context, pool *pgxpool.Pool, user, staffSession, org uuid.UUID, fn func(tx pgx.Tx) error) error {
+	return pgx.BeginTxFunc(ctx, pool, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`select set_config('app.user_id', $1, true), set_config('app.organizer_id', $2, true), set_config('app.staff_session_id', $3, true)`,
+			user.String(), org.String(), staffSession.String()); err != nil {
+			return err
+		}
+		var scoped uuid.NullUUID
+		if err := tx.QueryRow(ctx, `select app_organizer()`).Scan(&scoped); err != nil {
+			return err
+		}
+		if !scoped.Valid || scoped.UUID != org {
+			return ErrNotMember
+		}
+		return fn(tx)
+	})
+}
