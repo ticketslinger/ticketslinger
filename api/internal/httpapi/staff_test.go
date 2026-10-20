@@ -319,3 +319,42 @@ func TestStaffModeNeedsAnAlertAddress(t *testing.T) {
 		t.Fatal("the challenge was spent")
 	}
 }
+
+// Final review Minor 3: a staff member gets 10 passkey challenges a minute
+// and 10 answers, then 429 rate_limited.
+func TestStaffPasskeyLimits(t *testing.T) {
+	h := newStaffHarness(t, "alerts@example.com")
+	h.createOrganizer(h.signupWithMFA("owner@example.com"), "acme")
+	staffTok := func(email string) string {
+		_, tok := h.signupWithPasskey(email)
+		grantStaff(t, h.owner, email)
+		return tok
+	}
+	tok := staffTok("staff@example.com")
+	limited := func(name, path, body string, want int) {
+		t.Helper()
+		for i := 1; i <= 10; i++ {
+			if res := h.do(tok, "POST", path, body); res.StatusCode != want {
+				t.Fatalf("%s %d: got %d, want %d", name, i, res.StatusCode, want)
+			}
+		}
+		res := h.do(tok, "POST", path, body)
+		if got := h.json(res); res.StatusCode != 429 || errCode(got) != "rate_limited" {
+			t.Fatalf("%s 11: got %d %v, want 429 rate_limited", name, res.StatusCode, got)
+		}
+	}
+	limited("begin", "/v1/staff/sessions/challenge", "", 200)
+	limited("verify", "/v1/staff/sessions", startBody(uuid.NewString(), "", goodReason), 403)
+	// 20 answers a minute from one address, whoever sends them: the first
+	// staff member's 11 count, so a second gets 9.
+	second := staffTok("second@example.com")
+	for i := 1; i <= 9; i++ {
+		if res := h.do(second, "POST", "/v1/staff/sessions", startBody(uuid.NewString(), "", goodReason)); res.StatusCode != 403 {
+			t.Fatalf("second staff member's answer %d: got %d, want 403", i, res.StatusCode)
+		}
+	}
+	res := h.do(second, "POST", "/v1/staff/sessions", startBody(uuid.NewString(), "", goodReason))
+	if got := h.json(res); res.StatusCode != 429 || errCode(got) != "rate_limited" {
+		t.Fatalf("the address's 21st answer: got %d %v, want 429 rate_limited", res.StatusCode, got)
+	}
+}
