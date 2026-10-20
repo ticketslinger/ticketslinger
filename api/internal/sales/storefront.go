@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
+	"github.com/ticketslinger/ticketslinger/api/internal/pricing"
 	"github.com/ticketslinger/ticketslinger/api/internal/system"
 )
 
@@ -39,7 +40,8 @@ type StorefrontTicketType struct {
 	MinPerOrder, MaxPerOrder, Remaining int
 	OnSale                              bool
 	SalesStart, SalesEnd                *time.Time
-	Unlocked                            bool // a hidden type the code shows
+	Unlocked                            bool          // a hidden type the code shows
+	Shown                               pricing.Shown // one ticket as the buyer pays for it, before any code
 }
 
 type StorefrontPromo struct {
@@ -104,14 +106,18 @@ func (s *Service) StorefrontEvent(ctx context.Context, org, event, code string) 
 		}
 		rows, _ := tx.Query(ctx, `select t.id, t.name, t.description, t.price_cents, t.min_per_order, t.max_per_order, coalesce(a.remaining, 0),
 				$3 and a.ticket_type_id is not null and coalesce(t.sales_start <= statement_timestamp(), true) and coalesce(statement_timestamp() < t.sales_end, true),
-				t.sales_start, t.sales_end, t.hidden
-			from ticket_types t left join event_availability($1) a on a.ticket_type_id = t.id
+				t.sales_start, t.sales_end, t.hidden, coalesce(t.tax_rate_bp, e.tax_rate_bp), coalesce(t.prices_include_tax, e.prices_include_tax)
+			from ticket_types t join events e on e.id = t.event_id left join event_availability($1) a on a.ticket_type_id = t.id
 			where t.event_id = $1 and (not t.hidden or exists (select 1 from promo_unlocks u where u.promo_code_id = $2 and u.ticket_type_id = t.id))
 			order by t.position, t.id`, eventID, promoID, running)
 		var t StorefrontTicketType
+		var taxBP int
+		var inclusive bool
 		var visible []uuid.UUID
 		if _, err := pgx.ForEachRow(rows, []any{&t.ID, &t.Name, &t.Description, &t.PriceCents, &t.MinPerOrder, &t.MaxPerOrder, &t.Remaining,
-			&t.OnSale, &t.SalesStart, &t.SalesEnd, &t.Unlocked}, func() error {
+			&t.OnSale, &t.SalesStart, &t.SalesEnd, &t.Unlocked, &taxBP, &inclusive}, func() error {
+			t.Shown = pricing.ShownPrice(pricing.Line{TicketTypeID: t.ID, Quantity: 1, PriceCents: t.PriceCents,
+				TaxRateBP: taxBP, PricesIncludeTax: inclusive}, e.FeeMode, s.PlatformFee())
 			out.TicketTypes = append(out.TicketTypes, t)
 			visible = append(visible, t.ID)
 			t = StorefrontTicketType{} // fresh pointers for the next row's times
