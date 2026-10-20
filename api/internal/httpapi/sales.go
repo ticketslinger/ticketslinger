@@ -518,6 +518,7 @@ func (s *server) GetStorefrontEvent(ctx context.Context, req GetStorefrontEventR
 	out.Event.FeeMode, out.Event.State = StorefrontEventEventFeeMode(e.FeeMode), StorefrontEventEventState(e.State)
 	for _, t := range ev.TicketTypes {
 		out.TicketTypes = append(out.TicketTypes, StorefrontTicketType{Id: t.ID, Name: t.Name, Description: t.Description, PriceCents: t.PriceCents,
+			AllInCents: t.Shown.AllInCents, AllInFeeCents: t.Shown.FeeCents, AllInTaxCents: t.Shown.TaxCents,
 			MinPerOrder: t.MinPerOrder, MaxPerOrder: t.MaxPerOrder, Remaining: t.Remaining, OnSale: t.OnSale,
 			SalesStart: nullOf(t.SalesStart), SalesEnd: nullOf(t.SalesEnd), Unlocked: t.Unlocked})
 	}
@@ -561,9 +562,10 @@ func toCheckout(c sales.Checkout) Checkout {
 	}
 	q := c.Quote
 	out.Quote = Quote{Tickets: []QuoteTicket{}, SubtotalCents: q.SubtotalCents, DiscountCents: q.DiscountCents, TaxCents: q.TaxCents,
-		FeeCents: q.FeeCents, TotalCents: q.TotalCents, FeeMode: QuoteFeeMode(q.FeeMode), IncludedTaxCents: q.IncludedTaxCents}
+		FeeCents: q.FeeCents, TotalCents: q.TotalCents, FeeMode: QuoteFeeMode(q.FeeMode), IncludedTaxCents: q.IncludedTaxCents,
+		AllInDiscountCents: q.AllInDiscountCents}
 	for _, t := range q.Tickets {
-		out.Quote.Tickets = append(out.Quote.Tickets, QuoteTicket{TicketTypeId: t.TicketTypeID, PriceCents: t.PriceCents, DiscountCents: t.DiscountCents,
+		out.Quote.Tickets = append(out.Quote.Tickets, QuoteTicket{TicketTypeId: t.TicketTypeID, PriceCents: t.PriceCents, AllInCents: t.AllInCents, DiscountCents: t.DiscountCents,
 			TaxCents: t.TaxCents, FeeCents: t.FeeCents, ChargeCents: t.ChargeCents, TaxIncluded: t.TaxIncluded})
 	}
 	return out
@@ -635,7 +637,7 @@ func (s *server) PayCheckout(ctx context.Context, req PayCheckoutRequestObject) 
 	if err := allow(ctx, s.payLimit); err != nil {
 		return nil, err
 	}
-	d := sales.Details{Email: string(req.Body.Email)}
+	d := sales.Details{Email: string(req.Body.Email), ExpectedTotalCents: req.Body.ExpectedTotalCents}
 	if req.Body.Attendees != nil {
 		d.Attendees = *req.Body.Attendees
 	}

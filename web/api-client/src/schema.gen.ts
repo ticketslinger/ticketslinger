@@ -1059,7 +1059,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Whoever has the token. Saves the buyer's email, names and answers, and starts paying: the first call gives the hold 5 more minutes. Calling it again (say, with a corrected email) updates the order and returns the same payment, never a second one. kind stripe or test: confirm the payment with client_secret (Stripe.js, with stripeAccount set to account). kind free: the order is already paid, and order_url is the buyer's link to it. 410 checkout_expired once the hold has run out; 410 event_unavailable while the organizer is suspended (a payment started as it was suspended is stopped); 409 checkout_completed when it's already paid (error.order_code says which order); 409 event_cancelled once the organizer has cancelled the event (a payment started as it was cancelled is stopped). 422 bad_email (field email); 422 bad_attendee when there are more names than tickets or one is over 120 characters (field attendees); 422 missing_answer for a required question left blank, and 422 bad_answer for an answer that isn't one of a select's options, a checkbox that isn't true or false, an answer over 1,000 characters, a question that isn't asked of that ticket, or a ticket_index out of range. Both name the answer as field answers.<question_id>.<ticket_index>, with -1 for questions asked once per order. A required checkbox has to be true. 422 below_minimum_charge when a paid order comes to less than $0.50. 409 payments_not_ready when the organizer's Stripe account can't take cards right now; 409 price_changed if the order's saved total no longer matches its tickets (start a new checkout); 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached or had a problem of its own (the hold stays, so try again); 503 payments_refused when Stripe turned the payment down (the hold stays, but trying again won't help); 503 try_again with Retry-After: 1 when capacity is being reshuffled at that moment. 20 calls a minute per client address, then 429 rate_limited. Its response carries the payment's client secret, so we never keep it: a retry with the same key runs again and gets the same payment back, and a duplicate sent while the first is running gets 409 idempotency_in_progress. */
+        /** @description Whoever has the token. Saves the buyer's email, names and answers, and starts paying: the first call gives the hold 5 more minutes. Calling it again (say, with a corrected email) updates the order and returns the same payment, never a second one. kind stripe or test: confirm the payment with client_secret (Stripe.js, with stripeAccount set to account). kind free: the order is already paid, and order_url is the buyer's link to it. 410 checkout_expired once the hold has run out; 410 event_unavailable while the organizer is suspended (a payment started as it was suspended is stopped); 409 checkout_completed when it's already paid (error.order_code says which order); 409 event_cancelled once the organizer has cancelled the event (a payment started as it was cancelled is stopped). 422 bad_email (field email); 422 bad_attendee when there are more names than tickets or one is over 120 characters (field attendees); 422 missing_answer for a required question left blank, and 422 bad_answer for an answer that isn't one of a select's options, a checkbox that isn't true or false, an answer over 1,000 characters, a question that isn't asked of that ticket, or a ticket_index out of range. Both name the answer as field answers.<question_id>.<ticket_index>, with -1 for questions asked once per order. A required checkbox has to be true. 422 below_minimum_charge when a paid order comes to less than $0.50. 409 payments_not_ready when the organizer's Stripe account can't take cards right now; 409 price_changed if the order's saved total no longer matches its tickets, or expected_total_cents isn't the total (start a new checkout); 422 bad_total when expected_total_cents is negative (field expected_total_cents); 503 payments_not_configured when the server has no payment provider; 503 payments_unavailable when Stripe can't be reached or had a problem of its own (the hold stays, so try again); 503 payments_refused when Stripe turned the payment down (the hold stays, but trying again won't help); 503 try_again with Retry-After: 1 when capacity is being reshuffled at that moment. 20 calls a minute per client address, then 429 rate_limited. Its response carries the payment's client secret, so we never keep it: a retry with the same key runs again and gets the same payment back, and a duplicate sent while the first is running gets 409 idempotency_in_progress. */
         post: operations["payCheckout"];
         delete?: never;
         options?: never;
@@ -1184,8 +1184,26 @@ export interface components {
             id: string;
             name: string;
             description: string;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description The organizer's price, before our service fee and any tax on top. Don't show it to buyers on its own: show all_in_cents.
+             */
             price_cents: number;
+            /**
+             * Format: int64
+             * @description What one ticket costs the buyer: our service fee and tax included. Show this, as the most prominent price, wherever you show a price.
+             */
+            all_in_cents: number;
+            /**
+             * Format: int64
+             * @description The service fee inside all_in_cents. 0 when the organizer absorbs it.
+             */
+            all_in_fee_cents: number;
+            /**
+             * Format: int64
+             * @description The tax inside all_in_cents.
+             */
+            all_in_tax_cents: number;
             min_per_order: number;
             max_per_order: number;
             remaining: number;
@@ -1236,8 +1254,16 @@ export interface components {
         QuoteTicket: {
             /** Format: uuid */
             ticket_type_id: string;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description The organizer's price, before our service fee and any tax on top. Don't show it to buyers on its own: show all_in_cents.
+             */
             price_cents: number;
+            /**
+             * Format: int64
+             * @description This ticket's all-in price before any code, as the event page showed it.
+             */
+            all_in_cents: number;
             /** Format: int64 */
             discount_cents: number;
             /** Format: int64 */
@@ -1262,11 +1288,16 @@ export interface components {
             tax_cents: number;
             /**
              * Format: int64
-             * @description Our service fee. The buyer pays it on top when fee_mode is pass; with absorb it comes out of the organizer's price.
+             * @description Our service fee. With pass the buyer pays it and it's inside every all-in price; with absorb it comes out of the organizer's price.
              */
             fee_cents: number;
             /** Format: int64 */
             total_cents: number;
+            /**
+             * Format: int64
+             * @description What the code took off the all-in prices: Σ tickets[].all_in_cents − total_cents. 0 without a code.
+             */
+            all_in_discount_cents: number;
             /**
              * Format: int64
              * @description Tax already inside the prices, for an "Includes $X tax" note.
@@ -1326,6 +1357,11 @@ export interface components {
             /** @description Optional names, one per ticket in the same order as ticket_index. */
             attendees?: string[];
             answers?: components["schemas"]["CheckoutAnswer"][];
+            /**
+             * Format: int64
+             * @description The total you showed the buyer. When it doesn't match, 409 price_changed and nothing is charged. Send it.
+             */
+            expected_total_cents?: number;
         };
         Order: {
             code: string;
@@ -2031,7 +2067,7 @@ export interface components {
              */
             ends_at?: string;
             /**
-             * @description pass (the default) adds our fee to the buyer's total; absorb takes it out of your price.
+             * @description pass (the default): buyers see one price with our fee in it. absorb: our fee comes out of your price.
              * @enum {string}
              */
             fee_mode?: "absorb" | "pass";
@@ -2243,8 +2279,16 @@ export interface components {
             event_id: string;
             name: string;
             description: string;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description The organizer's price, before our service fee and any tax on top. Don't show it to buyers on its own: show all_in_cents.
+             */
             price_cents: number;
+            /**
+             * Format: int64
+             * @description What buyers see for this ticket type with the event's fee mode and tax.
+             */
+            all_in_cents: number;
             /** @description null means the event's rate. */
             tax_rate_bp: number | null;
             /** @description null means the event's setting. */

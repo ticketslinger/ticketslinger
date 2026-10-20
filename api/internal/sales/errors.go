@@ -56,7 +56,8 @@ var errPaymentsNotReady error = catalogue.ErrConflict{Code: "payments_not_ready"
 var errEventCancelled error = catalogue.ErrConflict{Code: "event_cancelled",
 	Message: "This event has been cancelled, so it isn't selling tickets any more. If you'd already paid, we're refunding you in full."}
 
-// errPriceChanged: the order's stored totals no longer match its tickets.
+// errPriceChanged: the order's stored totals no longer match its tickets,
+// or the buyer was shown a different total.
 var errPriceChanged error = catalogue.ErrConflict{Code: "price_changed",
 	Message: "The price of these tickets changed after you started paying, so we've stopped here. Start a new checkout to see the new total."}
 
@@ -74,6 +75,7 @@ var (
 	errPromoUsedUp  = invalid("promo_used_up", "promo_code", "That code has been used as many times as it allows.")
 	errPromoNotHere = invalid("promo_not_applicable", "promo_code", "That code doesn't take anything off these tickets. Remove it, or pick the tickets it's for.")
 	errBadEmail     = invalid("bad_email", "email", "That email address doesn't look right. Your tickets go there, so check it.")
+	errBadTotal     = invalid("bad_total", "expected_total_cents", "expected_total_cents can't be negative. Send the total you showed the buyer, in cents.")
 	errBelowMinimum = invalid("below_minimum_charge", "", "Card payments start at $0.50, and this order comes to less. Add a ticket or drop the code.")
 	errAttendees    = invalid("bad_attendee", "attendees", "Give at most one name per ticket, each up to 120 characters.")
 )

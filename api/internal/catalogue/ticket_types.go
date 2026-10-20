@@ -32,6 +32,11 @@ type TicketType struct {
 	Position         int        `json:"position"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
+	// What the buyer's price is worked out with: the event's fee mode and the
+	// tax that applies, this type's override or the event's. Not audited.
+	FeeMode             string `json:"-"`
+	ResolvedTaxBP       int    `json:"-"`
+	ResolvedIncludesTax bool   `json:"-"`
 }
 
 // TicketTypeInput is a new ticket type. A nil MinPerOrder or MaxPerOrder
@@ -65,13 +70,19 @@ type TicketTypePatch struct {
 	Hidden            *bool
 }
 
+// ttCols ends with the event's terms as scalar subqueries, which work in
+// RETURNING as well as SELECT.
 const ttCols = `id, event_id, name, description, price_cents, tax_rate_bp, prices_include_tax, sales_start, sales_end,
-	min_per_order, max_per_order, hidden, position, created_at, updated_at`
+	min_per_order, max_per_order, hidden, position, created_at, updated_at,
+	(select e.fee_mode from events e where e.id = ticket_types.event_id),
+	coalesce(ticket_types.tax_rate_bp, (select e.tax_rate_bp from events e where e.id = ticket_types.event_id)),
+	coalesce(ticket_types.prices_include_tax, (select e.prices_include_tax from events e where e.id = ticket_types.event_id))`
 
 func scanTT(row pgx.Row) (TicketType, error) {
 	var t TicketType
 	err := row.Scan(&t.ID, &t.EventID, &t.Name, &t.Description, &t.PriceCents, &t.TaxRateBP, &t.PricesIncludeTax, &t.SalesStart, &t.SalesEnd,
-		&t.MinPerOrder, &t.MaxPerOrder, &t.Hidden, &t.Position, &t.CreatedAt, &t.UpdatedAt)
+		&t.MinPerOrder, &t.MaxPerOrder, &t.Hidden, &t.Position, &t.CreatedAt, &t.UpdatedAt,
+		&t.FeeMode, &t.ResolvedTaxBP, &t.ResolvedIncludesTax)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TicketType{}, ErrNotFound
 	}

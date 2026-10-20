@@ -312,3 +312,64 @@ func TestPaysAreRateLimitedPerAddress(t *testing.T) {
 	}
 	s.must(s.send("198.51.100.4", "", "POST", "/v1/checkouts/"+token+"/pay", `{"email":"buyer@example.com"}`), 200)
 }
+
+// The event page's price is the all-in one: $25 with our 2% + 50¢ passed on
+// and no tax is $26.00, a dollar of it fee.
+func TestStorefrontCarriesAllIn(t *testing.T) {
+	s := newShop(t, nil)
+	tt := s.must(s.send("", "", "GET", "/v1/storefront/acme/gala", ""), 200)["ticket_types"].([]any)[0].(map[string]any)
+	if tt["all_in_cents"] != float64(2600) || tt["all_in_fee_cents"] != float64(100) || tt["all_in_tax_cents"] != float64(0) {
+		t.Fatalf("storefront ticket = %v, want 2600 all in, 100 fee, 0 tax", tt)
+	}
+	c := s.must(s.send("", "", "POST", "/v1/checkouts", s.cart(s.f["ticketType"], 2, `,"promo_code":"EARLY"`)), 201)
+	q := c["quote"].(map[string]any)
+	if q["tickets"].([]any)[0].(map[string]any)["all_in_cents"] != float64(2600) || 2*2600-q["all_in_discount_cents"].(float64) != q["total_cents"] {
+		t.Fatalf("quote = %v, want 2 × 2600 less all_in_discount_cents to be the total", q)
+	}
+}
+
+// The organizer sees what buyers see, with the event's fee mode and tax, and
+// nothing added on a server that takes no fee. Create, update and read all
+// carry it.
+func TestTicketTypeCarriesAllIn(t *testing.T) {
+	s := newShop(t, nil)
+	base := "/v1/organizers/acme/events/"
+	if tt := s.must(s.do(s.owner, "GET", base+s.f["event"]+"/ticket-types/"+s.f["ticketType"], ""), 200); tt["all_in_cents"] != float64(2600) {
+		t.Fatalf("pass: %v, want all_in_cents 2600", tt)
+	}
+	absorb := s.must(s.do(s.owner, "POST", "/v1/organizers/acme/events", `{"slug":"fair","name":"Fair","timezone":"Europe/London",
+		"starts_at":"2027-03-01T19:00:00Z","ends_at":"2027-03-01T22:00:00Z","fee_mode":"absorb","tax_rate_bp":825}`), 201)["id"].(string)
+	tt := s.must(s.do(s.owner, "POST", base+absorb+"/ticket-types", `{"name":"General","price_cents":2500}`), 201)
+	if tt["all_in_cents"] != float64(2706) {
+		t.Fatalf("absorb, 8.25%% on top: %v, want all_in_cents 2706", tt)
+	}
+	tt = s.must(s.do(s.owner, "PATCH", base+absorb+"/ticket-types/"+tt["id"].(string), `{"prices_include_tax":true}`), 200)
+	if tt["all_in_cents"] != float64(2500) {
+		t.Fatalf("absorb, tax inclusive: %v, want all_in_cents 2500", tt)
+	}
+
+	d := newShopFor(t, nil, payments.NewFake(), func(c *config.Config) { c.PaymentsMode = "direct" })
+	if tt := d.must(d.do(d.owner, "GET", base+d.f["event"]+"/ticket-types/"+d.f["ticketType"], ""), 200); tt["all_in_cents"] != float64(2500) {
+		t.Fatalf("direct: %v, want all_in_cents 2500", tt)
+	}
+	if st := d.must(d.send("", "", "GET", "/v1/storefront/acme/gala", ""), 200)["ticket_types"].([]any)[0].(map[string]any); st["all_in_cents"] != float64(2500) {
+		t.Fatalf("direct storefront: %v, want all_in_cents 2500", st)
+	}
+}
+
+// A total the buyer wasn't shown is refused before anything is charged.
+func TestPayCheckoutExpectedTotal(t *testing.T) {
+	s := newShop(t, nil)
+	token := s.must(s.send("", "", "POST", "/v1/checkouts", s.cart(s.f["ticketType"], 2, "")), 201)["token"].(string)
+	res := s.send("", "", "POST", "/v1/checkouts/"+token+"/pay", `{"email":"buyer@example.com","expected_total_cents":5199}`)
+	if res.StatusCode != 409 || s.errorCode(res) != "price_changed" {
+		t.Fatalf("wrong total: %d, want 409 price_changed", res.StatusCode)
+	}
+	res = s.send("", "", "POST", "/v1/checkouts/"+token+"/pay", `{"email":"buyer@example.com","expected_total_cents":-1}`)
+	if res.StatusCode != 422 || errField(s.json(res)) != "expected_total_cents" {
+		t.Fatalf("negative total: %d, want 422 on expected_total_cents", res.StatusCode)
+	}
+	if pay := s.must(s.send("", "", "POST", "/v1/checkouts/"+token+"/pay", `{"email":"buyer@example.com","expected_total_cents":5200}`), 200); pay["amount_cents"] != float64(5200) {
+		t.Fatalf("pay = %v", pay)
+	}
+}

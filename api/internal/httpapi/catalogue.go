@@ -10,6 +10,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
 	"github.com/ticketslinger/ticketslinger/api/internal/organizers"
+	"github.com/ticketslinger/ticketslinger/api/internal/pricing"
 )
 
 var (
@@ -190,8 +191,11 @@ func nullOf[T any](p *T) nullable.Nullable[T] {
 	return nullable.NewNullableWithValue(*p)
 }
 
-func toTicketType(t catalogue.TicketType) TicketType {
-	return TicketType{
+// toTicketType prices all_in_cents with fee, the fee the checkout charges.
+func toTicketType(t catalogue.TicketType, fee pricing.Fee) TicketType {
+	shown := pricing.ShownPrice(pricing.Line{TicketTypeID: t.ID, Quantity: 1, PriceCents: t.PriceCents,
+		TaxRateBP: t.ResolvedTaxBP, PricesIncludeTax: t.ResolvedIncludesTax}, t.FeeMode, fee)
+	return TicketType{AllInCents: shown.AllInCents,
 		Id: t.ID, EventId: t.EventID, Name: t.Name, Description: t.Description, PriceCents: t.PriceCents, TaxRateBp: nullOf(t.TaxRateBP),
 		PricesIncludeTax: nullOf(t.PricesIncludeTax), SalesStart: nullOf(t.SalesStart), SalesEnd: nullOf(t.SalesEnd), MinPerOrder: t.MinPerOrder,
 		MaxPerOrder: t.MaxPerOrder, Hidden: t.Hidden, Position: t.Position, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
@@ -203,7 +207,7 @@ func (s *server) ListTicketTypes(ctx context.Context, req ListTicketTypesRequest
 	err := s.inOrganizer(ctx, req.Organizer, catalogueRead, func(_ organizers.Organizer, tx pgx.Tx) error {
 		list, err := catalogue.ListTicketTypes(ctx, tx, req.Event)
 		for _, t := range list {
-			out = append(out, toTicketType(t))
+			out = append(out, toTicketType(t, s.Sales.PlatformFee()))
 		}
 		return err
 	})
@@ -234,7 +238,7 @@ func (s *server) CreateTicketType(ctx context.Context, req CreateTicketTypeReque
 		}
 		in.PriceCents = *b.PriceCents
 		t, err := catalogue.CreateTicketType(ctx, tx, org.ID, req.Event, actorFrom(ctx), in)
-		out = CreateTicketType201JSONResponse(toTicketType(t))
+		out = CreateTicketType201JSONResponse(toTicketType(t, s.Sales.PlatformFee()))
 		return err
 	})
 	if err != nil {
@@ -247,7 +251,7 @@ func (s *server) GetTicketType(ctx context.Context, req GetTicketTypeRequestObje
 	var out GetTicketType200JSONResponse
 	err := s.inOrganizer(ctx, req.Organizer, catalogueRead, func(_ organizers.Organizer, tx pgx.Tx) error {
 		t, err := catalogue.GetTicketType(ctx, tx, req.Event, req.TicketType)
-		out = GetTicketType200JSONResponse(toTicketType(t))
+		out = GetTicketType200JSONResponse(toTicketType(t, s.Sales.PlatformFee()))
 		return err
 	})
 	if err != nil {
@@ -264,7 +268,7 @@ func (s *server) UpdateTicketType(ctx context.Context, req UpdateTicketTypeReque
 	var out UpdateTicketType200JSONResponse
 	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
 		t, err := catalogue.UpdateTicketType(ctx, tx, org.ID, req.Event, req.TicketType, actorFrom(ctx), p)
-		out = UpdateTicketType200JSONResponse(toTicketType(t))
+		out = UpdateTicketType200JSONResponse(toTicketType(t, s.Sales.PlatformFee()))
 		return err
 	})
 	if err != nil {
@@ -562,7 +566,7 @@ func (s *server) ReorderTicketTypes(ctx context.Context, req ReorderTicketTypesR
 	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
 		list, err := catalogue.ReorderTicketTypes(ctx, tx, org.ID, req.Event, actorFrom(ctx), req.Body.Ids)
 		for _, t := range list {
-			out = append(out, toTicketType(t))
+			out = append(out, toTicketType(t, s.Sales.PlatformFee()))
 		}
 		return err
 	})

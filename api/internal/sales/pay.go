@@ -37,6 +37,9 @@ type Details struct {
 	Email     string   `json:"email"`
 	Attendees []string `json:"attendees"` // optional names, one per ticket in item order
 	Answers   []Answer `json:"answers"`
+	// ExpectedTotalCents is the total the buyer was shown; nil skips the
+	// check. Never stored.
+	ExpectedTotalCents *int64 `json:"-"`
 }
 
 type PaymentStart struct {
@@ -72,6 +75,9 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 	if !goodEmail(d.Email) {
 		return PaymentStart{}, errBadEmail
 	}
+	if d.ExpectedTotalCents != nil && *d.ExpectedTotalCents < 0 {
+		return PaymentStart{}, errBadTotal
+	}
 	org, err := s.checkoutOrg(ctx, token)
 	if err != nil {
 		return PaymentStart{}, err
@@ -102,6 +108,10 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 		items, q, err := s.cart(ctx, tx, c.id, c.event, c.promo, c.feeMode)
 		if err != nil {
 			return err
+		}
+		// The buyer saw a different total: charge nothing, change nothing.
+		if d.ExpectedTotalCents != nil && *d.ExpectedTotalCents != q.TotalCents {
+			return errPriceChanged
 		}
 		clean, err := checkDetails(ctx, tx, c.event, items, d)
 		if err != nil {
@@ -307,7 +317,7 @@ func (s *Service) cart(ctx context.Context, tx pgx.Tx, checkout, event uuid.UUID
 	if err != nil {
 		return nil, pricing.Quote{}, err
 	}
-	return items, pricing.Compute(lines(tts, items, p), p.pricing(), feeMode, s.fee()), nil
+	return items, pricing.Compute(lines(tts, items, p), p.pricing(), feeMode, s.PlatformFee()), nil
 }
 
 type question struct {
