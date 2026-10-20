@@ -1,6 +1,7 @@
 package db_test
 
 import (
+	"bytes"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -96,6 +97,27 @@ func TestOnlyScopeSetsTheGUCs(t *testing.T) {
 		if err != nil || !gucSet.Match(src) {
 			t.Errorf("%s is allowed to set the GUCs but no longer does (%v): drop it from the list", rel, err)
 		}
+	}
+
+	// Spec test 15: the staff scope GUC is narrower still. Only WithStaff
+	// names it; the other allowed files may set app.* but never this one.
+	staffGUC := []byte("app.staff_session_id")
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return err
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		if inScope := filepath.ToSlash(rel) == "internal/db/scope.go"; bytes.Contains(src, staffGUC) != inScope {
+			t.Errorf("%s: names app.staff_session_id %v, want only internal/db/scope.go to", rel, !inScope)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	// The walk catches both, anywhere else.

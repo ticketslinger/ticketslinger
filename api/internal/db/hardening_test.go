@@ -93,6 +93,21 @@ func TestCatalogHardening(t *testing.T) {
 	if rows.Err() != nil || n == 0 {
 		t.Fatalf("definer functions: %d %v", n, rows.Err())
 	}
+
+	// Staff mode's functions are all definers (so the loop above covers
+	// them), ts_app runs all but the scope function, which only
+	// app_organizer() calls, and neither sale role runs any.
+	for _, fn := range []string{"app_staff_organizer()", "app_is_staff()", "start_staff_session(uuid,citext,text,inet,text)",
+		"end_staff_session(uuid,text,text)", "log_staff_access(uuid,text,text)", "close_expired_staff_sessions(integer)",
+		"staff_search_organizers(text)", "app_staff_directory()"} {
+		var definer, app, public, system bool
+		err := owner.QueryRow(ctx, `select p.prosecdef, has_function_privilege('ts_app', p.oid, 'EXECUTE'),
+				has_function_privilege('ts_public', p.oid, 'EXECUTE'), has_function_privilege('ts_system', p.oid, 'EXECUTE')
+			from pg_proc p where p.oid = to_regprocedure($1)`, fn).Scan(&definer, &app, &public, &system)
+		if err != nil || !definer || app != (fn != "app_staff_organizer()") || public || system {
+			t.Errorf("%s: definer %v, ts_app %v, ts_public %v, ts_system %v, %v", fn, definer, app, public, system, err)
+		}
+	}
 }
 
 // The storefront and system roles are the only exception to "tenant policies
