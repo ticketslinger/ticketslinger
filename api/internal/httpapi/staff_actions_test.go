@@ -100,8 +100,11 @@ func TestSuspendAndLift(t *testing.T) {
 		return countRows(t, w.owner, `select count(*) from jobs where kind = 'send_email' and payload->>'to' = 'alerts@example.com' and payload->>'subject' = $1`, subject)
 	}
 
-	b := w.act(w.staffTok, "suspend")
-	if b["status"] != 200 || b["kind"] != "suspend" || b["organizer_slug"] != "acme" || b["id"] == nil {
+	ch := w.must(w.do(w.staffTok, "POST", "/v1/staff/actions/challenge", `{"kind":"suspend"}`), 200)
+	suspendBody := actBody(ch["challenge_id"].(string), w.dev.assert(t, ch["options"]), "suspend", takedownReason)
+	res := w.do(w.staffTok, "POST", "/v1/staff/actions", suspendBody)
+	b := w.json(res)
+	if res.StatusCode != 200 || b["kind"] != "suspend" || b["organizer_slug"] != "acme" || b["id"] == nil {
 		t.Fatalf("suspend: %v", b)
 	}
 	if n := countRows(t, w.owner, `select count(*) from staff_actions where kind = 'suspend' and reason = $1`, takedownReason); n != 1 {
@@ -148,7 +151,7 @@ func TestSuspendAndLift(t *testing.T) {
 	}
 	// Refunds aren't wired up yet: refused before anything is written.
 	before := countRows(t, w.owner, `select count(*) from jobs`)
-	res := w.do(w.staffTok, "POST", "/v1/staff/actions", strings.Replace(actBody(uuid.NewString(), "", "refund_event", takedownReason), `"kind"`, `"event":"`+w.fixture["event"]+`","kind"`, 1))
+	res = w.do(w.staffTok, "POST", "/v1/staff/actions", strings.Replace(actBody(uuid.NewString(), "", "refund_event", takedownReason), `"kind"`, `"event":"`+w.fixture["event"]+`","kind"`, 1))
 	if e, _ := w.json(res)["error"].(map[string]any); res.StatusCode != 422 || e["field"] != "kind" {
 		t.Fatalf("refund_event: %d %v", res.StatusCode, e)
 	}
@@ -161,6 +164,25 @@ func TestSuspendAndLift(t *testing.T) {
 	}
 	if alerts("Staff lifted the suspension of acme") != 1 {
 		t.Fatal("no lift alert")
+	}
+	if n := countRows(t, w.owner, `select count(*) from staff_actions where kind = 'lift' and reason = $1`, takedownReason); n != 1 {
+		t.Fatalf("lift rows = %d", n)
+	}
+	if err := json.NewDecoder(w.do(w.ownerA, "GET", "/v1/organizers/acme/audit", "").Body).Decode(&audit); err != nil {
+		t.Fatal(err)
+	}
+	lifted := 0
+	for _, r := range audit {
+		if r["action"] == "staff.lifted" && r["actor_type"] == "staff" && r["actor_email"] == nil {
+			lifted++
+		}
+	}
+	if lifted != 1 {
+		t.Fatalf("staff.lifted rows the owner reads: %d", lifted)
+	}
+	// The suspend touch was spent: replaying it suspends nothing.
+	if res := w.do(w.staffTok, "POST", "/v1/staff/actions", suspendBody); res.StatusCode != 403 || w.errorCode(res) != "passkey_required" {
+		t.Fatalf("replayed suspend: %d", res.StatusCode)
 	}
 	if o := w.must(w.do(w.ownerA, "GET", "/v1/organizers/acme", ""), 200); o["suspended"] != false {
 		t.Fatalf("acme after lift: %v", o)
@@ -184,5 +206,39 @@ func TestSuspendAndLift(t *testing.T) {
 	_, _ = raw.ReadFrom(w.do(w.ownerA, "GET", "/v1/organizers/acme/staff-access", "").Body)
 	if strings.Contains(raw.String(), "actions") {
 		t.Errorf("staff access shows actions: %s", raw.String())
+	}
+}
+
+// With no alert address, neither action route works, and a touch already
+// made isn't spent.
+func TestStaffActionsNeedAnAlertAddress(t *testing.T) {
+	ctx := context.Background()
+	h := newStaffHarness(t, "")
+	h.createOrganizer(h.signupWithMFA("owner@example.com"), "acme")
+	dev, tok := h.signupWithPasskey("staff@example.com")
+	grantStaff(t, h.owner, "staff@example.com")
+	// Staff mode can't start without alerts either, so it's seeded.
+	login := loginSession(t, h.owner, tok)
+	var uid, org uuid.UUID
+	if err := h.owner.QueryRow(ctx, `insert into staff_sessions(user_id, session_id, organizer_id, organizer_slug, organizer_name, reason, expires_at)
+		select u.id, $1, o.id, o.slug, o.name, 'Checking a takedown report', now() + interval '30 minutes'
+		  from users u, organizers o where u.email = 'staff@example.com' and o.slug = 'acme' returning user_id, organizer_id`, login).Scan(&uid, &org); err != nil {
+		t.Fatal(err)
+	}
+	if res := h.do(tok, "POST", "/v1/staff/actions/challenge", `{"kind":"suspend"}`); res.StatusCode != 503 || h.errorCode(res) != "alerts_off" {
+		t.Fatalf("begin: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	id, opts, err := h.auth.BeginStaffAssertion(ctx, uid, login, "staff_action", staff.Purpose("suspend", org, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := h.do(tok, "POST", "/v1/staff/actions", actBody(id.String(), dev.assert(t, opts), "suspend", takedownReason)); res.StatusCode != 503 || h.errorCode(res) != "alerts_off" {
+		t.Fatalf("take: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	if n := countRows(t, h.owner, `select count(*) from webauthn_challenges where id = $1`, id); n != 1 {
+		t.Fatal("the challenge was spent")
+	}
+	if n := countRows(t, h.owner, `select count(*) from staff_actions`); n != 0 {
+		t.Fatalf("staff_actions = %d", n)
 	}
 }

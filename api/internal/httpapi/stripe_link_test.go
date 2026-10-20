@@ -592,3 +592,35 @@ func TestCreateAfterDisconnectingALinkedAccount(t *testing.T) {
 		t.Fatal("acme isn't on a new created account")
 	}
 }
+
+// suspendBySQL suspends slug as staff_act would, without a staff login.
+func suspendBySQL(t *testing.T, h *harness, slug string) {
+	t.Helper()
+	if _, err := testdb.Owner(t, h.pool).Exec(context.Background(), `with
+		o as (select id from organizers where slug = $1),
+		u as (insert into users(email, name, email_verified_at) values ('staff@example.com', 'Staff', now()) returning id),
+		st as (insert into staff(user_id, granted_by) select id, 'test' from u returning user_id),
+		ss as (insert into staff_sessions(user_id, session_id, organizer_id, organizer_slug, organizer_name, reason, expires_at)
+			select st.user_id, gen_random_uuid(), o.id, $1, 'Acme', 'Checking a takedown report', now() + interval '1 hour' from st, o returning id, user_id, organizer_id),
+		a as (insert into staff_actions(staff_session_id, user_id, organizer_id, kind, reason)
+			select id, user_id, organizer_id, 'suspend', 'Checking a takedown report' from ss returning id, organizer_id)
+		insert into organizer_suspensions(organizer_id, staff_action_id) select organizer_id, id from a`, slug); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A link started before a suspension can't finish during it, and the
+// answer says why; the state is left for after a lift.
+func TestLinkRefusedWhileSuspended(t *testing.T) {
+	h := newPaymentsHarness(t, payments.NewFake())
+	owner := h.signupWithMFA("owner@example.com")
+	h.createOrganizer(owner, "acme")
+	state, code := h.startLink(owner, "acme")
+	suspendBySQL(t, h, "acme")
+	if res := h.completeLink(owner, state, code); res.StatusCode != 403 || h.errorCode(res) != "organizer_suspended" {
+		t.Fatalf("complete while suspended: %d %q, want 403 organizer_suspended", res.StatusCode, h.errorCode(res))
+	}
+	if n := h.count(`select count(*) from stripe_link_states where state_hash = sha256($1::text::bytea)`, state); n != 1 {
+		t.Fatalf("state rows %d, want the state kept", n)
+	}
+}

@@ -294,7 +294,9 @@ func TestSuspendedScopeIsReadOnly(t *testing.T) {
 					refusal = ""
 				}
 				r, err := do(q)
-				if code, _ := pgCode(err); code != "25006" && (refusal == "" || err != nil || r != refusal) {
+				if code, _ := pgCode(err); code == "25006" && !errors.Is(err, db.ErrOrganizerSuspended) {
+					t.Errorf("%s: %v doesn't say the organizer is suspended", q, err)
+				} else if code != "25006" && (refusal == "" || err != nil || r != refusal) {
 					t.Errorf("%s: %q %v, want 25006%s", q, r, err, map[bool]string{true: " or " + refusal}[refusal != ""])
 				}
 			}
