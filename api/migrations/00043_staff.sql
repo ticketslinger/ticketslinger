@@ -38,8 +38,8 @@ CREATE TABLE staff_access_log (
   id               uuid PRIMARY KEY DEFAULT uuidv7(),
   staff_session_id uuid NOT NULL REFERENCES staff_sessions,
   organizer_id     uuid,             -- copied from the session, for the organizer's view
-  method           text NOT NULL,
-  route            text NOT NULL,    -- the OpenAPI operation id and path params, not the query string
+  method           text NOT NULL CHECK (length(method) <= 10),
+  route            text NOT NULL CHECK (length(route) <= 200), -- the OpenAPI operation id and path params, not the query string
   at               timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX ON staff_access_log (staff_session_id);
@@ -134,12 +134,15 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'start_staff_session: no such organizer' USING ERRCODE = 'no_data_found';
   END IF;
+  -- One that ran out before the sweeper reached it ended at its expiry.
   WITH ended AS (
-    UPDATE public.staff_sessions SET ended_at = pg_catalog.now(), ended_how = 'staff'
+    UPDATE public.staff_sessions
+       SET ended_at = LEAST(pg_catalog.clock_timestamp(), expires_at),
+           ended_how = CASE WHEN expires_at <= pg_catalog.clock_timestamp() THEN 'expired' ELSE 'staff' END
      WHERE session_id = p_session AND ended_at IS NULL
-    RETURNING id, user_id, organizer_id)
+    RETURNING id, user_id, organizer_id, ended_how)
   INSERT INTO public.audit_log(organizer_id, actor_user_id, actor_staff_session_id, action, entity_type, entity_id, after)
-  SELECT e.organizer_id, e.user_id, e.id, 'staff.session_ended', 'staff_session', e.id, '{"how": "staff"}'
+  SELECT e.organizer_id, e.user_id, e.id, 'staff.session_ended', 'staff_session', e.id, pg_catalog.jsonb_build_object('how', e.ended_how)
     FROM ended e WHERE e.organizer_id IS NOT NULL;
   INSERT INTO public.staff_sessions(user_id, session_id, organizer_id, organizer_slug, organizer_name, reason, ip, user_agent, expires_at)
   VALUES (usr, p_session, org.id, org.slug, org.name, p_reason, p_ip, p_ua, pg_catalog.now() + interval '60 minutes')
@@ -218,11 +221,11 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_te
    ORDER BY o.slug LIMIT 20
 $$;
 
--- Names of the staff who have had a staff session on the scoped organizer,
+-- Names (never emails) of the staff who have had a staff session on the scoped organizer,
 -- and nobody else, for the organizer's view of staff access.
-CREATE FUNCTION app_staff_directory() RETURNS TABLE(user_id uuid, name text, email citext)
+CREATE FUNCTION app_staff_directory() RETURNS TABLE(user_id uuid, name text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
-  SELECT u.id, u.name, u.email FROM public.users u
+  SELECT u.id, u.name FROM public.users u
    WHERE EXISTS (SELECT 1 FROM public.staff_sessions ss
                   WHERE ss.user_id = u.id AND ss.organizer_id = public.app_organizer())
 $$;
@@ -254,6 +257,9 @@ ALTER TABLE webauthn_challenges DROP COLUMN purpose, DROP COLUMN session_id,
 ALTER POLICY audit_system ON audit_log
   WITH CHECK (organizer_id = (SELECT app_scope()) AND actor_system AND actor_user_id IS NULL AND actor_api_key_id IS NULL);
 ALTER POLICY audit_insert ON audit_log WITH CHECK (organizer_id = (SELECT app_organizer()) AND NOT actor_system);
+-- Without the column a staff row would read as a non-member's action, and
+-- the sessions it points at are dropped below anyway.
+DELETE FROM audit_log WHERE actor_staff_session_id IS NOT NULL;
 ALTER TABLE audit_log DROP CONSTRAINT audit_staff_is_a_user, DROP COLUMN actor_staff_session_id;
 CREATE OR REPLACE FUNCTION app_organizer() RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp AS

@@ -1,7 +1,6 @@
 package db_test
 
 import (
-	"bytes"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -9,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -99,25 +99,10 @@ func TestOnlyScopeSetsTheGUCs(t *testing.T) {
 		}
 	}
 
-	// Spec test 15: the staff scope GUC is narrower still. Only WithStaff
-	// names it; the other allowed files may set app.* but never this one.
-	staffGUC := []byte("app.staff_session_id")
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return err
-		}
-		src, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(root, path)
-		if inScope := filepath.ToSlash(rel) == "internal/db/scope.go"; bytes.Contains(src, staffGUC) != inScope {
-			t.Errorf("%s: names app.staff_session_id %v, want only internal/db/scope.go to", rel, !inScope)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
+	// Spec test 15: the staff scope GUC is narrower still. Only the
+	// WithStaff function names it, not even the rest of scope.go.
+	if got := staffGUCNamers(t, root); !slices.Equal(got, []string{"internal/db/scope.go:WithStaff"}) {
+		t.Errorf("app.staff_session_id is named in %v, want only internal/db/scope.go:WithStaff", got)
 	}
 
 	// The walk catches both, anywhere else.
@@ -137,4 +122,42 @@ func TestOnlyScopeSetsTheGUCs(t *testing.T) {
 	if bad := gucViolations(t, scratch); len(bad) != 3 {
 		t.Fatalf("scratch files: %v, want both GUC files and the Sprintf caught", bad)
 	}
+}
+
+// staffGUCNamers lists, as file:function (or file:<decl> outside a
+// function), every non-test declaration under root that names
+// app.staff_session_id.
+func staffGUCNamers(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return err
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, src, 0)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		for _, decl := range f.Decls {
+			if !strings.Contains(string(src[fset.Position(decl.Pos()).Offset:fset.Position(decl.End()).Offset]), "app.staff_session_id") {
+				continue
+			}
+			name := "<decl>"
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				name = fn.Name.Name
+			}
+			out = append(out, filepath.ToSlash(rel)+":"+name)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

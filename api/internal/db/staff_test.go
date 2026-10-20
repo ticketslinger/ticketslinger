@@ -3,6 +3,7 @@ package db_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -129,7 +130,7 @@ func seesNothing(ctx context.Context, t *testing.T, tx pgx.Tx, tables []string) 
 
 // handScope opens a transaction with the GUCs set by hand, as a coding
 // mistake or a forged scope would, and checks it sees nothing.
-func handScope(t *testing.T, f staffFixture, mode pgx.TxAccessMode, user, staffSession, org uuid.UUID) {
+func handScope(t *testing.T, f staffFixture, mode pgx.TxAccessMode, user, staffSession, org uuid.UUID, key ...uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
 	tables := rlsTables(t, f.pool)
@@ -137,6 +138,11 @@ func handScope(t *testing.T, f staffFixture, mode pgx.TxAccessMode, user, staffS
 		if _, err := tx.Exec(ctx, `select set_config('app.user_id', $1, true), set_config('app.organizer_id', $2, true),
 			set_config('app.staff_session_id', $3, true)`, user.String(), org.String(), nilEmpty(staffSession)); err != nil {
 			return err
+		}
+		for _, k := range key {
+			if _, err := tx.Exec(ctx, `select set_config('app.api_key_id', $1, true)`, k.String()); err != nil {
+				return err
+			}
 		}
 		seesNothing(ctx, t, tx, tables)
 		return nil
@@ -166,6 +172,27 @@ func TestStaffScopeIsOneOrganizer(t *testing.T) {
 	if !errors.Is(err, db.ErrNotMember) {
 		t.Fatalf("WithStaff on B: %v, want ErrNotMember", err)
 	}
+
+	// app_staff_organizer() itself refuses B, not only app_organizer()'s
+	// comparison. Only the owner may call it directly.
+	ctx := context.Background()
+	for org, want := range map[uuid.UUID]uuid.NullUUID{f.oa: {UUID: f.oa, Valid: true}, f.ob: {}} {
+		var got uuid.NullUUID
+		err := pgx.BeginTxFunc(ctx, f.owner, pgx.TxOptions{AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `select set_config('app.user_id', $1, true), set_config('app.organizer_id', $2, true),
+				set_config('app.staff_session_id', $3, true), app_staff_organizer()`,
+				f.staff.String(), org.String(), f.staffSessA.String()).Scan(nil, nil, nil, &got)
+		})
+		if err != nil || got != want {
+			t.Errorf("app_staff_organizer() scoped to %v: %v %v, want %v", org, got, err, want)
+		}
+	}
+}
+
+// A staff scope never rides alongside an API key, even a live one on A.
+func TestStaffScopeRefusesAKey(t *testing.T) {
+	f := newStaffFixture(t)
+	handScope(t, f, pgx.ReadOnly, f.staff, f.staffSessA, f.oa, seedKey(t, f.pool, f.oa, "read", false))
 }
 
 // Spec test 3: the staff GUCs in a read-write transaction count for nothing.
@@ -209,6 +236,8 @@ func TestStaffScopeEndsMidTransaction(t *testing.T) {
 			 values ($1, '` + user.String() + `', sha256(gen_random_uuid()::text::bytea), true, now() + interval '1 hour')`, login},
 		{"mfa lost", `update sessions set mfa = false where id = $1`,
 			`update sessions set mfa = true where id = $1`, login},
+		{"login expired", `update sessions set expires_at = now() - interval '1 second' where id = $1`,
+			`update sessions set expires_at = now() + interval '1 hour' where id = $1`, login},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := db.WithStaff(ctx, f.pool, user, sess, f.oa, func(tx pgx.Tx) error {
@@ -224,6 +253,14 @@ func TestStaffScopeEndsMidTransaction(t *testing.T) {
 			})
 			if err != nil {
 				t.Fatal(err)
+			}
+			err = db.WithUser(ctx, f.pool, user, func(tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, `select log_staff_access($1, 'GET', 'listOrders')`, sess)
+				return err
+			})
+			var pg *pgconn.PgError
+			if !errors.As(err, &pg) || pg.Code != "42501" {
+				t.Errorf("log_staff_access after the cut: %v, want 42501", err)
 			}
 			if _, err := f.owner.Exec(ctx, c.undo, c.arg); err != nil {
 				t.Fatal(err)
@@ -525,8 +562,17 @@ func TestStaffFunctionsRefuseStrangers(t *testing.T) {
 		}
 		return ids
 	}
+	yLogin := seedLogin(t, f.owner, y)
+	if _, err := startStaff(ctx, f.pool, y, yLogin, "org-b"); err != nil {
+		t.Fatal(err)
+	}
 	if got := dir(f.oa); len(got) != 1 || got[0] != f.staff {
-		t.Errorf("A's directory: %v, want only S", got)
+		t.Errorf("A's directory: %v, want only S, not Y who was only on B", got)
+	}
+	var cols []string
+	if err := f.owner.QueryRow(ctx, `select array(select unnest(proargnames) from pg_proc
+		where oid = 'app_staff_directory()'::regprocedure)`).Scan(&cols); err != nil || len(cols) != 2 || cols[0] != "user_id" || cols[1] != "name" {
+		t.Errorf("app_staff_directory returns %v %v, want user_id and name only", cols, err)
 	}
 	if err := db.WithUser(ctx, f.pool, f.ua, func(tx pgx.Tx) error {
 		var n int
@@ -536,5 +582,61 @@ func TestStaffFunctionsRefuseStrangers(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Starting staff mode again on the same login session ends the live one,
+// as ended by staff; one that ran out unswept is recorded as expired, at
+// its expiry.
+func TestStartStaffSessionReplacesTheLiveOne(t *testing.T) {
+	f := newStaffFixture(t)
+	ctx := context.Background()
+	ended := func(id uuid.UUID) (how, auditHow string, atExpiry bool) {
+		if err := f.owner.QueryRow(ctx, `select ss.ended_how, a.after->>'how', ss.ended_at = ss.expires_at
+			from staff_sessions ss join audit_log a on a.actor_staff_session_id = ss.id and a.action = 'staff.session_ended'
+			where ss.id = $1`, id).Scan(&how, &auditHow, &atExpiry); err != nil {
+			t.Fatal(err)
+		}
+		return how, auditHow, atExpiry
+	}
+	second, err := startStaff(ctx, f.pool, f.staff, f.login, "org-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if how, audit, atExpiry := ended(f.staffSessA); how != "staff" || audit != "staff" || atExpiry {
+		t.Errorf("replaced live session: %s %s at expiry %v, want staff", how, audit, atExpiry)
+	}
+	if _, err := f.owner.Exec(ctx, `update staff_sessions set started_at = now() - interval '2 hours', expires_at = now() - interval '1 hour' where id = $1`, second); err != nil {
+		t.Fatal(err)
+	}
+	third, err := startStaff(ctx, f.pool, f.staff, f.login, "org-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if how, audit, atExpiry := ended(second); how != "expired" || audit != "expired" || !atExpiry {
+		t.Errorf("replaced expired session: %s %s at expiry %v, want expired", how, audit, atExpiry)
+	}
+	if err := db.WithStaff(ctx, f.pool, f.staff, third, f.oa, func(pgx.Tx) error { return nil }); err != nil {
+		t.Fatalf("the new session: %v", err)
+	}
+}
+
+// The access log is append-only and nobody trims it, so a bug can't bloat it.
+func TestStaffAccessLogBoundsItsRows(t *testing.T) {
+	f := newStaffFixture(t)
+	for _, c := range []struct{ method, route string }{
+		{"GETGETGETGE", "listOrders"},
+		{"GET", strings.Repeat("r", 201)},
+	} {
+		_, err := f.owner.Exec(context.Background(), `insert into staff_access_log(staff_session_id, organizer_id, method, route)
+			values ($1, $2, $3, $4)`, f.staffSessA, f.oa, c.method, c.route)
+		var pg *pgconn.PgError
+		if !errors.As(err, &pg) || pg.Code != "23514" {
+			t.Errorf("method %d chars, route %d chars: %v, want 23514", len(c.method), len(c.route), err)
+		}
+	}
+	if _, err := f.owner.Exec(context.Background(), `insert into staff_access_log(staff_session_id, organizer_id, method, route)
+		values ($1, $2, 'DELETE', $3)`, f.staffSessA, f.oa, strings.Repeat("r", 200)); err != nil {
+		t.Fatalf("at the limits: %v", err)
 	}
 }
