@@ -375,26 +375,17 @@ func refundEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, reason st
 
 // refusedOrder says whether err refuses one order only, so the others can
 // go ahead, and why ("" for an order with nothing left to refund, which is
-// skipped). Anything else (a lost connection, a deadlock, a cancelled
-// context) fails the whole refund.
+// skipped). Only an integrity error (class 23) or a trigger's raise (P0001)
+// is one order's; anything else fails the whole refund, to be run again.
 func refusedOrder(err error) (why string, ok bool) {
 	var pg *pgconn.PgError
-	var con catalogue.ErrConflict
-	var inv catalogue.ErrInvalid
 	switch {
 	case errors.Is(err, errPaymentUsedUp):
 		return "payment_used_up", true
 	case errors.Is(err, errNotRefundable):
 		return "", true
-	case errors.As(err, &pg):
-		if strings.HasPrefix(pg.Code, "40") || strings.HasPrefix(pg.Code, "57") || strings.HasPrefix(pg.Code, "08") {
-			return "", false // try again, not this order's fault
-		}
+	case errors.As(err, &pg) && (strings.HasPrefix(pg.Code, "23") || pg.Code == "P0001"):
 		return "database refused it (" + pg.Code + "): " + pg.Message, true
-	case errors.As(err, &con):
-		return con.Code, true
-	case errors.As(err, &inv):
-		return inv.Code, true
 	}
 	return "", false
 }

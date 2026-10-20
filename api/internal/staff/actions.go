@@ -136,9 +136,11 @@ func (s *Service) Act(ctx context.Context, sess Session, kind string, event *uui
 		return out, nil
 	}
 	// Not cancelled with the request: a client that goes away mid-refund
-	// mustn't roll it back. ponytail: no time limit, as one that hit it on
-	// a big event would roll back on every try; add a job if one ever runs long.
-	r, err := s.refund(context.WithoutCancel(ctx), sess.OrganizerID, out.ID)
+	// mustn't roll it back. ponytail: 10 minutes, then it rolls back and
+	// stays unfinished; move it to a job if an event ever needs longer.
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
+	defer cancel()
+	r, err := s.refund(rctx, sess.OrganizerID, out.ID)
 	if pg, ok := errors.AsType[*pgconn.PgError](err); ok && pg.Code == "55000" {
 		switch pg.Message {
 		case "already_done":

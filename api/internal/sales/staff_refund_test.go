@@ -3,6 +3,7 @@ package sales_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -284,5 +285,38 @@ func TestRefundEventListsARefusedOrder(t *testing.T) {
 	drain(t, s, &mailer.Memory{})
 	if amount, _ := fake.Refunded(piB); amount != 2600 {
 		t.Fatalf("B refunded %d", amount)
+	}
+}
+
+// Only an integrity error or a trigger's raise leaves one order out. Any
+// other error (here a permissions one) fails the whole refund: nothing is
+// written and the action can be run again.
+func TestRefundEventFailsWholeOnAnyOtherError(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	f.paidOrder(t, s, fake, 1, 1)
+	second, _, _ := f.paidOrder(t, s, fake, 1, 2)
+	f.suspend(t, f.org)
+	action := f.refundAction(t, f.org)
+	f.exec(t, `create function refuse_refund() returns trigger language plpgsql as $$
+		begin raise exception 'simulated' using errcode = tg_argv[0]; end $$`)
+	f.exec(t, fmt.Sprintf(`create trigger refuse_refund before insert on refunds for each row
+		when (new.payment_id = '%s') execute function refuse_refund('42501')`, f.id(t, `select id from payments where order_id = $1`, second)))
+	if _, err := s.RefundEventForStaff(ctx, f.org, action, alertTo); pgMessage(err) != "simulated" {
+		t.Fatalf("%v, want the whole refund failed", err)
+	}
+	if n := f.count(t, `select (select count(*) from refunds) + (select count(*) from staff_actions where finished_at is not null)
+		+ (select count(*) from jobs where payload->>'to' = $1)`, alertTo); n != 0 {
+		t.Fatal("a failed refund left something behind")
+	}
+	// A trigger's raise (P0001) is that order's alone.
+	f.exec(t, `drop trigger refuse_refund on refunds`)
+	f.exec(t, fmt.Sprintf(`create trigger refuse_refund before insert on refunds for each row
+		when (new.payment_id = '%s') execute function refuse_refund('P0001')`, f.id(t, `select id from payments where order_id = $1`, second)))
+	res, err := s.RefundEventForStaff(ctx, f.org, action, alertTo)
+	f.must(t, err)
+	if res.Orders != 1 || len(res.Failed) != 1 || res.Failed[0].Order != second || res.Failed[0].Reason != "database refused it (P0001): simulated" {
+		t.Fatalf("result %+v", res)
 	}
 }
