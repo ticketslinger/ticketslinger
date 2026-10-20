@@ -14,6 +14,7 @@ import {
   overMessage,
   PENDING,
   Pending,
+  payBody,
   payload,
   waitStep,
 } from "./checkout";
@@ -66,8 +67,9 @@ test("payload maps names and answers; an unticked checkbox is false", () => {
   for (const n of ["Ada", "Grace", "Lin"]) form.append("attendee", n);
   form.set("answers.q-order.-1", "None");
   form.set("answers.q-vip.2", "Sam");
-  expect(payload(form, fields)).toEqual({
+  expect(payload(form, fields, 4690)).toEqual({
     email: "ada@example.com",
+    expected_total_cents: 4690,
     attendees: ["Ada", "Grace", "Lin"],
     answers: [
       { question_id: "q-order", ticket_index: -1, value: "None" },
@@ -76,7 +78,7 @@ test("payload maps names and answers; an unticked checkbox is false", () => {
     ],
   });
   form.set("answers.q-agree.-1", "true");
-  expect(payload(form, fields).answers?.[2]?.value).toBe("true");
+  expect(payload(form, fields, 4690).answers?.[2]?.value).toBe("true");
 });
 
 test("422 errors land on the input they name, in our words", () => {
@@ -227,4 +229,9 @@ test("a suspended organizer ends the checkout; once the card went to Stripe it p
   expect(overMessage("event_cancelled", true)).toBe(EVENT_CANCELLED);
   expect(overMessage("checkout_expired", true)).toBeUndefined();
   expect(overMessage(undefined, false)).toBeUndefined();
+});
+
+test("Pay carries the total the page displayed", () => {
+  const data = { quote: { total_cents: 4690 } } as CheckoutData;
+  expect(payBody(data, new FormData(), []).expected_total_cents).toBe(4690);
 });

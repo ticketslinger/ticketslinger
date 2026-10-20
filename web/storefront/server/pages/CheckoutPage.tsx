@@ -33,25 +33,35 @@ export function checkoutData(token: string, c: Checkout, e: CheckoutEvent): stri
 const eventUrl = (e: CheckoutEvent) => eventPath({ organizer: e.organizer, event_slug: e.slug });
 
 /**
- * What the buyer is paying for: a line per ticket type, then discount, tax added on top, fee
- * and total, so the lines add up. Tax already inside a price (charge = price − discount) is
- * noted under the total instead. Each ticket type sets its own, so a cart can have both.
+ * What the buyer is paying for: a line per ticket type at its all-in price, the discount, the
+ * total, then what's inside it as notes. An API from before all-in prices sends none, so the
+ * old lines (price, tax and fee added up to the total) stand in for that render.
  */
 function Quote({ c, e }: { c: Checkout; e: CheckoutEvent }) {
   const q = c.quote;
   const names = new Map(e.ticket_types.map((t) => [t.id, t.name]));
+  const allIn = q.tickets.every((t) => typeof t.all_in_cents === "number");
   const lines = c.items.map((it) => {
     const cents = q.tickets
       .filter((t) => t.ticket_type_id === it.ticket_type_id)
-      .reduce((sum, t) => sum + t.price_cents, 0);
+      .reduce((sum, t) => sum + (allIn ? t.all_in_cents : t.price_cents), 0);
     return [`${it.quantity} × ${names.get(it.ticket_type_id) ?? "Ticket"}`, formatCents(cents)];
   });
-  if (q.discount_cents > 0) lines.push(["Discount", `−${formatCents(q.discount_cents)}`]);
-  const added = q.tickets.reduce((sum, t) => sum + (t.tax_included ? 0 : t.tax_cents), 0);
-  const included = q.included_tax_cents;
-  if (added > 0) lines.push(["Tax", formatCents(added)]);
-  if (q.fee_mode === "pass" && q.fee_cents > 0)
-    lines.push(["Service fee", formatCents(q.fee_cents)]);
+  // Derive the discount if the API sent all-in prices but not the all-in discount.
+  const sum = q.tickets.reduce((n, t) => n + (t.all_in_cents ?? 0), 0);
+  const off = !allIn
+    ? q.discount_cents
+    : typeof q.all_in_discount_cents === "number"
+      ? q.all_in_discount_cents
+      : Math.max(0, sum - q.total_cents);
+  if (off > 0) lines.push(["Discount", `−${formatCents(off)}`]);
+  const fee = q.fee_mode === "pass" ? q.fee_cents : 0;
+  if (!allIn) {
+    const added = q.tickets.reduce((sum, t) => sum + (t.tax_included ? 0 : t.tax_cents), 0);
+    if (added > 0) lines.push(["Tax", formatCents(added)]);
+    if (fee > 0) lines.push(["Service fee", formatCents(fee)]);
+  }
+  const tax = allIn ? q.tax_cents : q.included_tax_cents;
   return (
     <ul class="quote">
       {lines.map(([label, amount]) => (
@@ -64,7 +74,8 @@ function Quote({ c, e }: { c: Checkout; e: CheckoutEvent }) {
         <span>Total</span>
         <span>{formatCents(q.total_cents)}</span>
       </li>
-      {included > 0 && <li class="included">Includes {formatCents(included)} tax</li>}
+      {allIn && fee > 0 && <li class="included">Includes {formatCents(fee)} service fee</li>}
+      {tax > 0 && <li class="included">Includes {formatCents(tax)} tax</li>}
     </ul>
   );
 }

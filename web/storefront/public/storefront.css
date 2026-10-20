@@ -63,13 +63,18 @@ p {
 .organizer,
 .when,
 .where,
-.status,
-.fee {
+.status {
   color: var(--muted);
 }
 
 .address {
   display: block;
+}
+
+.price-note {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.875rem;
 }
 
 .description,
@@ -96,6 +101,7 @@ p {
 }
 
 .price {
+  font-size: 1.125rem;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -211,6 +217,7 @@ button:disabled {
 }
 
 .quote .total {
+  font-size: 1.25rem;
   font-weight: 700;
 }
 

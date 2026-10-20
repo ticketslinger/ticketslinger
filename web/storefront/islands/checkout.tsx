@@ -64,13 +64,14 @@ export function answersFor(questions: Question[], items: Item[]): Field[] {
 }
 
 /** The form as payCheckout takes it. A checkbox left unticked is "false". */
-export function payload(form: FormData, fields: Field[]): PayRequest {
+export function payload(form: FormData, fields: Field[], expectedTotal: number): PayRequest {
   const text = (k: string) => {
     const v = form.get(k);
     return typeof v === "string" ? v : "";
   };
   return {
     email: text("email").trim(),
+    expected_total_cents: expectedTotal,
     attendees: form.getAll("attendee").map((v) => (typeof v === "string" ? v.trim() : "")),
     answers: fields.map((f) => ({
       question_id: f.question.id,
@@ -79,6 +80,10 @@ export function payload(form: FormData, fields: Field[]): PayRequest {
     })),
   };
 }
+
+/** What Pay sends: the form, and the total this page showed the buyer. */
+export const payBody = (data: CheckoutData, form: FormData, fields: Field[]): PayRequest =>
+  payload(form, fields, data.quote.total_cents);
 
 // Our words, by error code. The API's own message never reaches the page.
 const FIELD_COPY: Record<string, string> = {
@@ -433,7 +438,7 @@ function Checkout({ data }: { data: CheckoutData }) {
   async function submit(e: Event) {
     e.preventDefault();
     if (sending) return;
-    const body = payload(new FormData(e.currentTarget as HTMLFormElement), fields);
+    const body = payBody(data, new FormData(e.currentTarget as HTMLFormElement), fields);
     setSending(true);
     setMessage(undefined);
     setErrors({});
