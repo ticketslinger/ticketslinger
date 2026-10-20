@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"github.com/google/uuid"
@@ -58,6 +59,9 @@ type ActionLog struct {
 	At         time.Time
 	FinishedAt *time.Time
 	Result     *RefundResult // refund_event, once finished
+	// Failed: refund_event whose background refund failed or panicked
+	// since this process started. It stays unfinished, to take again.
+	Failed bool
 }
 
 // Purpose is what a staff action's passkey touch is for, so a touch made
@@ -144,16 +148,28 @@ func (s *Service) Act(ctx context.Context, sess Session, kind string, event *uui
 		return out, nil
 	}
 	// Not cancelled with the request, and not waited for: a big event
-	// outlasts nginx's 30 seconds. ponytail: 10 minutes, then it rolls back
-	// and stays unfinished; move it to a job if an event ever needs longer.
+	// outlasts nginx's 30 seconds. It stops with the server (StopWith) and
+	// after 10 minutes, rolling back and staying unfinished either way.
+	// ponytail: move it to a job if an event ever needs longer.
 	s.refunds.Add(1)
 	go func() {
 		defer s.refunds.Done()
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
+		failed := func(err any) {
+			slog.Error("staff_action: refund not carried out", "action", out.ID, "organizer", sess.OrganizerID, "event", event, "err", err)
+			s.mu.Lock()
+			s.failed[out.ID] = true
+			s.mu.Unlock()
+		}
+		// A panic here would take every tenant's requests down with it (jobs.go does the same).
+		defer func() {
+			if v := recover(); v != nil {
+				failed(fmt.Sprintf("panic: %v\n%s", v, debug.Stack()))
+			}
+		}()
+		rctx, cancel := context.WithTimeout(s.life, 10*time.Minute)
 		defer cancel()
 		if _, err := s.refund(rctx, sess.OrganizerID, out.ID); err != nil {
-			// already_done or not_suspended included: either way it's ours to look at.
-			slog.ErrorContext(rctx, "staff_action: refund not carried out", "action", out.ID, "organizer", sess.OrganizerID, "event", event, "err", err)
+			failed(err) // already_done or not_suspended included: ours to look at
 		}
 	}()
 	return out, nil
@@ -161,3 +177,18 @@ func (s *Service) Act(ctx context.Context, sess Session, kind string, event *uui
 
 // Wait returns once every refund Act started has finished.
 func (s *Service) Wait() { s.refunds.Wait() }
+
+// StopWith ends background refunds when ctx is done (the server shutting
+// down): they roll back and stay unfinished. Call it before serving.
+func (s *Service) StopWith(ctx context.Context) { s.life = ctx }
+
+// markFailed sets Failed on every action whose background refund failed.
+func (s *Service) markFailed(list []SessionLog) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range list {
+		for j := range list[i].Actions {
+			list[i].Actions[j].Failed = s.failed[list[i].Actions[j].ID]
+		}
+	}
+}

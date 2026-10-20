@@ -147,3 +147,91 @@ func TestActRefundsTheEvent(t *testing.T) {
 		t.Fatalf("refund_event actions = %d, want all recorded", n)
 	}
 }
+
+// Round 2: a refund that panics or fails is caught, logged and shown as
+// failed in the staff log at once, the action stays unfinished, and the
+// process lives on. Shutting the server down stops a running refund.
+func TestBackgroundRefundFailsSafely(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	var ev uuid.UUID
+	if err := f.owner.QueryRow(ctx, `insert into events(organizer_id, slug, name, timezone, starts_at, ends_at)
+		values ($1, 'gala', 'Gala', 'UTC', now() + interval '1 day', now() + interval '2 days') returning id`, f.org).Scan(&ev); err != nil {
+		t.Fatal(err)
+	}
+	life, stop := context.WithCancel(ctx)
+	defer stop()
+	var refund staff.Refunder
+	svc := staff.New(f.pool, alertTo, func(ctx context.Context, org, action uuid.UUID) (staff.RefundResult, error) {
+		return refund(ctx, org, action)
+	})
+	svc.StopWith(life)
+	sess, err := svc.Start(ctx, f.user, f.login, "acme", "Reported for selling fake tickets", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const why = "Refunding the buyers of an illegal event"
+	if _, err := svc.Act(ctx, sess, "suspend", nil, why); err != nil {
+		t.Fatal(err)
+	}
+	failed := func(id uuid.UUID) bool {
+		t.Helper()
+		list, err := svc.List(ctx, f.user)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range list {
+			for _, a := range l.Actions {
+				if a.ID == id {
+					return a.Failed && a.FinishedAt == nil
+				}
+			}
+		}
+		t.Fatalf("action %v not in the log", id)
+		return false
+	}
+	take := func() uuid.UUID {
+		t.Helper()
+		a, err := svc.Act(ctx, sess, "refund_event", &ev, why)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a.ID
+	}
+
+	refund = func(context.Context, uuid.UUID, uuid.UUID) (staff.RefundResult, error) { panic("boom") }
+	if id := take(); waited(svc) && !failed(id) {
+		t.Fatal("a refund that panicked isn't shown as failed")
+	}
+	refund = func(context.Context, uuid.UUID, uuid.UUID) (staff.RefundResult, error) {
+		return staff.RefundResult{}, errors.New("boom")
+	}
+	if id := take(); waited(svc) && !failed(id) {
+		t.Fatal("a refund that failed isn't shown as failed")
+	}
+	refund = func(context.Context, uuid.UUID, uuid.UUID) (staff.RefundResult, error) {
+		return staff.RefundResult{}, nil
+	}
+	if id := take(); waited(svc) && failed(id) {
+		t.Fatal("a refund that went through is shown as failed")
+	}
+
+	started := make(chan struct{})
+	refund = func(ctx context.Context, _, _ uuid.UUID) (staff.RefundResult, error) {
+		close(started)
+		<-ctx.Done()
+		return staff.RefundResult{}, ctx.Err()
+	}
+	take()
+	<-started
+	stop()
+	done := make(chan struct{})
+	go func() { svc.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutting down didn't stop the running refund")
+	}
+}
+
+func waited(s *staff.Service) bool { s.Wait(); return true }

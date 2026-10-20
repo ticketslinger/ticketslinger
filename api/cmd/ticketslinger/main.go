@@ -92,7 +92,7 @@ func serve() error {
 		return err
 	}
 	defer pool.Close()
-	handler, worker, err := newHandler(cfg, pool, os.Getenv("TS_TEST_MODE") == "1")
+	handler, worker, err := newHandler(ctx, cfg, pool, os.Getenv("TS_TEST_MODE") == "1")
 	if err != nil {
 		return err
 	}
@@ -141,7 +141,8 @@ func newWorker(pool *pgxpool.Pool, m mailer.Mailer, cfg config.Config, pay plugi
 // one payment provider. In test mode both send mail to memory, and the API
 // adds GET /__test/last-email and POST /__test/stripe/pay-latest for the
 // end-to-end suite, and only on a loopback address.
-func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Handler, *jobs.Worker, error) {
+// newHandler builds the API; background work it starts stops when ctx is done.
+func newHandler(ctx context.Context, cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Handler, *jobs.Worker, error) {
 	var mail mailer.Mailer
 	mem := &mailer.Memory{}
 	if testMode {
@@ -182,7 +183,7 @@ func newHandler(cfg config.Config, pool *pgxpool.Pool, testMode bool) (http.Hand
 	ts := &turnstile.Verifier{Secret: cfg.TurnstileSecret, URL: cfg.TurnstileVerifyURL, Client: &http.Client{Timeout: 2 * time.Second}}
 	h := httpapi.New(httpapi.Deps{Pool: pool, Auth: auth.NewService(pool, mail, auth.Options{RPID: cfg.WebAuthnRPID, Origin: cfg.DashboardOrigin, SecretKey: cfg.SecretKey,
 		Turnstile: ts}),
-		Config: cfg, Payments: pay, Turnstile: ts})
+		Config: cfg, Payments: pay, Turnstile: ts, Context: ctx})
 	if testMode {
 		fake, _ := pay.(*payments.Fake)
 		h = testRoutes(h, mem, fake, cfg.StripeWebhookSecret)

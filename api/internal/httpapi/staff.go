@@ -305,7 +305,7 @@ func (s *server) ListStaffSessions(ctx context.Context, _ ListStaffSessionsReque
 		acts := make([]StaffActionLog, 0, len(l.Actions))
 		for _, a := range l.Actions {
 			acts = append(acts, StaffActionLog{Id: a.ID, Kind: StaffActionKind(a.Kind), Event: nullOf(a.Event), Reason: a.Reason, At: a.At, FinishedAt: nullOf(a.FinishedAt),
-				Result: toStaffRefundResult(a.Result)})
+				Result: toStaffRefundResult(a.Result), Failed: a.Failed})
 		}
 		out[i].Actions = &acts
 	}

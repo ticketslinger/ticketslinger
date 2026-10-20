@@ -1864,6 +1864,8 @@ export interface components {
             finished_at: string | null;
             /** @description refund_event only, once finished. */
             result?: components["schemas"]["StaffRefundResult"];
+            /** @description refund_event only: carrying it out failed, so it has no finished_at and won't get one. Take it again; nobody is refunded twice. Only this server process knows, so a restart clears it. */
+            failed: boolean;
         };
         StaffRequest: {
             method: string;

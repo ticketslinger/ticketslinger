@@ -48,6 +48,9 @@ type Deps struct {
 	Turnstile *turnstile.Verifier
 	// Staff runs staff mode; nil builds one from Pool and Config.MailAlertTo.
 	Staff *staff.Service
+	// Context is the server's lifetime: when it's done, background work (a
+	// staff refund) stops and rolls back. nil means it never stops.
+	Context context.Context
 }
 
 type server struct {
@@ -83,6 +86,9 @@ func New(d Deps) http.Handler {
 			}
 			return out, err
 		})
+	}
+	if d.Context != nil {
+		d.Staff.StopWith(d.Context)
 	}
 	noStore := noStoreRoutes()
 	s := &server{Deps: d, public: publicRoutes(), opIDs: operationIDs(), checkoutLimit: ratelimit.New(10, time.Minute), payLimit: ratelimit.New(20, time.Minute),

@@ -56,7 +56,7 @@ func get(t *testing.T, h http.Handler, path string, header ...string) (int, stri
 }
 
 func TestTestMailEndpointIsAbsentWithoutTestMode(t *testing.T) {
-	h, _, err := newHandler(config.Config{HTTPAddr: "127.0.0.1:3000", TurnstileSecret: "s", Mail: "log"}, nil, false)
+	h, _, err := newHandler(context.Background(), config.Config{HTTPAddr: "127.0.0.1:3000", TurnstileSecret: "s", Mail: "log"}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,12 +74,12 @@ func TestServeNeedsTurnstileOutsideTestMode(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	bare := config.Config{HTTPAddr: "127.0.0.1:3000", Mail: "log"}
 	t.Setenv("TS_ALLOW_NO_TURNSTILE", "")
-	if _, _, err := newHandler(bare, nil, false); err == nil || !strings.Contains(err.Error(), "TS_TURNSTILE_SECRET") {
+	if _, _, err := newHandler(context.Background(), bare, nil, false); err == nil || !strings.Contains(err.Error(), "TS_TURNSTILE_SECRET") {
 		t.Fatalf("no secret: %v, want a refusal naming TS_TURNSTILE_SECRET", err)
 	}
 	for _, v := range []string{"0", "true", "yes"} {
 		t.Setenv("TS_ALLOW_NO_TURNSTILE", v)
-		if _, _, err := newHandler(bare, nil, false); err == nil {
+		if _, _, err := newHandler(context.Background(), bare, nil, false); err == nil {
 			t.Fatalf("TS_ALLOW_NO_TURNSTILE=%s started without Turnstile", v)
 		}
 	}
@@ -87,26 +87,26 @@ func TestServeNeedsTurnstileOutsideTestMode(t *testing.T) {
 		t.Fatalf("refusals logged: %s", logs.String())
 	}
 	t.Setenv("TS_ALLOW_NO_TURNSTILE", "1")
-	if _, _, err := newHandler(bare, nil, false); err != nil {
+	if _, _, err := newHandler(context.Background(), bare, nil, false); err != nil {
 		t.Fatalf("allowed: %v", err)
 	}
 	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "TS_ALLOW_NO_TURNSTILE") {
 		t.Fatalf("allowed without a loud warning: %q", logs.String())
 	}
 	t.Setenv("TS_ALLOW_NO_TURNSTILE", "")
-	if _, _, err := newHandler(local("127.0.0.1:3000"), nil, true); err != nil {
+	if _, _, err := newHandler(context.Background(), local("127.0.0.1:3000"), nil, true); err != nil {
 		t.Fatalf("test mode without a secret: %v", err)
 	}
 }
 
 func TestTestModeRefusesNonLoopbackAddress(t *testing.T) {
 	for _, addr := range []string{"0.0.0.0:3000", ":3000", "[::]:3000", "192.168.1.5:3000", "example.com:3000"} {
-		if _, _, err := newHandler(local(addr), nil, true); err == nil {
+		if _, _, err := newHandler(context.Background(), local(addr), nil, true); err == nil {
 			t.Errorf("%s: test mode started on a non-loopback address", addr)
 		}
 	}
 	for _, addr := range []string{"127.0.0.1:3000", "[::1]:3000", "localhost:3000"} {
-		if _, _, err := newHandler(local(addr), nil, true); err != nil {
+		if _, _, err := newHandler(context.Background(), local(addr), nil, true); err != nil {
 			t.Errorf("%s: %v", addr, err)
 		}
 	}
@@ -124,7 +124,7 @@ func TestTestModeRefusesPublicURLs(t *testing.T) {
 	} {
 		c := local("127.0.0.1:3001")
 		mod(&c)
-		if _, _, err := newHandler(c, nil, true); err == nil {
+		if _, _, err := newHandler(context.Background(), c, nil, true); err == nil {
 			t.Errorf("%s: test mode started", name)
 		}
 	}
@@ -190,7 +190,7 @@ func TestWorkerSendsQueuedEmail(t *testing.T) {
 // In test mode the worker mails through the memory /__test/last-email reads,
 // so the end-to-end suite sees order emails too.
 func TestTestModeWorkerMailIsVisible(t *testing.T) {
-	h, w, err := newHandler(local("127.0.0.1:3001"), nil, true)
+	h, w, err := newHandler(context.Background(), local("127.0.0.1:3001"), nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,19 +333,19 @@ func TestTestModeRefusesLiveStripeKeys(t *testing.T) {
 	} {
 		cfg := local("127.0.0.1:3001")
 		cfg.StripeSecretKey, cfg.StripePublishableKey, cfg.StripeWebhookSecret = c.StripeSecretKey, c.StripePublishableKey, c.StripeWebhookSecret
-		if _, _, err := newHandler(cfg, nil, true); err == nil {
+		if _, _, err := newHandler(context.Background(), cfg, nil, true); err == nil {
 			t.Errorf("%+v: test mode started with a live key", c)
 		} else if strings.Contains(err.Error(), "_abc") {
 			t.Errorf("error %q repeats the key", err)
 		}
 		cfg.TurnstileSecret = "s"
-		if _, _, err := newHandler(cfg, nil, false); err != nil {
+		if _, _, err := newHandler(context.Background(), cfg, nil, false); err != nil {
 			t.Errorf("%+v outside test mode: %v", c, err)
 		}
 	}
 	cfg := local("127.0.0.1:3001")
 	cfg.StripeSecretKey, cfg.StripePublishableKey, cfg.StripeWebhookSecret = "sk_test_abc", "pk_test_abc", "whsec_e2e"
-	if _, _, err := newHandler(cfg, nil, true); err != nil {
+	if _, _, err := newHandler(context.Background(), cfg, nil, true); err != nil {
 		t.Fatalf("test keys in test mode: %v", err)
 	}
 }
@@ -375,7 +375,7 @@ func TestTestModeUsesStripeWithATestKey(t *testing.T) {
 		t.Fatalf("test key: provider %q, want stripe", st.Provider)
 	}
 	cfg.StripeSecretKey = "sk_live_x"
-	if _, _, err := newHandler(cfg, nil, true); err == nil {
+	if _, _, err := newHandler(context.Background(), cfg, nil, true); err == nil {
 		t.Fatal("test mode started with a live key")
 	}
 }
@@ -392,7 +392,7 @@ func TestDirectModeServesTheServersOwnStripe(t *testing.T) {
 	if _, err := p.LinkURL("state", "https://x", ""); !errors.Is(err, plugin.ErrDirectPayments) {
 		t.Fatalf("LinkURL: %v, want the direct provider's refusal", err)
 	}
-	_, w, err := newHandler(cfg, nil, false)
+	_, w, err := newHandler(context.Background(), cfg, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +430,7 @@ func paymentsStatus(t *testing.T, cfg config.Config, testMode bool) paymentsStat
 	}); err != nil {
 		t.Fatal(err)
 	}
-	h, _, err := newHandler(cfg, pool, testMode)
+	h, _, err := newHandler(context.Background(), cfg, pool, testMode)
 	if err != nil {
 		t.Fatal(err)
 	}
