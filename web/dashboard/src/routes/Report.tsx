@@ -5,7 +5,7 @@ import { formatCents } from "../money";
 import { formatDay } from "../time";
 import { ErrorText, useLoad } from "../ui";
 import type { Event } from "./EventForm";
-import type { Org } from "./Organizer";
+import { canEdit, type Org } from "./Organizer";
 
 type EventReport = components["schemas"]["EventReport"];
 
@@ -132,19 +132,21 @@ export function Report({ org, event }: { org: Org; event: Event }) {
         </>
       )}
       <ErrorText>{saveError}</ErrorText>
+      {/* The API refuses exports in support mode. */}
       <p>
-        {DOWNLOADS.map(([kind, label]) => (
-          <button
-            key={kind}
-            type="button"
-            onClick={async () => {
-              setSaveError(null);
-              setSaveError(await download(exportHref(org.slug, event.id, kind), kind));
-            }}
-          >
-            {label}
-          </button>
-        ))}
+        {canEdit(org) &&
+          DOWNLOADS.map(([kind, label]) => (
+            <button
+              key={kind}
+              type="button"
+              onClick={async () => {
+                setSaveError(null);
+                setSaveError(await download(exportHref(org.slug, event.id, kind), kind));
+              }}
+            >
+              {label}
+            </button>
+          ))}
       </p>
     </>
   );

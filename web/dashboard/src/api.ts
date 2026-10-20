@@ -78,6 +78,18 @@ async function post(path: string, body?: unknown): Promise<unknown> {
   return data;
 }
 
+/** Asks the browser for a passkey touch against the server's WebAuthn options. */
+export async function touchPasskey(options: { [key: string]: unknown }) {
+  const optionsJSON = (
+    options as { publicKey: Parameters<typeof startAuthentication>[0]["optionsJSON"] }
+  ).publicKey;
+  try {
+    return await startAuthentication({ optionsJSON });
+  } catch {
+    throw new ApiFailure("cancelled", "That passkey didn't go through. Give it another try.", 0);
+  }
+}
+
 export const session = {
   signup: (name: string, email: string, password: string, turnstile?: string) =>
     post("/session/signup", {
@@ -96,15 +108,7 @@ export const session = {
     }),
   async passkeyLogin() {
     const { challenge_id, options } = must(await api.POST("/auth/passkeys/login"));
-    const optionsJSON = (
-      options as { publicKey: Parameters<typeof startAuthentication>[0]["optionsJSON"] }
-    ).publicKey;
-    let assertion: Awaited<ReturnType<typeof startAuthentication>>;
-    try {
-      assertion = await startAuthentication({ optionsJSON });
-    } catch {
-      throw new ApiFailure("cancelled", "That passkey didn't go through. Give it another try.", 0);
-    }
+    const assertion = await touchPasskey(options);
     return post(`/session/passkey/${encodeURIComponent(challenge_id)}`, assertion);
   },
   logout: () => post("/session/logout"),

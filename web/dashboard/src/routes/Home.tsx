@@ -80,6 +80,11 @@ export function Home({ me, onSignedOut }: { me: Me; onSignedOut: () => void }) {
         <Link className="button secondary" href="/security">
           Sign-in and security
         </Link>
+        {me.staff && (
+          <Link className="button secondary" href="/staff">
+            Support
+          </Link>
+        )}
       </p>
     </main>
   );

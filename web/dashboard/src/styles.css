@@ -11,6 +11,8 @@
   --notice-bg: #fff4d6;
   --notice-line: #e5c66a;
   --focus: #1a5fd0;
+  --staff-banner: #4b1f78;
+  --staff-banner-text: #ffffff;
   color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: 100%;
@@ -31,6 +33,8 @@
     --notice-bg: #3a3017;
     --notice-line: #7a6424;
     --focus: #8ab4ff;
+    --staff-banner: #d8c0f7;
+    --staff-banner-text: #1c0b30;
   }
 }
 
@@ -620,4 +624,33 @@ button.danger-button {
   justify-content: space-between;
   padding: 0.75rem 0;
   border-bottom: 1px solid var(--line);
+}
+
+.staff-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.5rem 1rem;
+  background: var(--staff-banner);
+  color: var(--staff-banner-text);
+  font-weight: 600;
+}
+
+.staff-banner p {
+  margin: 0;
+}
+
+.staff-banner button {
+  width: auto;
+  padding: 0.2rem 0.8rem;
+  background: transparent;
+  color: var(--staff-banner-text);
+  border-color: var(--staff-banner-text);
+}
+
+.staff-banner button:focus-visible {
+  outline-color: var(--staff-banner-text);
 }
