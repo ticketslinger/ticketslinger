@@ -24,8 +24,12 @@ const NAV: { section: Section; label: string; path: string; editorsOnly?: boolea
   { section: "audit", label: "Audit log", path: "/audit", editorsOnly: true },
 ];
 
-// Team, API keys and Audit log show write controls unconditionally, so staff don't get them.
-export const navFor = (org: Org) => NAV.filter((n) => !n.editorsOnly || canEdit(org));
+// Team, API keys and Audit log are for owners and admins; staff don't get them.
+// Read-only pages stay open while suspended; their write controls check canEdit.
+export const navFor = (org: Org) => NAV.filter((n) => !n.editorsOnly || isEditor(org));
+
+/** Fired by support-mode actions so the open organizer page refetches. */
+export const ORG_CHANGED = "ts:org-changed";
 
 /** The frame around every /o/:slug page: which organizer, and where to go in it. */
 export function Organizer({
@@ -41,9 +45,19 @@ export function Organizer({
   onSignedOut: () => void;
   children: (org: Org) => ReactNode;
 }) {
-  const { data: org, error } = useLoad(async () =>
+  const {
+    data: org,
+    error,
+    reload,
+  } = useLoad(async () =>
     must(await api.GET("/organizers/{organizer}", { params: { path: { organizer: slug } } })),
   );
+
+  // Staff mode changed the organizer (suspended or lifted): fetch it again.
+  useEffect(() => {
+    window.addEventListener(ORG_CHANGED, reload);
+    return () => window.removeEventListener(ORG_CHANGED, reload);
+  }, [reload]);
 
   // The page's heading arrives with the organizer, after the router's focus move.
   useEffect(() => {

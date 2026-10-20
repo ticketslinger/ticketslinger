@@ -656,7 +656,7 @@ button.danger-button {
 }
 
 .suspended-banner {
-  border: 2px solid var(--danger, currentColor);
+  border: 2px solid var(--error);
   padding: 0.75rem 1rem;
   margin-block: 1rem;
 }

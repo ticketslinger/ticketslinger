@@ -5,6 +5,7 @@ import { FormDialog } from "../forms";
 import { formatCents } from "../money";
 import { ErrorText, Field, useAction, useLoad } from "../ui";
 import { canCancel } from "./CancelEvent";
+import { ORG_CHANGED } from "./Organizer";
 import { reasonOk } from "./Staff";
 
 type Kind = components["schemas"]["StaffActionKind"];
@@ -15,7 +16,7 @@ export const actionText = (kind: Kind, organizer: string, event = "") =>
   kind === "suspend"
     ? `Suspend ${organizer}? Every event goes off sale now, and their team can't change anything until you lift it. Paid orders stay as they are.`
     : kind === "lift"
-      ? `Lift the suspension of ${organizer}? Their events stay as they were and their team can change things again.`
+      ? `Lift the suspension of ${organizer}? Their events can sell again and their team can change things.`
       : `Refund every order for ${event}? Each buyer gets all their money back, our fee included. You can't undo this.`;
 
 /** The confirm button: a good reason, and for a refund the event's name typed out. */
@@ -44,6 +45,31 @@ export function RefundResult({ result }: { result: Result }) {
         </>
       )}
     </div>
+  );
+}
+
+const KIND: Record<Kind, string> = {
+  suspend: "Suspended the organizer",
+  lift: "Lifted the suspension",
+  refund_event: "Refunded every order of an event",
+};
+
+/** The suspensions, lifts and refunds taken in one support session. */
+export function ActionLog({ actions }: { actions: components["schemas"]["StaffActionLog"][] }) {
+  if (actions.length === 0) return null;
+  return (
+    <ul>
+      {actions.map((a) => (
+        <li key={a.id}>
+          {KIND[a.kind]} <span className="muted">· {new Date(a.at).toLocaleString()}</span>
+          <br />"{a.reason}"
+          {a.kind === "refund_event" && !a.finished_at && (
+            <p className="muted">Not finished. Take it again to finish the refunds.</p>
+          )}
+          {a.result && <RefundResult result={a.result} />}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -141,6 +167,7 @@ export function StaffActions({ slug, name }: { slug: string; name: string }) {
       );
       setOpen(null);
       if (done.result) setResult(done.result);
+      window.dispatchEvent(new Event(ORG_CHANGED));
       await org.reload();
       await events.reload();
     });

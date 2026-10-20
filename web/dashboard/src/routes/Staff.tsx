@@ -2,6 +2,7 @@ import type { components } from "@ticketslinger/api-client";
 import { useState } from "react";
 import { api, must, touchPasskey } from "../api";
 import { ErrorText, Field, Link, navigate, useAction, useLoad } from "../ui";
+import { ActionLog } from "./StaffActions";
 
 type Log = components["schemas"]["StaffSessionLog"];
 
@@ -61,6 +62,7 @@ export function SessionList({
               ))}
             </ul>
           </details>
+          <ActionLog actions={s.actions ?? []} />
         </li>
       ))}
     </ul>
