@@ -115,18 +115,34 @@ func TestActRefundsTheEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, err := svc.Act(ctx, sess, "refund_event", &ev, why)
-	if err != nil || len(called) != 1 || called[0] != a.ID || a.Result == nil || *a.Result != (staff.RefundResult{Orders: 2, PendingOrders: 1, AmountCents: 7800, FeeCents: 300}) {
+	if err != nil || len(called) != 1 || called[0] != a.ID || a.Result == nil || a.Result.Orders != 2 || a.Result.PendingOrders != 1 ||
+		a.Result.AmountCents != 7800 || a.Result.FeeCents != 300 {
 		t.Fatalf("refund: %+v %v %v", a, err, called)
 	}
 	fail = errors.New("boom")
 	if _, err := svc.Act(ctx, sess, "refund_event", &ev, why); err == nil || len(called) != 2 {
 		t.Fatalf("a failed refund: %v", err)
 	}
-	fail = &pgconn.PgError{Code: "55000", Message: "already_done"}
-	if _, err := svc.Act(ctx, sess, "refund_event", &ev, why); !errors.Is(err, staff.ErrAlreadyDone) {
-		t.Fatalf("already done: %v", err)
+	for _, c := range []struct {
+		err  *pgconn.PgError
+		want error
+	}{
+		{&pgconn.PgError{Code: "55000", Message: "already_done"}, staff.ErrAlreadyDone},
+		{&pgconn.PgError{Code: "55000", Message: "not_suspended"}, staff.ErrNotSuspended},
+	} {
+		fail = c.err
+		if _, err := svc.Act(ctx, sess, "refund_event", &ev, why); !errors.Is(err, c.want) {
+			t.Fatalf("%s: %v", c.err.Message, err)
+		}
 	}
-	if n := f.count(t, `select count(*) from staff_actions where kind = 'refund_event'`); n != 3 {
+	// A claim or finish error is a bug: not a 404 dressed as no such event.
+	for _, pg := range []*pgconn.PgError{{Code: "P0002", Message: "claim_staff_refund: no such action"}, {Code: "42501", Message: "finish_staff_refund: not claimed"}} {
+		fail = pg
+		if _, err := svc.Act(ctx, sess, "refund_event", &ev, why); errors.Is(err, catalogue.ErrNotFound) || errors.Is(err, staff.ErrNotAllowed) || err == nil {
+			t.Fatalf("%s: %v, want it passed through", pg.Code, err)
+		}
+	}
+	if n := f.count(t, `select count(*) from staff_actions where kind = 'refund_event'`); n != 6 {
 		t.Fatalf("refund_event actions = %d, want all recorded", n)
 	}
 }

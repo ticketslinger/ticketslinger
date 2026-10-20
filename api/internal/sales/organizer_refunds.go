@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
@@ -248,6 +250,15 @@ type CancelResult struct {
 	Orders                int   // orders a refund was made for
 	AmountCents, FeeCents int64 // asked back from Stripe in all
 	PendingOrders         int   // payments not yet made, stopped
+	Failed                []RefundFailure
+}
+
+// RefundFailure is an order an event refund left out because the database
+// refused it, and why.
+type RefundFailure struct {
+	Order  uuid.UUID `json:"order_id"`
+	Reason string    `json:"reason"`
+	err    error
 }
 
 var (
@@ -292,6 +303,9 @@ func CancelEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, confirmNa
 	if err != nil {
 		return res, err
 	}
+	if len(res.Failed) > 0 { // the organizer cancels again once it's sorted
+		return res, res.Failed[0].err
+	}
 	return res, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "event.cancelled", EntityType: "event", EntityID: event,
 		Before: map[string]string{"status": status}, After: map[string]any{"status": "cancelled", "orders": res.Orders,
 			"amount_cents": res.AmountCents, "fee_cents": res.FeeCents, "pending_orders": res.PendingOrders}})
@@ -299,9 +313,11 @@ func CancelEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, confirmNa
 
 // refundEvent refunds every paid order of event in full, our fee included,
 // and stops every pending payment with a CancelPaymentJob. Locks every open
-// order in id order.
+// order in id order. Each order is refunded inside a savepoint: one the
+// database refuses (say, its payment has nothing left) is rolled back on
+// its own and listed in res.Failed, and the rest go ahead.
 func refundEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, reason string, actor audit.Actor) (CancelResult, error) {
-	var res CancelResult
+	res := CancelResult{Failed: []RefundFailure{}}
 	// Pending orders are locked too, so a confirmation waits and then sees
 	// the event cancelled (or its organizer suspended) and refunds itself;
 	// only paid ones are refunded here.
@@ -326,11 +342,25 @@ func refundEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, reason st
 		}
 	}
 	for _, o := range paid {
-		r, err := RefundTickets(ctx, tx, org, event, o, RefundRequest{FeeBack: true}, reason, actor)
-		if errors.Is(err, errNotRefundable) {
+		sp, err := tx.Begin(ctx)
+		if err != nil {
+			return res, err
+		}
+		r, err := RefundTickets(ctx, sp, org, event, o, RefundRequest{FeeBack: true}, reason, actor)
+		if err != nil {
+			if rbErr := sp.Rollback(ctx); rbErr != nil {
+				return res, rbErr
+			}
+			why, ok := refusedOrder(err)
+			if !ok {
+				return res, err
+			}
+			if why != "" {
+				res.Failed = append(res.Failed, RefundFailure{Order: o, Reason: why, err: err})
+			}
 			continue
 		}
-		if err != nil {
+		if err := sp.Commit(ctx); err != nil {
 			return res, err
 		}
 		if r.RefundID != nil { // a free order is voided, with nothing to send back
@@ -343,14 +373,46 @@ func refundEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, reason st
 	return res, nil
 }
 
+// refusedOrder says whether err refuses one order only, so the others can
+// go ahead, and why ("" for an order with nothing left to refund, which is
+// skipped). Anything else (a lost connection, a deadlock, a cancelled
+// context) fails the whole refund.
+func refusedOrder(err error) (why string, ok bool) {
+	var pg *pgconn.PgError
+	var con catalogue.ErrConflict
+	var inv catalogue.ErrInvalid
+	switch {
+	case errors.Is(err, errPaymentUsedUp):
+		return "payment_used_up", true
+	case errors.Is(err, errNotRefundable):
+		return "", true
+	case errors.As(err, &pg):
+		if strings.HasPrefix(pg.Code, "40") || strings.HasPrefix(pg.Code, "57") || strings.HasPrefix(pg.Code, "08") {
+			return "", false // try again, not this order's fault
+		}
+		return "database refused it (" + pg.Code + "): " + pg.Message, true
+	case errors.As(err, &con):
+		return con.Code, true
+	case errors.As(err, &inv):
+		return inv.Code, true
+	}
+	return "", false
+}
+
 // RefundEventForStaff carries out a staff refund_event action on a
 // suspended organizer: every paid order of the action's event refunded in
 // full, our fee included, and every pending payment stopped. The event's
 // status stays as it is. One transaction: claim_staff_refund locks the
-// action first, so a second call waits and then fails with already_done
-// (and with not_suspended once the suspension is lifted); a failure
-// anywhere leaves the action unfinished, to be run again.
-func (s *Service) RefundEventForStaff(ctx context.Context, org, action uuid.UUID) (CancelResult, error) {
+// action first, so a second call waits and then fails with already_done;
+// a failure anywhere leaves the action unfinished, to be run again. An
+// order the database refuses is left out and listed in the result, the
+// audit row and the alert, for someone to refund by hand.
+//
+// The suspension is checked once, at the claim (not_suspended). A lift
+// that commits after that doesn't stop a refund already running.
+//
+// alertTo (TS_MAIL_ALERT_TO) gets the totals once the transaction commits.
+func (s *Service) RefundEventForStaff(ctx context.Context, org, action uuid.UUID, alertTo string) (CancelResult, error) {
 	var res CancelResult
 	err := system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error {
 		var event uuid.UUID
@@ -363,12 +425,39 @@ func (s *Service) RefundEventForStaff(ctx context.Context, org, action uuid.UUID
 			return err
 		}
 		res = r
-		totals := map[string]any{"orders": r.Orders, "amount_cents": r.AmountCents, "fee_cents": r.FeeCents, "pending_orders": r.PendingOrders}
+		totals := map[string]any{"orders": r.Orders, "amount_cents": r.AmountCents, "fee_cents": r.FeeCents, "pending_orders": r.PendingOrders,
+			"failed_orders": r.Failed}
 		if _, err := tx.Exec(ctx, `select finish_staff_refund($1, $2)`, action, totals); err != nil {
 			return err
 		}
 		totals["staff_action_id"] = action
-		return audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "event.refunded_by_support", EntityType: "event", EntityID: event, After: totals})
+		if err := audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "event.refunded_by_support", EntityType: "event", EntityID: event, After: totals}); err != nil {
+			return err
+		}
+		var slug, name string
+		if err := tx.QueryRow(ctx, `select g.slug::text, e.name from events e join organizers g on g.id = e.organizer_id where e.id = $1`, event).Scan(&slug, &name); err != nil {
+			return err
+		}
+		subject, text := refundFinishedAlert(slug, name, action, r)
+		return jobs.Enqueue(ctx, tx, "send_email", map[string]string{"to": alertTo, "subject": subject, "text": text})
 	})
 	return res, err
+}
+
+// refundFinishedAlert tells the alert address what a staff refund did.
+func refundFinishedAlert(slug, event string, action uuid.UUID, r CancelResult) (subject, text string) {
+	subject = "Refund finished on " + slug
+	if n := len(r.Failed); n > 0 {
+		subject += fmt.Sprintf(", %d order%s to refund by hand", n, map[bool]string{true: "", false: "s"}[n == 1])
+	}
+	text = fmt.Sprintf("The refund of every order for %s (%s) has gone through. Stripe gets each refund next; watch for failed ones in staff mode.\n\n"+
+		"Orders refunded: %d\nBack to buyers: %s\nOur fee returned: %s\nPending payments stopped: %d\nStaff action: %s\n",
+		event, slug, r.Orders, dollars(r.AmountCents), dollars(r.FeeCents), r.PendingOrders, action)
+	if len(r.Failed) > 0 {
+		text += "\nThese orders couldn't be refunded here, so they need refunding by hand:\n"
+		for _, f := range r.Failed {
+			text += "- " + f.Order.String() + ": " + f.Reason + "\n"
+		}
+	}
+	return subject, text
 }

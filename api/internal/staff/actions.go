@@ -34,10 +34,20 @@ type Action struct {
 	Result        *RefundResult
 }
 
-// RefundResult is what a refund_event action did.
+// RefundResult is what a refund_event action did; staff_actions.result
+// holds it as JSON.
 type RefundResult struct {
-	Orders, PendingOrders int
-	AmountCents, FeeCents int64
+	Orders        int             `json:"orders"`
+	PendingOrders int             `json:"pending_orders"`
+	AmountCents   int64           `json:"amount_cents"`
+	FeeCents      int64           `json:"fee_cents"`
+	FailedOrders  []RefusedRefund `json:"failed_orders"`
+}
+
+// RefusedRefund is an order the refund left out, for someone to refund by hand.
+type RefusedRefund struct {
+	Order  uuid.UUID `json:"order_id"`
+	Reason string    `json:"reason"`
 }
 
 // ActionLog is a staff action as the staff log shows it.
@@ -48,6 +58,7 @@ type ActionLog struct {
 	Reason     string
 	At         time.Time
 	FinishedAt *time.Time
+	Result     *RefundResult // refund_event, once finished
 }
 
 // Purpose is what a staff action's passkey touch is for, so a touch made
@@ -105,21 +116,8 @@ func (s *Service) Act(ctx context.Context, sess Session, kind string, event *uui
 		}
 		return jobs.Enqueue(ctx, tx, "send_email", map[string]string{"to": s.alertTo, "subject": "Staff " + actedOn[kind] + " " + slug, "text": text})
 	})
-	if err == nil {
-		slog.WarnContext(ctx, "staff_action", "action", out.ID, "kind", kind, "staff_session", sess.ID, "user", sess.UserID, "organizer", sess.OrganizerID, "event", event)
-		if kind == "refund_event" {
-			var r RefundResult
-			r, err = s.refund(ctx, sess.OrganizerID, out.ID)
-			out.Result = &r
-			if err != nil {
-				slog.ErrorContext(ctx, "staff_action: refund not carried out", "action", out.ID, "organizer", sess.OrganizerID, "event", event, "err", err)
-			}
-		}
-	}
 	if pg, ok := errors.AsType[*pgconn.PgError](err); ok {
 		switch {
-		case pg.Code == "55000" && pg.Message == "already_done":
-			return Action{}, ErrAlreadyDone
 		case pg.Code == "55000" && pg.Message == "already_suspended":
 			return Action{}, ErrAlreadySuspended
 		case pg.Code == "55000" && pg.Message == "not_suspended":
@@ -133,5 +131,27 @@ func (s *Service) Act(ctx context.Context, sess Session, kind string, event *uui
 	if err != nil {
 		return Action{}, err
 	}
+	slog.WarnContext(ctx, "staff_action", "action", out.ID, "kind", kind, "staff_session", sess.ID, "user", sess.UserID, "organizer", sess.OrganizerID, "event", event)
+	if kind != "refund_event" {
+		return out, nil
+	}
+	// Not cancelled with the request: a client that goes away mid-refund
+	// mustn't roll it back. ponytail: no time limit, as one that hit it on
+	// a big event would roll back on every try; add a job if one ever runs long.
+	r, err := s.refund(context.WithoutCancel(ctx), sess.OrganizerID, out.ID)
+	if pg, ok := errors.AsType[*pgconn.PgError](err); ok && pg.Code == "55000" {
+		switch pg.Message {
+		case "already_done":
+			return Action{}, ErrAlreadyDone
+		case "not_suspended":
+			return Action{}, ErrNotSuspended
+		}
+	}
+	if err != nil {
+		// Anything else is ours to look at: the action stays unfinished.
+		slog.ErrorContext(ctx, "staff_action: refund not carried out", "action", out.ID, "organizer", sess.OrganizerID, "event", event, "err", err)
+		return Action{}, err
+	}
+	out.Result = &r
 	return out, nil
 }

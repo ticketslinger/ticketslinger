@@ -270,11 +270,20 @@ func (s *server) TakeStaffAction(ctx context.Context, req TakeStaffActionRequest
 	case err != nil:
 		return nil, err
 	}
-	out := TakeStaffAction200JSONResponse{Id: a.ID, Kind: StaffActionKind(a.Kind), OrganizerSlug: a.OrganizerSlug, Event: a.Event}
-	if r := a.Result; r != nil {
-		out.Result = &StaffRefundResult{Orders: r.Orders, AmountCents: r.AmountCents, FeeCents: r.FeeCents, PendingOrders: r.PendingOrders}
+	return TakeStaffAction200JSONResponse{Id: a.ID, Kind: StaffActionKind(a.Kind), OrganizerSlug: a.OrganizerSlug, Event: a.Event,
+		Result: toStaffRefundResult(a.Result)}, nil
+}
+
+func toStaffRefundResult(r *staff.RefundResult) *StaffRefundResult {
+	if r == nil {
+		return nil
 	}
-	return out, nil
+	out := &StaffRefundResult{Orders: r.Orders, AmountCents: r.AmountCents, FeeCents: r.FeeCents, PendingOrders: r.PendingOrders,
+		FailedOrders: make([]StaffRefusedOrder, 0, len(r.FailedOrders))}
+	for _, f := range r.FailedOrders {
+		out.FailedOrders = append(out.FailedOrders, StaffRefusedOrder{OrderId: f.Order, Reason: f.Reason})
+	}
+	return out
 }
 
 func (s *server) ListStaffSessions(ctx context.Context, _ ListStaffSessionsRequestObject) (ListStaffSessionsResponseObject, error) {
@@ -290,7 +299,8 @@ func (s *server) ListStaffSessions(ctx context.Context, _ ListStaffSessionsReque
 	for i, l := range list {
 		acts := make([]StaffActionLog, 0, len(l.Actions))
 		for _, a := range l.Actions {
-			acts = append(acts, StaffActionLog{Id: a.ID, Kind: StaffActionKind(a.Kind), Event: nullOf(a.Event), Reason: a.Reason, At: a.At, FinishedAt: nullOf(a.FinishedAt)})
+			acts = append(acts, StaffActionLog{Id: a.ID, Kind: StaffActionKind(a.Kind), Event: nullOf(a.Event), Reason: a.Reason, At: a.At, FinishedAt: nullOf(a.FinishedAt),
+				Result: toStaffRefundResult(a.Result)})
 		}
 		out[i].Actions = &acts
 	}

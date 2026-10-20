@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/mailer"
@@ -21,6 +22,20 @@ func (f fixture) refundAction(t *testing.T, org uuid.UUID) uuid.UUID {
 	return f.id(t, `insert into staff_actions(staff_session_id, user_id, organizer_id, kind, event_id, reason)
 		select staff_session_id, user_id, organizer_id, 'refund_event', $2, 'Refunding every buyer of it'
 		from staff_actions where organizer_id = $1 and kind = 'suspend' order by at desc limit 1 returning id`, org, f.event)
+}
+
+const alertTo = "alerts@example.com"
+
+// finishAlert is the text of the refund-finished alert, "" if none was queued.
+func (f fixture) finishAlert(t *testing.T) (subject, text string) {
+	t.Helper()
+	err := f.owner.QueryRow(context.Background(), `select payload->>'subject', payload->>'text' from jobs
+		where kind = 'send_email' and payload->>'to' = $1`, alertTo).Scan(&subject, &text)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ""
+	}
+	f.must(t, err)
+	return subject, text
 }
 
 func pgMessage(err error) string {
@@ -49,10 +64,19 @@ func TestRefundEventForStaff(t *testing.T) {
 
 	f.suspend(t, f.org)
 	action := f.refundAction(t, f.org)
-	res, err := s.RefundEventForStaff(ctx, f.org, action)
+	res, err := s.RefundEventForStaff(ctx, f.org, action, alertTo)
 	f.must(t, err)
 	if res.Orders != 2 || res.AmountCents != 2600+5200 || res.FeeCents != 100+200 || res.PendingOrders != 1 {
 		t.Fatalf("result %+v", res)
+	}
+	subject, text := f.finishAlert(t)
+	if subject != "Refund finished on acme" {
+		t.Fatalf("alert subject %q", subject)
+	}
+	for _, want := range []string{"Gala (acme)", "Orders refunded: 2", "Back to buyers: $78.00", "Our fee returned: $3.00", "Pending payments stopped: 1", action.String()} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the alert doesn't say %q: %s", want, text)
+		}
 	}
 	m := &mailer.Memory{}
 	drain(t, s, m)
@@ -81,12 +105,12 @@ func TestRefundEventForStaff(t *testing.T) {
 		t.Fatal("the event's status changed")
 	}
 	if n := f.count(t, `select count(*) from audit_log where action = 'event.refunded_by_support' and actor_system and entity_id = $1
-		and after = jsonb_build_object('staff_action_id', $2::text, 'orders', 2, 'amount_cents', 7800, 'fee_cents', 300, 'pending_orders', 1)`,
+		and after = jsonb_build_object('staff_action_id', $2::text, 'orders', 2, 'amount_cents', 7800, 'fee_cents', 300, 'pending_orders', 1, 'failed_orders', '[]'::jsonb)`,
 		f.event, action); n != 1 {
 		t.Fatal("no event.refunded_by_support row with the totals")
 	}
 	if n := f.count(t, `select count(*) from staff_actions where id = $1 and finished_at is not null
-		and result = '{"orders": 2, "amount_cents": 7800, "fee_cents": 300, "pending_orders": 1}'`, action); n != 1 {
+		and result = '{"orders": 2, "amount_cents": 7800, "fee_cents": 300, "pending_orders": 1, "failed_orders": []}'`, action); n != 1 {
 		t.Fatal("the action isn't finished with the totals")
 	}
 	sent := 0
@@ -114,7 +138,7 @@ func TestRefundEventOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	for i := range errs {
-		wg.Go(func() { _, errs[i] = s.RefundEventForStaff(ctx, f.org, action) })
+		wg.Go(func() { _, errs[i] = s.RefundEventForStaff(ctx, f.org, action, alertTo) })
 	}
 	wg.Wait()
 	if (errs[0] == nil) == (errs[1] == nil) || pgMessage(errors.Join(errs...)) != "already_done" {
@@ -132,7 +156,7 @@ func TestRefundEventNeedsSuspension(t *testing.T) {
 	f.suspend(t, f.org)
 	action := f.refundAction(t, f.org)
 	f.lift(t, f.org)
-	if _, err := s.RefundEventForStaff(context.Background(), f.org, action); pgMessage(err) != "not_suspended" {
+	if _, err := s.RefundEventForStaff(context.Background(), f.org, action, alertTo); pgMessage(err) != "not_suspended" {
 		t.Fatalf("%v, want not_suspended", err)
 	}
 	if n := f.count(t, `select count(*) from refunds`); n != 0 {
@@ -155,21 +179,21 @@ func TestRefundEventRetriesAfterAFailure(t *testing.T) {
 		begin raise exception 'simulated failure'; end $$`)
 	f.exec(t, `create trigger fail_support_refund before insert on audit_log for each row
 		when (new.action = 'event.refunded_by_support') execute function fail_support_refund()`)
-	if _, err := s.RefundEventForStaff(ctx, f.org, action); pgMessage(err) != "simulated failure" {
+	if _, err := s.RefundEventForStaff(ctx, f.org, action, alertTo); pgMessage(err) != "simulated failure" {
 		t.Fatalf("%v, want the simulated failure", err)
 	}
 	if n := f.count(t, `select (select count(*) from refunds) + (select count(*) from jobs where kind = 'refund')
-		+ (select count(*) from staff_actions where finished_at is not null)`); n != 0 {
+		+ (select count(*) from staff_actions where finished_at is not null) + (select count(*) from jobs where payload->>'to' = $1)`, alertTo); n != 0 {
 		t.Fatal("a failed refund left something behind")
 	}
 	f.exec(t, `drop trigger fail_support_refund on audit_log`)
-	res, err := s.RefundEventForStaff(ctx, f.org, action)
+	res, err := s.RefundEventForStaff(ctx, f.org, action, alertTo)
 	f.must(t, err)
 	if res.Orders != 2 {
 		t.Fatalf("retry: %+v", res)
 	}
 	// Staff starting again with a new action find nothing left to refund.
-	res, err = s.RefundEventForStaff(ctx, f.org, f.refundAction(t, f.org))
+	res, err = s.RefundEventForStaff(ctx, f.org, f.refundAction(t, f.org), alertTo)
 	f.must(t, err)
 	if res.Orders != 0 || res.AmountCents != 0 {
 		t.Fatalf("a second action refunded again: %+v", res)
@@ -180,9 +204,85 @@ func TestRefundEventRetriesAfterAFailure(t *testing.T) {
 }
 
 func TestPlatformRefundEmail(t *testing.T) {
-	subject, text := sales.RefundEmailForTest("platform", false, "Gala", "Acme", 2600)
+	subject, text := sales.RefundEmailForTest("platform", false, true, "Gala", "Acme", 2600)
 	if subject != "Your refund for Gala" || text != "Gala isn't being sold through TicketSlinger any more, so we've refunded you $26.00 in full. "+
 		"It goes back to the card you paid with and usually shows up in 5 to 10 days." {
 		t.Fatalf("%q %q", subject, text)
+	}
+	// Part of the order was refunded before: not "in full".
+	if _, text := sales.RefundEmailForTest("platform", false, false, "Gala", "Acme", 2600); text != "Gala isn't being sold through TicketSlinger any more, "+
+		"so we've refunded you $26.00. It goes back to the card you paid with and usually shows up in 5 to 10 days." {
+		t.Fatalf("part refunded before: %q", text)
+	}
+}
+
+// An order the organizer had partly refunded, keeping the fee: staff refund
+// what's left, with its fee, once; the buyer isn't told "in full".
+func TestRefundEventAfterAPartRefund(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	order, pi, tickets := f.paidOrder(t, s, fake, 2, 1)
+	f.refund(t, s, order, sales.RefundRequest{TicketIDs: tickets[:1]})
+	f.suspend(t, f.org)
+	res, err := s.RefundEventForStaff(ctx, f.org, f.refundAction(t, f.org), alertTo)
+	f.must(t, err)
+	if res.Orders != 1 || res.AmountCents != 2600 || res.FeeCents != 100 {
+		t.Fatalf("result %+v, want the one ticket left with its fee", res)
+	}
+	res, err = s.RefundEventForStaff(ctx, f.org, f.refundAction(t, f.org), alertTo)
+	f.must(t, err)
+	if res.Orders != 0 {
+		t.Fatalf("second action: %+v", res)
+	}
+	m := &mailer.Memory{}
+	drain(t, s, m)
+	if amount, fee := fake.Refunded(pi); amount != 2500+2600 || fee != 100 {
+		t.Fatalf("refunded %d, fee %d", amount, fee)
+	}
+	if n := f.count(t, `select count(*) from orders where id = $1 and status = 'refunded'`, order); n != 1 {
+		t.Fatal("the order isn't refunded")
+	}
+	for _, e := range m.Sent {
+		if strings.Contains(e.Text, "TicketSlinger") && strings.Contains(e.Text, "in full") {
+			t.Errorf("a part refund says in full: %s", e.Text)
+		}
+	}
+}
+
+// An order the database refuses (its payment has nothing left) doesn't
+// hold up the others: they're refunded, and it's listed for a person.
+func TestRefundEventListsARefusedOrder(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	ctx := context.Background()
+	stuck, _, _ := f.paidOrder(t, s, fake, 1, 1)
+	_, piB, _ := f.paidOrder(t, s, fake, 1, 2)
+	// Money already gone back outside the tickets: the payment has nothing left.
+	f.exec(t, `insert into refunds(organizer_id, payment_id, amount_cents, fee_refunded, status, reason)
+		select organizer_id, id, amount_cents, false, 'succeeded', 'organizer' from payments where order_id = $1`, stuck)
+	f.suspend(t, f.org)
+	action := f.refundAction(t, f.org)
+	res, err := s.RefundEventForStaff(ctx, f.org, action, alertTo)
+	f.must(t, err)
+	if res.Orders != 1 || len(res.Failed) != 1 || res.Failed[0].Order != stuck || res.Failed[0].Reason != "payment_used_up" {
+		t.Fatalf("result %+v", res)
+	}
+	want := `[{"reason": "payment_used_up", "order_id": "` + stuck.String() + `"}]`
+	if n := f.count(t, `select count(*) from staff_actions where id = $1 and finished_at is not null and result->'failed_orders' = $2::jsonb`, action, want); n != 1 {
+		t.Fatal("the action doesn't list the refused order")
+	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'event.refunded_by_support' and after->'failed_orders' = $1::jsonb`, want); n != 1 {
+		t.Fatal("the audit row doesn't list the refused order")
+	}
+	if subject, text := f.finishAlert(t); subject != "Refund finished on acme, 1 order to refund by hand" || !strings.Contains(text, stuck.String()+": payment_used_up") {
+		t.Fatalf("alert %q: %s", subject, text)
+	}
+	if n := f.count(t, `select count(*) from tickets t join orders o on o.id = t.order_id where o.id = $1 and t.status = 'valid'`, stuck); n != 1 {
+		t.Fatal("the refused order's ticket changed")
+	}
+	drain(t, s, &mailer.Memory{})
+	if amount, _ := fake.Refunded(piB); amount != 2600 {
+		t.Fatalf("B refunded %d", amount)
 	}
 }

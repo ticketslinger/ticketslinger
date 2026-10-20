@@ -248,7 +248,7 @@ paths:
   /staff/actions:
     post:
       operationId: takeStaffAction
-      description: "Staff only, from a session that passed a second factor and is in staff mode; anyone else gets 404. Suspends the staff-mode organizer (every event off sale, its team and keys can change nothing), lifts its suspension, or (refund_event, only while it's suspended) refunds every paid order of one of its events in full, our fee included, and stops every payment still pending; the event's status stays as it is, and result says what was refunded. A refund_event is recorded first and carried out after: if carrying it out fails (500), the action stays in listStaffSessions with no finished_at; take it again, and an order already refunded isn't refunded twice. Send the challenge from beginStaffAction for the same kind and the passkey's answer to it; anything else is 403 passkey_required. The reason (10 to 500 characters) goes into the organizer's audit log and an alert email. 409 already_suspended, 409 not_suspended, 409 already_done when that refund was carried out already. 404 for an event that isn't this organizer's. 422 (field event) when event is missing for refund_event or sent for anything else. 429 rate_limited after too many passkey attempts. 503 alerts_off when the server has no TS_MAIL_ALERT_TO."
+      description: "Staff only, from a session that passed a second factor and is in staff mode; anyone else gets 404. Suspends the staff-mode organizer (every event off sale, its team and keys can change nothing), lifts its suspension, or (refund_event, only while it's suspended) refunds every paid order of one of its events in full, our fee included, and stops every payment still pending; the event's status stays as it is, and result says what was refunded. A refund_event is recorded first and carried out after: if carrying it out fails (500), the action stays in listStaffSessions with no finished_at; take it again, and an order already refunded isn't refunded twice. An order the database refuses (say, its payment has nothing left) is left out and listed in result.failed_orders while the rest go ahead. The alert address gets the totals once the refund is done. The suspension is checked as the refund starts; lifting it after that doesn't stop the refund. Send the challenge from beginStaffAction for the same kind and the passkey's answer to it; anything else is 403 passkey_required. The reason (10 to 500 characters) goes into the organizer's audit log and an alert email. 409 already_suspended, 409 not_suspended, 409 already_done when that refund was carried out already. 404 for an event that isn't this organizer's. 422 (field event) when event is missing for refund_event or sent for anything else. 429 rate_limited after too many passkey attempts. 503 alerts_off when the server has no TS_MAIL_ALERT_TO."
       parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TakeStaffAction" } } } }
       responses:
@@ -1762,12 +1762,22 @@ components:
     StaffRefundResult:
       type: object
       description: What a refund_event did.
-      required: [orders, amount_cents, fee_cents, pending_orders]
+      required: [orders, amount_cents, fee_cents, pending_orders, failed_orders]
       properties:
         orders: { type: integer, description: "Paid orders a refund was made for." }
         amount_cents: { type: integer, format: int64, description: "Asked back from Stripe in all." }
         fee_cents: { type: integer, format: int64, description: "Our fee given back with it." }
         pending_orders: { type: integer, description: "Payments not yet made, now stopped." }
+        failed_orders:
+          type: array
+          description: "Orders the database refused to refund (say, their payment had nothing left). The others went ahead; these need refunding by hand."
+          items: { $ref: "#/components/schemas/StaffRefusedOrder" }
+    StaffRefusedOrder:
+      type: object
+      required: [order_id, reason]
+      properties:
+        order_id: { type: string, format: uuid }
+        reason: { type: string, description: "payment_used_up, or what the database said." }
     StaffActionLog:
       type: object
       required: [id, kind, event, reason, at, finished_at]
@@ -1778,6 +1788,7 @@ components:
         reason: { type: string }
         at: { type: string, format: date-time }
         finished_at: { type: [string, "null"], format: date-time, description: "refund_event only: when the refunds were queued." }
+        result: { $ref: "#/components/schemas/StaffRefundResult", description: "refund_event only, once finished." }
     StaffRequest:
       type: object
       required: [method, route, at]

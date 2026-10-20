@@ -171,12 +171,12 @@ func TestSuspendAndLift(t *testing.T) {
 		t.Fatalf("refund of another organizer's event: %v", b)
 	}
 	b = w.actOn(w.staffTok, "refund_event", w.fixture["event"])
-	want := map[string]any{"orders": 1.0, "amount_cents": 2600.0, "fee_cents": 100.0, "pending_orders": 0.0}
+	want := map[string]any{"orders": 1.0, "amount_cents": 2600.0, "fee_cents": 100.0, "pending_orders": 0.0, "failed_orders": []any{}}
 	if b["status"] != 200 || b["kind"] != "refund_event" || b["event"] != w.fixture["event"] || !jsonEqual(asMap(b["result"]), want) {
 		t.Fatalf("refund_event: %v", b)
 	}
-	if alerts("Staff refunded an event of acme") != 1 {
-		t.Fatal("no refund alert")
+	if alerts("Staff refunded an event of acme") != 1 || alerts("Refund finished on acme") != 1 {
+		t.Fatal("no refund alerts")
 	}
 	if n := countRows(t, w.owner, `select count(*) from refunds where reason = 'platform' and fee_refunded and amount_cents = 2600`); n != 1 {
 		t.Fatalf("platform refunds = %d", n)
@@ -236,7 +236,7 @@ func TestSuspendAndLift(t *testing.T) {
 	}
 	for _, s := range sessions {
 		acts, _ := s["actions"].([]any)
-		if s["id"] == w.session && (len(acts) != 4 || acts[0].(map[string]any)["kind"] != "suspend" || acts[1].(map[string]any)["finished_at"] == nil ||
+		if s["id"] == w.session && (len(acts) != 4 || acts[0].(map[string]any)["kind"] != "suspend" || acts[1].(map[string]any)["finished_at"] == nil || asMap(acts[1].(map[string]any)["result"])["orders"] != 1.0 ||
 			acts[3].(map[string]any)["kind"] != "lift") {
 			t.Errorf("staff session log: %v", s)
 		}

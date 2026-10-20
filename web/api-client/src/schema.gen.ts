@@ -297,7 +297,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Staff only, from a session that passed a second factor and is in staff mode; anyone else gets 404. Suspends the staff-mode organizer (every event off sale, its team and keys can change nothing), lifts its suspension, or (refund_event, only while it's suspended) refunds every paid order of one of its events in full, our fee included, and stops every payment still pending; the event's status stays as it is, and result says what was refunded. A refund_event is recorded first and carried out after: if carrying it out fails (500), the action stays in listStaffSessions with no finished_at; take it again, and an order already refunded isn't refunded twice. Send the challenge from beginStaffAction for the same kind and the passkey's answer to it; anything else is 403 passkey_required. The reason (10 to 500 characters) goes into the organizer's audit log and an alert email. 409 already_suspended, 409 not_suspended, 409 already_done when that refund was carried out already. 404 for an event that isn't this organizer's. 422 (field event) when event is missing for refund_event or sent for anything else. 429 rate_limited after too many passkey attempts. 503 alerts_off when the server has no TS_MAIL_ALERT_TO. */
+        /** @description Staff only, from a session that passed a second factor and is in staff mode; anyone else gets 404. Suspends the staff-mode organizer (every event off sale, its team and keys can change nothing), lifts its suspension, or (refund_event, only while it's suspended) refunds every paid order of one of its events in full, our fee included, and stops every payment still pending; the event's status stays as it is, and result says what was refunded. A refund_event is recorded first and carried out after: if carrying it out fails (500), the action stays in listStaffSessions with no finished_at; take it again, and an order already refunded isn't refunded twice. An order the database refuses (say, its payment has nothing left) is left out and listed in result.failed_orders while the rest go ahead. The alert address gets the totals once the refund is done. The suspension is checked as the refund starts; lifting it after that doesn't stop the refund. Send the challenge from beginStaffAction for the same kind and the passkey's answer to it; anything else is 403 passkey_required. The reason (10 to 500 characters) goes into the organizer's audit log and an alert email. 409 already_suspended, 409 not_suspended, 409 already_done when that refund was carried out already. 404 for an event that isn't this organizer's. 422 (field event) when event is missing for refund_event or sent for anything else. 429 rate_limited after too many passkey attempts. 503 alerts_off when the server has no TS_MAIL_ALERT_TO. */
         post: operations["takeStaffAction"];
         delete?: never;
         options?: never;
@@ -1840,6 +1840,14 @@ export interface components {
             fee_cents: number;
             /** @description Payments not yet made, now stopped. */
             pending_orders: number;
+            /** @description Orders the database refused to refund (say, their payment had nothing left). The others went ahead; these need refunding by hand. */
+            failed_orders: components["schemas"]["StaffRefusedOrder"][];
+        };
+        StaffRefusedOrder: {
+            /** Format: uuid */
+            order_id: string;
+            /** @description payment_used_up, or what the database said. */
+            reason: string;
         };
         StaffActionLog: {
             /** Format: uuid */
@@ -1855,6 +1863,8 @@ export interface components {
              * @description refund_event only: when the refunds were queued.
              */
             finished_at: string | null;
+            /** @description refund_event only, once finished. */
+            result?: components["schemas"]["StaffRefundResult"];
         };
         StaffRequest: {
             method: string;

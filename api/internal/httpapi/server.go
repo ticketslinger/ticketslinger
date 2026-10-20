@@ -73,10 +73,15 @@ func New(d Deps) http.Handler {
 			Payments: d.Payments, Direct: d.Config.PaymentsMode == "direct", StorefrontURL: d.Config.StorefrontURL, SecretKey: d.Config.SecretKey}
 	}
 	if d.Staff == nil {
-		sv := d.Sales
-		d.Staff = staff.New(d.Pool, d.Config.MailAlertTo, func(ctx context.Context, org, action uuid.UUID) (staff.RefundResult, error) {
-			r, err := sv.RefundEventForStaff(ctx, org, action)
-			return staff.RefundResult{Orders: r.Orders, PendingOrders: r.PendingOrders, AmountCents: r.AmountCents, FeeCents: r.FeeCents}, err
+		sv, alertTo := d.Sales, d.Config.MailAlertTo
+		d.Staff = staff.New(d.Pool, alertTo, func(ctx context.Context, org, action uuid.UUID) (staff.RefundResult, error) {
+			r, err := sv.RefundEventForStaff(ctx, org, action, alertTo)
+			out := staff.RefundResult{Orders: r.Orders, PendingOrders: r.PendingOrders, AmountCents: r.AmountCents, FeeCents: r.FeeCents,
+				FailedOrders: make([]staff.RefusedRefund, 0, len(r.Failed))}
+			for _, f := range r.Failed {
+				out.FailedOrders = append(out.FailedOrders, staff.RefusedRefund{Order: f.Order, Reason: f.Reason})
+			}
+			return out, err
 		})
 	}
 	noStore := noStoreRoutes()
