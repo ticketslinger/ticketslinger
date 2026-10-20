@@ -126,3 +126,131 @@ func TestQuoteSaysWhichTaxIsIncluded(t *testing.T) {
 		t.Fatal("0% inclusive tax lost its flag")
 	}
 }
+
+type allInCase struct {
+	price int64
+	tax   int
+	incl  bool
+	mode  string
+	fee   pricing.Fee
+}
+
+func allInGrid() []allInCase {
+	var g []allInCase
+	for _, p := range []int64{0, 1, 49, 50, 99, 2500, 2165, 99999, 10000000} {
+		for _, tx := range []struct {
+			bp   int
+			incl bool
+		}{{0, false}, {825, false}, {825, true}, {1000, false}, {1000, true}} {
+			for _, m := range []string{pricing.FeePass, pricing.FeeAbsorb} {
+				for _, f := range []pricing.Fee{{BP: 200, Cents: 50}, {}, {BP: 1000}, {Cents: 99}} {
+					g = append(g, allInCase{p, tx.bp, tx.incl, m, f})
+				}
+			}
+		}
+	}
+	return g
+}
+
+func TestShownPriceMatchesCompute(t *testing.T) {
+	for _, c := range allInGrid() {
+		l := pricing.Line{TicketTypeID: uuid.New(), Quantity: 1, PriceCents: c.price, TaxRateBP: c.tax, PricesIncludeTax: c.incl}
+		s := pricing.ShownPrice(l, c.mode, c.fee)
+		q := pricing.Compute([]pricing.Line{l}, nil, c.mode, c.fee)
+		wantFee := q.FeeCents
+		if c.mode == pricing.FeeAbsorb {
+			wantFee = 0
+		}
+		if s.AllInCents != q.TotalCents || s.FeeCents != wantFee || s.TaxCents != q.TaxCents {
+			t.Fatalf("%+v: shown %+v, quote %+v", c, s, q)
+		}
+		if q.Tickets[0].AllInCents != q.TotalCents {
+			t.Fatalf("%+v: ticket all-in %d, total %d", c, q.Tickets[0].AllInCents, q.TotalCents)
+		}
+	}
+}
+
+func TestAllInDiscountIsHonest(t *testing.T) {
+	promos := []*pricing.Promo{
+		nil,
+		{Kind: "percent", Value: 0},
+		{Kind: "percent", Value: 1000},
+		{Kind: "percent", Value: 3333},
+		{Kind: "percent", Value: 10000},
+		{Kind: "amount", Value: 100},
+		{Kind: "amount", Value: 500},
+	}
+	for _, c := range allInGrid() {
+		ps := append([]*pricing.Promo{}, promos...)
+		ps = append(ps, &pricing.Promo{Kind: "amount", Value: c.price + 1})
+		for _, p := range ps {
+			for n := 1; n <= 3; n++ {
+				l := pricing.Line{TicketTypeID: uuid.New(), Quantity: n, PriceCents: c.price, TaxRateBP: c.tax, PricesIncludeTax: c.incl, Discounted: true}
+				q := pricing.Compute([]pricing.Line{l}, p, c.mode, c.fee)
+				var sum int64
+				for _, tk := range q.Tickets {
+					sum += tk.AllInCents
+				}
+				if sum-q.AllInDiscountCents != q.TotalCents || q.AllInDiscountCents < 0 {
+					t.Fatalf("%+v promo %+v n=%d: %+v", c, p, n, q)
+				}
+				for i, tk := range q.Tickets {
+					if want := pricing.ShownPrice(l, c.mode, c.fee).AllInCents; tk.AllInCents != want {
+						t.Fatalf("%+v promo %+v ticket %d: all-in %d, shown %d", c, p, i, tk.AllInCents, want)
+					}
+				}
+				if (p == nil || p.Value == 0) && q.AllInDiscountCents != 0 {
+					t.Fatalf("%+v promo %+v n=%d: discount %d, want 0", c, p, n, q.AllInDiscountCents)
+				}
+			}
+		}
+	}
+}
+
+func TestWorkedExamples(t *testing.T) {
+	fee := pricing.Fee{BP: 200, Cents: 50}
+	cases := []struct {
+		name                string
+		l                   pricing.Line
+		promo               *pricing.Promo
+		mode                string
+		allIn, feeC, taxC   int64
+		total, allInDiscont int64
+	}{
+		{"general pass", pricing.Line{Quantity: 1, PriceCents: 2500}, nil, pricing.FeePass, 2600, 100, 0, 2600, 0},
+		{"two with FRIENDS", pricing.Line{Quantity: 2, PriceCents: 2500, Discounted: true}, &pricing.Promo{Kind: "percent", Value: 1000}, pricing.FeePass, 2600, 100, 0, 4690, 510},
+		{"tax on top", pricing.Line{Quantity: 1, PriceCents: 2000, TaxRateBP: 825}, nil, pricing.FeePass, 2255, 90, 165, 2255, 0},
+		{"tax included", pricing.Line{Quantity: 1, PriceCents: 2165, TaxRateBP: 825, PricesIncludeTax: true}, nil, pricing.FeePass, 2255, 90, 165, 2255, 0},
+		{"absorb", pricing.Line{Quantity: 1, PriceCents: 2500}, nil, pricing.FeeAbsorb, 2500, 0, 0, 2500, 0},
+		{"free", pricing.Line{Quantity: 1, PriceCents: 0}, nil, pricing.FeePass, 0, 0, 0, 0, 0},
+		{"direct mode", pricing.Line{Quantity: 1, PriceCents: 2500}, nil, pricing.FeePass, 2500, 0, 0, 2500, 0},
+	}
+	for _, c := range cases {
+		f := fee
+		if c.name == "direct mode" {
+			f = pricing.Fee{}
+		}
+		s := pricing.ShownPrice(c.l, c.mode, f)
+		if s.AllInCents != c.allIn || s.FeeCents != c.feeC || s.TaxCents != c.taxC {
+			t.Errorf("%s: shown %+v", c.name, s)
+		}
+		q := pricing.Compute([]pricing.Line{c.l}, c.promo, c.mode, f)
+		if q.TotalCents != c.total || q.AllInDiscountCents != c.allInDiscont {
+			t.Errorf("%s: total %d discount %d", c.name, q.TotalCents, q.AllInDiscountCents)
+		}
+	}
+}
+
+func TestAllInDiscountZeroWhenPromoDoesNotApply(t *testing.T) {
+	fee := pricing.Fee{BP: 200, Cents: 50}
+	l := pricing.Line{TicketTypeID: uuid.New(), Quantity: 2, PriceCents: 2500, TaxRateBP: 825}
+	for _, p := range []*pricing.Promo{{Kind: "percent", Value: 1000}, {Kind: "amount", Value: 500}} {
+		if q := pricing.Compute([]pricing.Line{l}, p, pricing.FeePass, fee); q.AllInDiscountCents != 0 {
+			t.Fatalf("undiscounted line, promo %+v: %d", p, q.AllInDiscountCents)
+		}
+	}
+	l.Discounted = true
+	if q := pricing.Compute([]pricing.Line{l}, &pricing.Promo{Kind: "amount", Value: 0}, pricing.FeePass, fee); q.AllInDiscountCents != 0 {
+		t.Fatalf("amount promo of 0: %d", q.AllInDiscountCents)
+	}
+}
