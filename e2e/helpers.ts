@@ -1,5 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { type Browser, type BrowserContext, chromium, expect, type Page } from "@playwright/test";
+import { bin, ownerUrl } from "./env";
 
 export const API = process.env.E2E_API ?? "http://127.0.0.1:3001";
 export const PASSWORD = "a long test passphrase";
@@ -124,4 +126,16 @@ export async function createSellableEvent(page: Page, slug: string) {
   await page.getByRole("button", { name: "Go live" }).click();
   await expect(page.getByRole("button", { name: "Back to draft" })).toBeVisible();
   if (size) await page.setViewportSize(size);
+}
+
+/** Makes a verified user with a passkey into support staff, as the sudo wrapper on the server would. */
+export function grantStaff(email: string) {
+  execFileSync(bin, ["staff", "grant", email], {
+    env: { ...process.env, TS_MIGRATE_DATABASE_URL: ownerUrl, SUDO_USER: "e2e" },
+  });
+}
+
+/** One statement as the database owner, for what no screen can do (like running out a staff session's hour). */
+export function ownerSql(sql: string) {
+  execFileSync("psql", [ownerUrl, "-v", "ON_ERROR_STOP=1", "-c", sql]);
 }

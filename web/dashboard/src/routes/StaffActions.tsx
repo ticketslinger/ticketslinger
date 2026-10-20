@@ -134,14 +134,12 @@ export function StaffActions({ slug, name }: { slug: string; name: string }) {
     must(await api.GET("/organizers/{organizer}", { params: { path: { organizer: slug } } })),
   );
   const suspended = org.data?.suspended === true;
+  // Always fetched: reload() runs the last render's loader, which would still say "not suspended"
+  // right after a suspend and leave the list empty.
   const events = useLoad(async () =>
-    suspended
-      ? must(
-          await api.GET("/organizers/{organizer}/events", {
-            params: { path: { organizer: slug } },
-          }),
-        )
-      : [],
+    must(
+      await api.GET("/organizers/{organizer}/events", { params: { path: { organizer: slug } } }),
+    ),
   );
   const [open, setOpen] = useState<{ kind: Kind; event?: { id: string; name: string } } | null>(
     null,
