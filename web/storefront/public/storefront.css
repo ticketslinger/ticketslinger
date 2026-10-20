@@ -64,12 +64,17 @@ p {
 .when,
 .where,
 .status,
-.fee {
+.price-note {
   color: var(--muted);
 }
 
 .address {
   display: block;
+}
+
+.price-note {
+  margin: 0 0 8px;
+  font-size: 0.875rem;
 }
 
 .description,

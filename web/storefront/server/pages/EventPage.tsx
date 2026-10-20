@@ -41,6 +41,15 @@ export const when = (iso: string, tz: string) =>
 const onSaleAt = (iso: string, tz: string) =>
   `${fmt(iso, tz, { month: "short", day: "numeric" })}, ${fmt(iso, tz, { hour: "numeric", minute: "2-digit" })}`;
 
+/** What sits inside the all-in price, or "" when nothing does. */
+export function priceNote(fee: number, tax: number): string {
+  if (fee > 0 && tax > 0)
+    return `Includes ${formatCents(fee)} service fee and ${formatCents(tax)} tax`;
+  if (fee > 0) return `Includes ${formatCents(fee)} service fee`;
+  if (tax > 0) return `Includes ${formatCents(tax)} tax`;
+  return "";
+}
+
 /** The most of this type one order can take right now; below min_per_order nothing can be bought. */
 const most = (t: TicketType) => Math.min(t.max_per_order, t.remaining, 100);
 
@@ -49,6 +58,19 @@ const paragraphs = (text: string) =>
     .split(/\n\s*\n/)
     .map((p) => p.trim())
     .filter(Boolean);
+
+// An API from before all-in prices sends none; show the old price rather than "$NaN".
+const hasAllIn = (t: TicketType) => typeof t.all_in_cents === "number";
+
+/** [price cell, note beneath it]. */
+function priceOf(t: TicketType, pass: boolean): [string, string] {
+  if (!hasAllIn(t)) {
+    const old = t.price_cents === 0 ? "Free" : formatCents(t.price_cents);
+    return [old, pass && t.price_cents > 0 ? "A service fee is added at checkout." : ""];
+  }
+  const cell = t.all_in_cents === 0 ? "Free" : formatCents(t.all_in_cents);
+  return [cell, priceNote(t.all_in_fee_cents ?? 0, t.all_in_tax_cents ?? 0)];
+}
 
 function Picker({
   t,
@@ -129,18 +151,20 @@ export function EventPage(p: EventPageProps) {
         <>
           <form class="buy" method="post" action={`${home}/checkout`}>
             <ul class="tickets">
-              {ticket_types.map((t) => (
-                <li class="ticket" key={t.id}>
-                  <div class="ticket-head">
-                    <h2>{t.name}</h2>
-                    <span class="price">
-                      {t.price_cents === 0 ? "Free" : formatCents(t.price_cents)}
-                    </span>
-                  </div>
-                  {t.description && <p class="ticket-description">{t.description}</p>}
-                  <Picker t={t} tz={tz} chosen={p.chosen?.[t.id] ?? 0} left={p.left?.[t.id]} />
-                </li>
-              ))}
+              {ticket_types.map((t) => {
+                const [cell, note] = priceOf(t, event.fee_mode === "pass");
+                return (
+                  <li class="ticket" key={t.id}>
+                    <div class="ticket-head">
+                      <h2>{t.name}</h2>
+                      <span class="price">{cell}</span>
+                    </div>
+                    {note && <p class="price-note">{note}</p>}
+                    {t.description && <p class="ticket-description">{t.description}</p>}
+                    <Picker t={t} tz={tz} chosen={p.chosen?.[t.id] ?? 0} left={p.left?.[t.id]} />
+                  </li>
+                );
+              })}
             </ul>
             <input type="hidden" name="idem" value={p.idem} />
             {promo && <input type="hidden" name="code" value={p.code} />}
@@ -157,9 +181,6 @@ export function EventPage(p: EventPageProps) {
                     {/* Loads Turnstile once the buyer starts on this form. */}
                     <script type="module" src="/assets/turnstile.js" />
                   </>
-                )}
-                {event.fee_mode === "pass" && (
-                  <p class="fee">A service fee is added at checkout.</p>
                 )}
                 <button type="submit">Get tickets</button>
               </>

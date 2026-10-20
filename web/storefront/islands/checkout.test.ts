@@ -66,8 +66,9 @@ test("payload maps names and answers; an unticked checkbox is false", () => {
   for (const n of ["Ada", "Grace", "Lin"]) form.append("attendee", n);
   form.set("answers.q-order.-1", "None");
   form.set("answers.q-vip.2", "Sam");
-  expect(payload(form, fields)).toEqual({
+  expect(payload(form, fields, 4690)).toEqual({
     email: "ada@example.com",
+    expected_total_cents: 4690,
     attendees: ["Ada", "Grace", "Lin"],
     answers: [
       { question_id: "q-order", ticket_index: -1, value: "None" },
@@ -76,7 +77,7 @@ test("payload maps names and answers; an unticked checkbox is false", () => {
     ],
   });
   form.set("answers.q-agree.-1", "true");
-  expect(payload(form, fields).answers?.[2]?.value).toBe("true");
+  expect(payload(form, fields, 4690).answers?.[2]?.value).toBe("true");
 });
 
 test("422 errors land on the input they name, in our words", () => {

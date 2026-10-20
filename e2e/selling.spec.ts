@@ -43,15 +43,20 @@ test("an organizer connects Stripe, a buyer pays on a phone, and the order shows
     if (r.url().startsWith(SHOP)) sent.push(r.headerValue("referer").then((v) => [r.url(), v]));
   });
   await shop.goto(`${SHOP}/${slug}/spring-social?code=FRIENDS`);
+  // The event page shows the one all-in price: $25 plus the $1.00 fee.
+  await expect(shop.getByText("$26.00")).toBeVisible();
+  await expect(shop.getByText("Includes $1.00 service fee")).toBeVisible();
   await shop.getByLabel("General").selectOption("2");
   await expect(shop.locator('input[name="cf-turnstile-response"]')).not.toHaveValue("", {
     timeout: 15_000,
   });
   await shop.getByRole("button", { name: "Get tickets" }).click();
   await expect(shop).toHaveURL(/\/checkout\//);
-  // 2 × $25, 10% off, no tax, service fee 2 × (2% of $22.50 + $0.50) = $1.90.
-  await expect(shop.getByText("Service fee")).toBeVisible();
+  // 2 × $26.00, 10% off the $25 price, no tax; the fee inside is 2 × (2% of $22.50 + $0.50) = $1.90.
+  await expect(shop.getByText("$52.00")).toBeVisible();
+  await expect(shop.getByText("−$5.10")).toBeVisible();
   await expect(shop.getByText("$46.90")).toBeVisible();
+  await expect(shop.getByText("Includes $1.90 service fee")).toBeVisible();
   await shop.getByLabel("Email").fill(`buyer-${stamp}@example.com`);
   await shop.getByLabel("Name on ticket 1").fill("Ada");
   await shop.getByLabel("Name on ticket 2").fill("Grace");

@@ -147,7 +147,7 @@ test("real test-mode Stripe: a card, a 3D Secure card, a refund and a cancellati
   await page.getByRole("button", { name: "Go live" }).click();
   await expect(page.getByRole("button", { name: "Back to draft" })).toBeVisible();
 
-  // Two buyers, 2 × General each: $50.00 plus a $2.00 service fee.
+  // Two buyers, 2 × General each: $52.00 all-in, with a $2.00 service fee inside.
   const buy = async (who: string, number: string, threeDS: boolean, weigh = false) => {
     const buyer = await browser.newContext({ ...devices["Pixel 7"] });
     const shop = await buyer.newPage();

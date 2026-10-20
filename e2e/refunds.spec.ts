@@ -32,7 +32,7 @@ test("an organizer refunds one ticket, then cancels the event", async ({
   await expect(page.getByText("You're ready to take payments.")).toBeVisible();
   await createSellableEvent(page, slug);
 
-  // The buyer takes 2 × $25 with no code: $50.00 plus a $2.00 service fee.
+  // The buyer takes 2 × $26.00 all-in with no code: $50.00 of tickets and a $2.00 service fee inside the $52.00.
   const buyer = await browser.newContext({ ...devices["Pixel 7"] });
   const shop = await buyer.newPage();
   await shop.goto(`${SHOP}/${slug}/spring-social`);

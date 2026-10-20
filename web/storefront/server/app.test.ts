@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { createApp } from "./app";
+import { priceNote } from "./pages/EventPage";
 
 const event = {
   organizer: { name: "Acme", slug: "acme" },
@@ -22,6 +23,9 @@ const event = {
       name: "General",
       description: "",
       price_cents: 2500,
+      all_in_cents: 2600,
+      all_in_fee_cents: 100,
+      all_in_tax_cents: 0,
       min_per_order: 1,
       max_per_order: 10,
       remaining: 3,
@@ -80,7 +84,7 @@ test("event page is server-rendered; its one script of ours is the Turnstile loa
   const html = await res.text();
   expect(res.status).toBe(200);
   expect(html).toContain("Spring Gala");
-  expect(html).toContain("$25.00");
+  expect(html).toContain("$26.00");
   expect(html.match(/<script[^>]*>/gi)).toEqual([
     '<script type="module" src="/assets/turnstile.js">',
   ]);
@@ -92,7 +96,8 @@ test("event page is server-rendered; its one script of ours is the Turnstile loa
     "script-src 'self' https://challenges.cloudflare.com",
   );
   expect(html).toContain('data-sitekey="1x00000000000000000000AA"');
-  expect(html).toContain("A service fee is added at checkout.");
+  expect(html).not.toContain("A service fee is added at checkout.");
+  expect(html).toContain("Includes $1.00 service fee");
   expect(html).toContain('action="/acme/gala/checkout"');
   expect(html).toMatch(/name="idem" value="[0-9a-f-]{36}"/);
 });
@@ -661,6 +666,7 @@ const checkout = (over: Record<string, unknown> = {}) => ({
     tickets: [1, 2].map(() => ({
       ticket_type_id: "t1",
       price_cents: 2500,
+      all_in_cents: 2600,
       discount_cents: 250,
       tax_cents: 0,
       fee_cents: 95,
@@ -669,6 +675,7 @@ const checkout = (over: Record<string, unknown> = {}) => ({
     })),
     subtotal_cents: 5000,
     discount_cents: 500,
+    all_in_discount_cents: 510,
     tax_cents: 0,
     fee_cents: 190,
     total_cents: 4690,
@@ -714,9 +721,11 @@ test("the checkout page carries its data, the island and Stripe's policy", async
   expect(data.quote.total_cents).toBe(4690);
   // The quote is on the page before any script runs.
   expect(html).toContain("2 × General");
-  expect(html).toContain("Service fee");
-  expect(html).toContain("$1.90");
+  expect(html).toContain("$52.00");
+  expect(html).toContain("−$5.10");
   expect(html).toContain("$46.90");
+  expect(html).toContain("Includes $1.90 service fee");
+  expect(html).not.toContain("Service fee</span>");
   expect(html).not.toMatch(/style="/);
 });
 
@@ -1033,7 +1042,7 @@ const sumsUp = (html: string) => {
   return { sum, total: cents(total?.[2] ?? "") };
 };
 
-const taxed = (inclusive: boolean) => {
+const taxed = (inclusive: boolean, allIn = true) => {
   // $25 at 8.25%: inclusive keeps $25.00 with $1.91 inside; exclusive adds $2.06.
   const t = inclusive
     ? {
@@ -1055,9 +1064,16 @@ const taxed = (inclusive: boolean) => {
   return checkout({
     items: [{ ticket_type_id: "t1", quantity: 1 }],
     quote: {
-      tickets: [{ ticket_type_id: "t1", ...t }],
+      tickets: [
+        {
+          ticket_type_id: "t1",
+          ...t,
+          ...(allIn ? { all_in_cents: t.charge_cents + t.fee_cents } : {}),
+        },
+      ],
       subtotal_cents: 2500,
       discount_cents: 0,
+      ...(allIn ? { all_in_discount_cents: 0 } : {}),
       tax_cents: t.tax_cents,
       fee_cents: t.fee_cents,
       total_cents: t.charge_cents + t.fee_cents,
@@ -1067,51 +1083,107 @@ const taxed = (inclusive: boolean) => {
   });
 };
 
-test("tax on top is its own line, and the lines add up", async () => {
+test("tax on top is a note under the total, with the fee, and no Tax line", async () => {
   const { a } = app(() => Response.json(taxed(false)));
   const html = await (await a.request(`/checkout/${TOK}`)).text();
-  expect(html).toContain("<span>Tax</span><span>$2.06</span>");
-  expect(html).not.toContain("Includes");
+  expect(html).not.toContain("<span>Tax</span>");
+  expect(html).not.toContain("Service fee</span>");
+  expect(html).toContain("Includes $2.06 tax");
+  expect(html).toContain("Includes $1.00 service fee");
   expect(sumsUp(html)).toEqual({ sum: 2806, total: 2806 });
 });
 
-test("included tax comes from the API's flag", async () => {
-  const one = async (t: Record<string, unknown>, included: number) => {
-    const c = taxed(true);
-    const quote = {
-      ...c.quote,
-      tickets: [{ ticket_type_id: "t1", discount_cents: 0, fee_cents: 0, ...t }],
-      included_tax_cents: included,
-    };
-    const body = { ...c, quote };
-    return (await app(() => Response.json(body)).a.request(`/checkout/${TOK}`)).text();
-  };
-  // 0% inclusive tax: charge equals the price either way, only the flag says so.
-  const zero = await one(
-    { price_cents: 1000, tax_cents: 0, charge_cents: 1000, tax_included: true },
-    0,
-  );
-  expect(zero).not.toContain("<span>Tax</span>");
-  expect(zero).not.toContain("Includes");
-  const inside = await one(
-    { price_cents: 2200, tax_cents: 200, charge_cents: 2200, tax_included: true },
-    200,
-  );
-  expect(inside).toContain("Includes $2.00 tax");
-  expect(inside).not.toContain("<span>Tax</span>");
-  const added = await one(
-    { price_cents: 2000, tax_cents: 160, charge_cents: 2160, tax_included: false },
-    0,
-  );
-  expect(added).toContain("<span>Tax</span><span>$1.60</span>");
-});
-
-test("tax inside the price is noted under the total, and the lines add up", async () => {
+test("tax inside the price is noted under the total too", async () => {
   const { a } = app(() => Response.json(taxed(true)));
   const html = await (await a.request(`/checkout/${TOK}`)).text();
   expect(html).not.toContain("<span>Tax</span>");
   expect(html).toContain("Includes $1.91 tax");
   expect(sumsUp(html)).toEqual({ sum: 2596, total: 2596 });
+});
+
+test("no tax and no fee means no notes", async () => {
+  const c = taxed(true);
+  const body = { ...c, quote: { ...c.quote, tax_cents: 0, fee_cents: 0 } };
+  const html = await (await app(() => Response.json(body)).a.request(`/checkout/${TOK}`)).text();
+  expect(html).not.toContain("Includes");
+});
+
+test("an API without all-in prices still gets the old quote lines, never $NaN", async () => {
+  const { a } = app(() => Response.json(taxed(false, false)));
+  const html = await (await a.request(`/checkout/${TOK}`)).text();
+  expect(html).toContain("<span>Tax</span><span>$2.06</span>");
+  expect(html).toContain("<span>Service fee</span><span>$1.00</span>");
+  expect(html).not.toMatch(/NaN|undefined/);
+  expect(sumsUp(html)).toEqual({ sum: 2806, total: 2806 });
+});
+
+test("every price on the event page is all-in", async () => {
+  const base = event.ticket_types[0];
+  const ev = structuredClone(event);
+  ev.ticket_types = [
+    {
+      ...base,
+      id: "a",
+      name: "Pass",
+      price_cents: 2500,
+      all_in_cents: 2600,
+      all_in_fee_cents: 100,
+      all_in_tax_cents: 0,
+    },
+    {
+      ...base,
+      id: "b",
+      name: "Taxed",
+      price_cents: 2000,
+      all_in_cents: 2255,
+      all_in_fee_cents: 90,
+      all_in_tax_cents: 165,
+    },
+    {
+      ...base,
+      id: "c",
+      name: "Absorbed",
+      price_cents: 1000,
+      all_in_cents: 1000,
+      all_in_fee_cents: 0,
+      all_in_tax_cents: 0,
+    },
+    {
+      ...base,
+      id: "d",
+      name: "Free",
+      price_cents: 0,
+      all_in_cents: 0,
+      all_in_fee_cents: 0,
+      all_in_tax_cents: 0,
+    },
+  ];
+  const html = await (
+    await app(() => Response.json(ev), { siteKey: "" }).a.request("/acme/gala")
+  ).text();
+  const allowed = new Set(["$26.00", "$1.00", "$22.55", "$0.90", "$1.65", "$10.00"]);
+  const found = html.match(/\$[\d,]+\.\d\d/g) ?? [];
+  expect(found.length).toBeGreaterThan(0);
+  for (const m of found) expect(allowed.has(m)).toBe(true);
+  expect(html).not.toContain("$25.00");
+  expect(html).not.toContain("$20.00");
+  expect(html).not.toContain("A service fee is added at checkout.");
+  expect(html).toContain("Includes $1.00 service fee");
+  expect(html).toContain("Includes $0.90 service fee and $1.65 tax");
+  expect(html).toContain("Free");
+});
+
+test("an API without all-in prices shows the old price and fee note, never $NaN", async () => {
+  const ev = structuredClone(event);
+  const { all_in_cents, all_in_fee_cents, all_in_tax_cents, ...old } = ev.ticket_types[0];
+  // @ts-expect-error an older API's ticket type
+  ev.ticket_types = [old];
+  const html = await (
+    await app(() => Response.json(ev), { siteKey: "" }).a.request("/acme/gala")
+  ).text();
+  expect(html).toContain("$25.00");
+  expect(html).toContain("A service fee is added at checkout.");
+  expect(html).not.toMatch(/NaN|undefined/);
 });
 
 // An error can carry the URL we fetched, token and all; the log gets its kind and a redacted message.
@@ -1557,4 +1629,11 @@ test("the plain 410 page has no refund line", async () => {
     const html = await (await a.request(path)).text();
     expect(html).not.toContain("refund");
   }
+});
+
+test("priceNote words what's inside the price", () => {
+  expect(priceNote(100, 0)).toBe("Includes $1.00 service fee");
+  expect(priceNote(90, 165)).toBe("Includes $0.90 service fee and $1.65 tax");
+  expect(priceNote(0, 165)).toBe("Includes $1.65 tax");
+  expect(priceNote(0, 0)).toBe("");
 });

@@ -38,7 +38,7 @@ async function organizer(browser: Browser, stamp: number) {
   return { page, name, slug };
 }
 
-/** A buyer takes 2 x $25 on the fake payment path: $50.00 plus a $2.00 fee. */
+/** A buyer takes 2 x $25 on the fake payment path: $52.00 all-in, with a $2.00 fee inside. */
 async function buy(browser: Browser, slug: string, stamp: number) {
   const buyer = await browser.newContext({ ...devices["Pixel 7"] });
   const shop = await buyer.newPage();
