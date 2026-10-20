@@ -417,6 +417,9 @@ func refundEmail(reason string, cancelled bool, event, organizer string, amount 
 	case reason == "late_payment":
 		text = "Sorry, we couldn't keep your tickets for " + event + ". By the time your payment reached us, they weren't available any more, " +
 			"so we've refunded you in full: " + dollars(amount) + " back to your card. It usually shows up in 5 to 10 days."
+	case reason == "platform":
+		text = event + " isn't being sold through TicketSlinger any more, so we've refunded you " + dollars(amount) +
+			" in full. It goes back to the card you paid with and usually shows up in 5 to 10 days."
 	case reason == "event_cancelled":
 		text = event + " has been cancelled, and " + organizer + " has refunded you " + dollars(amount) +
 			". It goes back to the card you paid with and usually shows up in 5 to 10 days."

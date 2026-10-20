@@ -21,6 +21,8 @@ var (
 	ErrAlreadySuspended = errors.New("staff: already suspended")
 	// ErrNotSuspended: lift or refund_event on an organizer that isn't suspended.
 	ErrNotSuspended = errors.New("staff: not suspended")
+	// ErrAlreadyDone: a refund_event action that has already been carried out.
+	ErrAlreadyDone = errors.New("staff: already done")
 )
 
 // Action is one staff write: a suspension, a lift, or an event refund.
@@ -78,6 +80,8 @@ What to do on the Stripe side, in this order:
 // Act takes one staff action on sess's organizer: staff_act re-checks the
 // staff session and records the action, and the alert email is queued in
 // the same transaction. The passkey touch is checked before this is called.
+// A refund_event is then carried out in a second transaction; if that one
+// fails, the action stays recorded and unfinished, and staff start again.
 func (s *Service) Act(ctx context.Context, sess Session, kind string, event *uuid.UUID, reason string) (Action, error) {
 	if s.alertTo == "" {
 		return Action{}, ErrAlertsOff
@@ -101,8 +105,21 @@ func (s *Service) Act(ctx context.Context, sess Session, kind string, event *uui
 		}
 		return jobs.Enqueue(ctx, tx, "send_email", map[string]string{"to": s.alertTo, "subject": "Staff " + actedOn[kind] + " " + slug, "text": text})
 	})
+	if err == nil {
+		slog.WarnContext(ctx, "staff_action", "action", out.ID, "kind", kind, "staff_session", sess.ID, "user", sess.UserID, "organizer", sess.OrganizerID, "event", event)
+		if kind == "refund_event" {
+			var r RefundResult
+			r, err = s.refund(ctx, sess.OrganizerID, out.ID)
+			out.Result = &r
+			if err != nil {
+				slog.ErrorContext(ctx, "staff_action: refund not carried out", "action", out.ID, "organizer", sess.OrganizerID, "event", event, "err", err)
+			}
+		}
+	}
 	if pg, ok := errors.AsType[*pgconn.PgError](err); ok {
 		switch {
+		case pg.Code == "55000" && pg.Message == "already_done":
+			return Action{}, ErrAlreadyDone
 		case pg.Code == "55000" && pg.Message == "already_suspended":
 			return Action{}, ErrAlreadySuspended
 		case pg.Code == "55000" && pg.Message == "not_suspended":
@@ -116,6 +133,5 @@ func (s *Service) Act(ctx context.Context, sess Session, kind string, event *uui
 	if err != nil {
 		return Action{}, err
 	}
-	slog.WarnContext(ctx, "staff_action", "action", out.ID, "kind", kind, "staff_session", sess.ID, "user", sess.UserID, "organizer", sess.OrganizerID, "event", event)
 	return out, nil
 }

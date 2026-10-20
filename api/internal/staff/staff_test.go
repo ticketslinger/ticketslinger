@@ -31,7 +31,7 @@ func newFixture(t *testing.T) fixture {
 	ctx := context.Background()
 	f := fixture{pool: testdb.New(t)}
 	f.owner = testdb.Owner(t, f.pool)
-	f.svc = staff.New(f.pool, alertTo)
+	f.svc = staff.New(f.pool, alertTo, nil)
 	var ann uuid.UUID
 	if err := f.pool.QueryRow(ctx, `insert into users(email, name) values ('ann@example.com', 'Ann') returning id`).Scan(&ann); err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestStartWritesSessionAuditAndAlert(t *testing.T) {
 func TestStartRefusedWithoutAlertAddress(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
-	if _, err := staff.New(f.pool, "").Start(ctx, f.user, f.login, "acme", "Buyer says the ticket email never came", "", ""); !errors.Is(err, staff.ErrAlertsOff) {
+	if _, err := staff.New(f.pool, "", nil).Start(ctx, f.user, f.login, "acme", "Buyer says the ticket email never came", "", ""); !errors.Is(err, staff.ErrAlertsOff) {
 		t.Fatalf("got %v, want ErrAlertsOff", err)
 	}
 	if n := f.count(t, `select count(*) from staff_sessions`); n != 0 {

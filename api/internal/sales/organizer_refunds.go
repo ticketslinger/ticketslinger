@@ -16,6 +16,7 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
 	"github.com/ticketslinger/ticketslinger/api/internal/jobs"
 	"github.com/ticketslinger/ticketslinger/api/internal/pricing"
+	"github.com/ticketslinger/ticketslinger/api/internal/system"
 )
 
 // RefundRequest is an organizer's refund of an order.
@@ -49,7 +50,7 @@ var (
 
 // RefundTickets voids tickets of one order of event and asks Stripe for the
 // money back. Runs in the caller's transaction; locks the order, then its
-// tickets. reason: "organizer" or "event_cancelled".
+// tickets. reason: "organizer", "event_cancelled" or "platform".
 func RefundTickets(ctx context.Context, tx pgx.Tx, org, event, order uuid.UUID, in RefundRequest, reason string, actor audit.Actor) (RefundResult, error) {
 	switch {
 	case len(in.TicketIDs) > MaxRefundTickets:
@@ -246,6 +247,7 @@ func OrderDetail(ctx context.Context, tx pgx.Tx, event, order uuid.UUID) (OrderD
 type CancelResult struct {
 	Orders                int   // orders a refund was made for
 	AmountCents, FeeCents int64 // asked back from Stripe in all
+	PendingOrders         int   // payments not yet made, stopped
 }
 
 var (
@@ -286,8 +288,23 @@ func CancelEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, confirmNa
 	if _, err := tx.Exec(ctx, `update events set status = 'cancelled', updated_at = clock_timestamp() where id = $1`, event); err != nil {
 		return res, err
 	}
+	res, err = refundEvent(ctx, tx, org, event, "event_cancelled", actor)
+	if err != nil {
+		return res, err
+	}
+	return res, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "event.cancelled", EntityType: "event", EntityID: event,
+		Before: map[string]string{"status": status}, After: map[string]any{"status": "cancelled", "orders": res.Orders,
+			"amount_cents": res.AmountCents, "fee_cents": res.FeeCents, "pending_orders": res.PendingOrders}})
+}
+
+// refundEvent refunds every paid order of event in full, our fee included,
+// and stops every pending payment with a CancelPaymentJob. Locks every open
+// order in id order.
+func refundEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, reason string, actor audit.Actor) (CancelResult, error) {
+	var res CancelResult
 	// Pending orders are locked too, so a confirmation waits and then sees
-	// the event cancelled; only paid ones are refunded here.
+	// the event cancelled (or its organizer suspended) and refunds itself;
+	// only paid ones are refunded here.
 	rows, _ := tx.Query(ctx, `select id, status from orders where event_id = $1
 		and status in ('pending', 'paid', 'partially_refunded') order by id for update`, event)
 	var paid, pending []uuid.UUID
@@ -309,7 +326,7 @@ func CancelEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, confirmNa
 		}
 	}
 	for _, o := range paid {
-		r, err := RefundTickets(ctx, tx, org, event, o, RefundRequest{FeeBack: true}, "event_cancelled", actor)
+		r, err := RefundTickets(ctx, tx, org, event, o, RefundRequest{FeeBack: true}, reason, actor)
 		if errors.Is(err, errNotRefundable) {
 			continue
 		}
@@ -322,7 +339,36 @@ func CancelEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, confirmNa
 		res.AmountCents += r.AmountCents
 		res.FeeCents += r.FeeCents
 	}
-	return res, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "event.cancelled", EntityType: "event", EntityID: event,
-		Before: map[string]string{"status": status}, After: map[string]any{"status": "cancelled", "orders": res.Orders,
-			"amount_cents": res.AmountCents, "fee_cents": res.FeeCents, "pending_orders": len(pending)}})
+	res.PendingOrders = len(pending)
+	return res, nil
+}
+
+// RefundEventForStaff carries out a staff refund_event action on a
+// suspended organizer: every paid order of the action's event refunded in
+// full, our fee included, and every pending payment stopped. The event's
+// status stays as it is. One transaction: claim_staff_refund locks the
+// action first, so a second call waits and then fails with already_done
+// (and with not_suspended once the suspension is lifted); a failure
+// anywhere leaves the action unfinished, to be run again.
+func (s *Service) RefundEventForStaff(ctx context.Context, org, action uuid.UUID) (CancelResult, error) {
+	var res CancelResult
+	err := system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error {
+		var event uuid.UUID
+		if err := tx.QueryRow(ctx, `select claim_staff_refund($1)`, action).Scan(&event); err != nil {
+			return err
+		}
+		actor := audit.Actor{System: true}
+		r, err := refundEvent(ctx, tx, org, event, "platform", actor)
+		if err != nil {
+			return err
+		}
+		res = r
+		totals := map[string]any{"orders": r.Orders, "amount_cents": r.AmountCents, "fee_cents": r.FeeCents, "pending_orders": r.PendingOrders}
+		if _, err := tx.Exec(ctx, `select finish_staff_refund($1, $2)`, action, totals); err != nil {
+			return err
+		}
+		totals["staff_action_id"] = action
+		return audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "event.refunded_by_support", EntityType: "event", EntityID: event, After: totals})
+	})
+	return res, err
 }

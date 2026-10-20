@@ -61,11 +61,18 @@ type SessionLog struct {
 type Service struct {
 	pool    *pgxpool.Pool
 	alertTo string
+	refund  Refunder
 }
 
+// Refunder carries out a refund_event action as the organizer's system
+// role (sales.Service.RefundEventForStaff, which this package can't import).
+type Refunder func(ctx context.Context, org, action uuid.UUID) (RefundResult, error)
+
 // New returns the service; alertTo is TS_MAIL_ALERT_TO, and without it
-// Start refuses.
-func New(pool *pgxpool.Pool, alertTo string) *Service { return &Service{pool, alertTo} }
+// Start refuses. refund carries out refund_event actions.
+func New(pool *pgxpool.Pool, alertTo string, refund Refunder) *Service {
+	return &Service{pool, alertTo, refund}
+}
 
 // AlertsOff reports whether Start would refuse with ErrAlertsOff.
 func (s *Service) AlertsOff() bool { return s.alertTo == "" }
