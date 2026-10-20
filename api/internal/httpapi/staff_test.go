@@ -34,12 +34,13 @@ type staffHarness struct {
 	owner *pgxpool.Pool
 }
 
-// newStaffHarness is newHarness with staff alerts on.
-func newStaffHarness(t *testing.T) staffHarness {
+// newStaffHarness is newHarness with the auth service and an owner pool at
+// hand, and staff alerts going to alertTo ("" for none).
+func newStaffHarness(t *testing.T, alertTo string) staffHarness {
 	pool := testdb.New(t)
 	m := &mailer.Memory{}
 	svc := auth.NewService(pool, m, auth.Options{RPID: "localhost", Origin: "http://localhost:5173", SecretKey: []byte("0123456789abcdef0123456789abcdef")})
-	srv := startServer(t, httpapi.New(httpapi.Deps{Pool: pool, Auth: svc, Config: config.Config{MailAlertTo: "alerts@example.com"}}))
+	srv := startServer(t, httpapi.New(httpapi.Deps{Pool: pool, Auth: svc, Config: config.Config{MailAlertTo: alertTo}}))
 	return staffHarness{&harness{t, srv, m, pool, clientFor(t, srv.URL)}, svc, testdb.Owner(t, pool)}
 }
 
@@ -116,7 +117,7 @@ func startBody(challenge string, credential string, reason string) string {
 const goodReason = "Buyer says the ticket email never came"
 
 func TestStaffRoutesAre404ToOthers(t *testing.T) {
-	h := newStaffHarness(t)
+	h := newStaffHarness(t, "alerts@example.com")
 	owner := h.signupWithMFA("owner@example.com")
 	h.createOrganizer(owner, "acme")
 	_, readKey := h.createKey(owner, "acme", "read")
@@ -129,10 +130,13 @@ func TestStaffRoutesAre404ToOthers(t *testing.T) {
 
 	for name, tok := range map[string]string{"non-staff": owner, "non-mfa staff": plainStaff, "read key": readKey, "write key": writeKey} {
 		for _, op := range staffOps {
-			res := h.do(tok, op.method, op.path, op.body)
-			b := h.json(res)
-			if res.StatusCode != 404 || !jsonEqual(b, unknown) {
-				t.Errorf("%s: %s %s got %d %v, want 404 %v", name, op.method, op.path, res.StatusCode, b, unknown)
+			// A body that can't be read gets the same 404: the gate runs first.
+			for _, body := range []string{op.body, `{"challenge_id":"not a uuid"`} {
+				res := h.do(tok, op.method, op.path, body)
+				b := h.json(res)
+				if res.StatusCode != 404 || !jsonEqual(b, unknown) {
+					t.Errorf("%s: %s %s %.30q got %d %v, want 404 %v", name, op.method, op.path, body, res.StatusCode, b, unknown)
+				}
 			}
 		}
 	}
@@ -162,7 +166,7 @@ func countRows(t *testing.T, pool *pgxpool.Pool, q string, args ...any) int {
 
 func TestStartNeedsAStaffPasskeyTouch(t *testing.T) {
 	ctx := context.Background()
-	h := newStaffHarness(t)
+	h := newStaffHarness(t, "alerts@example.com")
 	owner := h.signupWithMFA("owner@example.com")
 	h.createOrganizer(owner, "acme")
 	dev, tok := h.signupWithPasskey("staff@example.com")
@@ -189,11 +193,28 @@ func TestStartNeedsAStaffPasskeyTouch(t *testing.T) {
 	refused("another login session's assertion", startBody(ch["challenge_id"].(string), dev.assert(t, ch["options"]), goodReason))
 
 	uid := uuid.MustParse(me["id"].(string))
-	id, opts, err := h.auth.BeginStaffAssertion(ctx, uid, loginSession(t, h.owner, tok), "staff_action", "suspend:acme")
+	login := loginSession(t, h.owner, tok)
+	id, opts, err := h.auth.BeginStaffAssertion(ctx, uid, login, "staff_action", "start")
 	if err != nil {
 		t.Fatal(err)
 	}
 	refused("a staff_action assertion", startBody(id.String(), dev.assert(t, opts), goodReason))
+	id, opts, err = h.auth.BeginStaffAssertion(ctx, uid, login, "staff", "suspend:acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused("a staff assertion for another purpose", startBody(id.String(), dev.assert(t, opts), goodReason))
+
+	ch = h.must(h.do(tok, "POST", "/v1/staff/sessions/challenge", ""), 200)
+	if _, err := h.owner.Exec(ctx, `update webauthn_challenges set expires_at = now() - interval '1 second' where id = $1`, ch["challenge_id"]); err != nil {
+		t.Fatal(err)
+	}
+	refused("an expired challenge", startBody(ch["challenge_id"].(string), dev.assert(t, ch["options"]), goodReason))
+
+	ch = h.must(h.do(tok, "POST", "/v1/staff/sessions/challenge", ""), 200)
+	dev.authr.Options.UserNotVerified = true
+	refused("a touch without user verification", startBody(ch["challenge_id"].(string), dev.assert(t, ch["options"]), goodReason))
+	dev.authr.Options.UserNotVerified = false
 
 	if n := countRows(t, h.owner, `select count(*) from staff_sessions`); n != 0 {
 		t.Fatalf("staff_sessions after refusals = %d", n)
@@ -205,7 +226,9 @@ func TestStartNeedsAStaffPasskeyTouch(t *testing.T) {
 	if started["organizer_slug"] != "acme" || started["organizer_name"] != "acme" || started["reason"] != goodReason {
 		t.Fatalf("started: %v", started)
 	}
-	refused("a reused challenge", body)
+	// Signed afresh with a higher counter, so only the challenge being
+	// spent can refuse it (synced passkeys report a counter of 0).
+	refused("a reused challenge", startBody(ch["challenge_id"].(string), dev.assert(t, ch["options"]), goodReason))
 
 	me = h.must(h.do(tok, "GET", "/v1/me", ""), 200)
 	cur, _ := me["staff_session"].(map[string]any)
@@ -244,7 +267,7 @@ func TestStartNeedsAStaffPasskeyTouch(t *testing.T) {
 }
 
 func TestLogoutEndsStaffMode(t *testing.T) {
-	h := newStaffHarness(t)
+	h := newStaffHarness(t, "alerts@example.com")
 	owner := h.signupWithMFA("owner@example.com")
 	h.createOrganizer(owner, "acme")
 	dev, tok := h.signupWithPasskey("staff@example.com")
@@ -258,7 +281,7 @@ func TestLogoutEndsStaffMode(t *testing.T) {
 }
 
 func TestStartReasonBounds(t *testing.T) {
-	h := newStaffHarness(t)
+	h := newStaffHarness(t, "alerts@example.com")
 	_, tok := h.signupWithPasskey("staff@example.com")
 	grantStaff(t, h.owner, "staff@example.com")
 	for _, n := range []int{9, 501} {
@@ -268,5 +291,29 @@ func TestStartReasonBounds(t *testing.T) {
 		if res.StatusCode != http.StatusUnprocessableEntity || e["field"] != "reason" {
 			t.Errorf("reason of %d: got %d %v, want 422 field reason", n, res.StatusCode, b)
 		}
+	}
+}
+
+// With no alert address, staff mode doesn't start, and a touch already
+// made isn't spent.
+func TestStaffModeNeedsAnAlertAddress(t *testing.T) {
+	ctx := context.Background()
+	h := newStaffHarness(t, "")
+	h.createOrganizer(h.signupWithMFA("owner@example.com"), "acme")
+	dev, tok := h.signupWithPasskey("staff@example.com")
+	grantStaff(t, h.owner, "staff@example.com")
+	if res := h.do(tok, "POST", "/v1/staff/sessions/challenge", ""); res.StatusCode != 503 || h.errorCode(res) != "alerts_off" {
+		t.Fatalf("begin: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	me := h.must(h.do(tok, "GET", "/v1/me", ""), 200)
+	id, opts, err := h.auth.BeginStaffAssertion(ctx, uuid.MustParse(me["id"].(string)), loginSession(t, h.owner, tok), "staff", "start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := h.do(tok, "POST", "/v1/staff/sessions", startBody(id.String(), dev.assert(t, opts), goodReason)); res.StatusCode != 503 || h.errorCode(res) != "alerts_off" {
+		t.Fatalf("start: %d %q", res.StatusCode, h.errorCode(res))
+	}
+	if n := countRows(t, h.owner, `select count(*) from webauthn_challenges where id = $1`, id); n != 1 {
+		t.Fatal("the challenge was spent")
 	}
 }

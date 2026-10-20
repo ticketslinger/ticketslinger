@@ -186,6 +186,14 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 				return
 			}
 			ctx = context.WithValue(ctx, authKey, a)
+			// Staff routes answer anyone else as an unknown route would,
+			// before the body is read or an Idempotency-Key is looked at.
+			if strings.HasPrefix(r.URL.Path, "/v1/staff/") {
+				if _, _, err := s.staffCaller(ctx); err != nil {
+					writeError(w, err)
+					return
+				}
+			}
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

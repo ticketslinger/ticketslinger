@@ -312,10 +312,13 @@ const staffChallengeLifetime = 2 * time.Minute
 // BeginStaffAssertion asks the signed-in user to touch one of their own
 // passkeys, with user verification, for one purpose on one login session:
 // kind "staff" starts staff mode, "staff_action" confirms a staff action.
-// The challenge lives two minutes.
+// The challenge lives two minutes. Each user may ask ten times a minute.
 func (s *Service) BeginStaffAssertion(ctx context.Context, user, loginSession uuid.UUID, kind, purpose string) (uuid.UUID, *protocol.CredentialAssertion, error) {
 	if s.waErr != nil {
 		return uuid.Nil, nil, s.waErr
+	}
+	if !s.emLimit.Allow("staff-begin:"+user.String(), time.Now()) {
+		return uuid.Nil, nil, ErrRateLimited
 	}
 	u, err := s.loadWebAuthnUser(ctx, user)
 	if err != nil {

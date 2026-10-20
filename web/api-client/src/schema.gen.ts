@@ -228,7 +228,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Staff only, from a session that passed a second factor; anyone else, and every API key, gets 404 as for a route that doesn't exist. WebAuthn request options for one of your own passkeys, with user verification, good for two minutes and only for this session's startStaffSession. 503 alerts_off when the server has no TS_MAIL_ALERT_TO: staff mode never starts unannounced. */
+        /** @description Staff only, from a session that passed a second factor; anyone else, and every API key, gets 404 as for a route that doesn't exist. WebAuthn request options for one of your own passkeys, with user verification, good for two minutes and only for this session's startStaffSession. 429 rate_limited after ten in a minute. 503 alerts_off when the server has no TS_MAIL_ALERT_TO: staff mode never starts unannounced. */
         post: operations["beginStaffSession"];
         delete?: never;
         options?: never;
@@ -2555,6 +2555,7 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            429: components["responses"]["Error"];
             503: components["responses"]["Error"];
         };
     };

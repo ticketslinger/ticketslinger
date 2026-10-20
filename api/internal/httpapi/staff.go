@@ -22,8 +22,10 @@ var (
 
 // staffCaller is the caller of a /staff/* route: live staff, signed in with
 // a second factor. Anyone else, API keys included, gets the same 404 as a
-// route that doesn't exist: the routes' existence is nobody else's business.
-// A staff member on a password-only session is an ordinary user.
+// route that doesn't exist, from authenticate before the body is read (the
+// generated wrapper still parses query parameters first, so a missing q is
+// a 400). The handlers ask again. A staff member on a password-only session
+// is an ordinary user.
 func (s *server) staffCaller(ctx context.Context) (auth.User, auth.Session, error) {
 	a, ok := ctx.Value(authKey).(authed)
 	if !ok {
@@ -55,10 +57,12 @@ func (s *server) BeginStaffSession(ctx context.Context, _ BeginStaffSessionReque
 		return nil, errAlertsOff
 	}
 	id, opts, err := s.Auth.BeginStaffAssertion(ctx, u.ID, sess.ID, "staff", staffPurpose)
-	if errors.Is(err, auth.ErrPasskeyRequired) {
+	switch {
+	case errors.Is(err, auth.ErrPasskeyRequired):
 		return nil, errStaffPasskey
-	}
-	if err != nil {
+	case errors.Is(err, auth.ErrRateLimited):
+		return nil, tooManyAttempts()
+	case err != nil:
 		return nil, err
 	}
 	m, err := toMap(opts)
@@ -81,8 +85,12 @@ func (s *server) StartStaffSession(ctx context.Context, req StartStaffSessionReq
 	if n := utf8.RuneCountInString(reason); n < 10 || n > 500 {
 		return nil, errInvalidReason
 	}
-	if len(req.Body.Organizer) > 40 {
+	if utf8.RuneCountInString(req.Body.Organizer) > 40 {
 		return nil, invalidField("invalid_slug", "organizer", "That isn't an organizer's web address: they're 40 characters at most.")
+	}
+	// Before the touch is spent: nothing is written when alerts are off.
+	if s.Staff.AlertsOff() {
+		return nil, errAlertsOff
 	}
 	body, err := json.Marshal(req.Body.Credential)
 	if err != nil {

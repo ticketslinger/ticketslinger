@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -159,9 +160,15 @@ func TestStartEndsThePreviousSession(t *testing.T) {
 	if cur, err := f.svc.Current(ctx, f.user, f.login); err != nil || cur == nil || cur.ID != second.ID {
 		t.Fatalf("current: %+v %v", cur, err)
 	}
+	if _, err := f.owner.Exec(ctx, `insert into staff_access_log(staff_session_id, organizer_id, method, route) values ($1, $2, 'GET', 'getOrganizer')`, second.ID, f.org); err != nil {
+		t.Fatal(err)
+	}
 	list, err := f.svc.List(ctx, f.user)
-	if err != nil || len(list) != 2 || list[0].ID != second.ID || list[0].StaffName != "Sam" {
+	if err != nil || len(list) != 2 || list[0].ID != second.ID || list[0].StaffName != "Sam" || len(list[1].Requests) != 0 {
 		t.Fatalf("list: %+v %v", list, err)
+	}
+	if r := list[0].Requests; len(r) != 1 || r[0].Method != "GET" || r[0].Route != "getOrganizer" || time.Since(r[0].At) > time.Minute {
+		t.Fatalf("requests: %+v", r)
 	}
 }
 
