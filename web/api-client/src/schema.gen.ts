@@ -243,7 +243,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Staff only, from a session that passed a second factor; anyone else gets 404. The newest 100 staff sessions, by every staff member, newest first, each with the requests made in it. */
+        /** @description Staff only, from a session that passed a second factor; anyone else gets 404. The newest 100 staff sessions, by every staff member, newest first, each with the requests made and the actions taken in it. */
         get: operations["listStaffSessions"];
         put?: never;
         /** @description Staff only, from a session that passed a second factor; anyone else gets 404. Starts read-only staff mode on one organizer for 60 minutes, ending any staff session this login session already had. Send the challenge from beginStaffSession and the passkey's answer to it; anything else (no answer, another session's, one already used, a sign-in one) is 403 passkey_required. The reason (10 to 500 characters) goes into the organizer's audit log and an alert email. 404 no_organizer when no organizer has that web address. 429 rate_limited after too many passkey attempts. 503 alerts_off when the server has no TS_MAIL_ALERT_TO. */
@@ -266,6 +266,40 @@ export interface paths {
         post?: never;
         /** @description Staff only, from a session that passed a second factor; anyone else gets 404. Ends this login session's staff mode, with an optional note (up to 2,000 characters) for the record. 404 when it has none running. */
         delete: operations["endStaffSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/staff/actions/challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Staff only, from a session that passed a second factor and is in staff mode; anyone else gets 404. WebAuthn request options for a staff action on the staff-mode organizer, good for two minutes and only for a takeStaffAction of this kind (and event) from this session. 422 (field event) when event is missing for refund_event or sent for anything else. 422 (field kind) for refund_event, which isn't available yet. 429 rate_limited after ten in a minute. 503 alerts_off when the server has no TS_MAIL_ALERT_TO. */
+        post: operations["beginStaffAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/staff/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Staff only, from a session that passed a second factor and is in staff mode; anyone else gets 404. Suspends the staff-mode organizer (every event off sale, its team and keys can change nothing) or lifts its suspension. Send the challenge from beginStaffAction for the same kind and the passkey's answer to it; anything else is 403 passkey_required. The reason (10 to 500 characters) goes into the organizer's audit log and an alert email. 409 already_suspended, 409 not_suspended. 422 (field event) when event is missing for refund_event or sent for anything else; 422 (field kind) for refund_event, which isn't available yet. 429 rate_limited after too many passkey attempts. 503 alerts_off when the server has no TS_MAIL_ALERT_TO. */
+        post: operations["takeStaffAction"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1749,6 +1783,57 @@ export interface components {
             ended_how: "staff" | "logout" | "revoked" | "expired" | null;
             end_note: string | null;
             requests: components["schemas"]["StaffRequest"][];
+            /** @description In listStaffSessions only: the suspensions, lifts and refunds taken in this session, oldest first. */
+            actions?: components["schemas"]["StaffActionLog"][];
+        };
+        /** @enum {string} */
+        StaffActionKind: "suspend" | "lift" | "refund_event";
+        BeginStaffAction: {
+            kind: components["schemas"]["StaffActionKind"];
+            /**
+             * Format: uuid
+             * @description The event to refund; refund_event only.
+             */
+            event?: string;
+        };
+        TakeStaffAction: {
+            /** Format: uuid */
+            challenge_id: string;
+            /** @description What navigator.credentials.get returned for beginStaffAction's options. */
+            credential: {
+                [key: string]: unknown;
+            };
+            kind: components["schemas"]["StaffActionKind"];
+            /**
+             * Format: uuid
+             * @description The event to refund; refund_event only.
+             */
+            event?: string;
+            /** @description Why. The organizer's owners read it in their audit log. */
+            reason: string;
+        };
+        StaffAction: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["StaffActionKind"];
+            organizer_slug: string;
+            /** Format: uuid */
+            event?: string;
+        };
+        StaffActionLog: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["StaffActionKind"];
+            /** Format: uuid */
+            event: string | null;
+            reason: string;
+            /** Format: date-time */
+            at: string;
+            /**
+             * Format: date-time
+             * @description refund_event only: when the refunds were queued.
+             */
+            finished_at: string | null;
         };
         StaffRequest: {
             method: string;
@@ -1785,6 +1870,8 @@ export interface components {
             id: string;
             name: string;
             slug: string;
+            /** @description TicketSlinger has suspended this organizer: its events are off sale and nothing here can be changed until the suspension is lifted. Reads keep working. */
+            suspended: boolean;
             /**
              * @description Your role here. An API key sees its own scope as key:read or key:write; TicketSlinger support in support mode sees staff.
              * @enum {string}
@@ -2663,6 +2750,76 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+        };
+    };
+    beginStaffAction: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BeginStaffAction"];
+            };
+        };
+        responses: {
+            /** @description Options */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebAuthnChallenge"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    takeStaffAction: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TakeStaffAction"];
+            };
+        };
+        responses: {
+            /** @description Done */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffAction"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     searchStaffOrganizers: {

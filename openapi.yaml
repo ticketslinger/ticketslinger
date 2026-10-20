@@ -194,7 +194,7 @@ paths:
   /staff/sessions:
     get:
       operationId: listStaffSessions
-      description: "Staff only, from a session that passed a second factor; anyone else gets 404. The newest 100 staff sessions, by every staff member, newest first, each with the requests made in it."
+      description: "Staff only, from a session that passed a second factor; anyone else gets 404. The newest 100 staff sessions, by every staff member, newest first, each with the requests made and the actions taken in it."
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/StaffSessionLog" } } } } }
         "401": { $ref: "#/components/responses/Error" }
@@ -229,6 +229,38 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /staff/actions/challenge:
+    post:
+      operationId: beginStaffAction
+      description: "Staff only, from a session that passed a second factor and is in staff mode; anyone else gets 404. WebAuthn request options for a staff action on the staff-mode organizer, good for two minutes and only for a takeStaffAction of this kind (and event) from this session. 422 (field event) when event is missing for refund_event or sent for anything else. 422 (field kind) for refund_event, which isn't available yet. 429 rate_limited after ten in a minute. 503 alerts_off when the server has no TS_MAIL_ALERT_TO."
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BeginStaffAction" } } } }
+      responses:
+        "200": { description: Options, content: { application/json: { schema: { $ref: "#/components/schemas/WebAuthnChallenge" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /staff/actions:
+    post:
+      operationId: takeStaffAction
+      description: "Staff only, from a session that passed a second factor and is in staff mode; anyone else gets 404. Suspends the staff-mode organizer (every event off sale, its team and keys can change nothing) or lifts its suspension. Send the challenge from beginStaffAction for the same kind and the passkey's answer to it; anything else is 403 passkey_required. The reason (10 to 500 characters) goes into the organizer's audit log and an alert email. 409 already_suspended, 409 not_suspended. 422 (field event) when event is missing for refund_event or sent for anything else; 422 (field kind) for refund_event, which isn't available yet. 429 rate_limited after too many passkey attempts. 503 alerts_off when the server has no TS_MAIL_ALERT_TO."
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TakeStaffAction" } } } }
+      responses:
+        "200": { description: Done, content: { application/json: { schema: { $ref: "#/components/schemas/StaffAction" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /staff/organizers:
     get:
       operationId: searchStaffOrganizers
@@ -1701,6 +1733,41 @@ components:
         ended_how: { type: [string, "null"], enum: [staff, logout, revoked, expired, null], description: "staff: ended with the End button (or by starting another). logout: signed out. revoked: staff access taken away on the server. expired: the hour ran out." }
         end_note: { type: [string, "null"] }
         requests: { type: array, items: { $ref: "#/components/schemas/StaffRequest" } }
+        actions: { type: array, items: { $ref: "#/components/schemas/StaffActionLog" }, description: "In listStaffSessions only: the suspensions, lifts and refunds taken in this session, oldest first." }
+    StaffActionKind: { type: string, enum: [suspend, lift, refund_event] }
+    BeginStaffAction:
+      type: object
+      required: [kind]
+      properties:
+        kind: { $ref: "#/components/schemas/StaffActionKind" }
+        event: { type: string, format: uuid, description: The event to refund; refund_event only. }
+    TakeStaffAction:
+      type: object
+      required: [challenge_id, credential, kind, reason]
+      properties:
+        challenge_id: { type: string, format: uuid }
+        credential: { type: object, additionalProperties: true, description: What navigator.credentials.get returned for beginStaffAction's options. }
+        kind: { $ref: "#/components/schemas/StaffActionKind" }
+        event: { type: string, format: uuid, description: The event to refund; refund_event only. }
+        reason: { type: string, minLength: 10, maxLength: 500, description: Why. The organizer's owners read it in their audit log. }
+    StaffAction:
+      type: object
+      required: [id, kind, organizer_slug]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/StaffActionKind" }
+        organizer_slug: { type: string }
+        event: { type: string, format: uuid }
+    StaffActionLog:
+      type: object
+      required: [id, kind, event, reason, at, finished_at]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/StaffActionKind" }
+        event: { type: [string, "null"], format: uuid }
+        reason: { type: string }
+        at: { type: string, format: date-time }
+        finished_at: { type: [string, "null"], format: date-time, description: "refund_event only: when the refunds were queued." }
     StaffRequest:
       type: object
       required: [method, route, at]
@@ -1728,11 +1795,12 @@ components:
         slug: { type: string, pattern: "^[a-z0-9](-?[a-z0-9])*$", minLength: 3, maxLength: 40, description: "The organizer's storefront address. checkout, orders, assets, api and healthz belong to the storefront itself (422 invalid_slug)." }
     Organizer:
       type: object
-      required: [id, name, slug, role]
+      required: [id, name, slug, role, suspended]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         slug: { type: string }
+        suspended: { type: boolean, description: "TicketSlinger has suspended this organizer: its events are off sale and nothing here can be changed until the suspension is lifted. Reads keep working." }
         role: { type: string, enum: [owner, admin, checkin, "key:read", "key:write", staff], description: "Your role here. An API key sees its own scope as key:read or key:write; TicketSlinger support in support mode sees staff." }
     AuditEntry:
       type: object

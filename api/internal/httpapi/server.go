@@ -672,6 +672,10 @@ var (
 	errStaffLog        = &apiError{503, "staff_log_unavailable", "We couldn't record this request, so it didn't run. Try again in a moment."}
 )
 
+// errOrganizerSuspended answers a member's or key's write to a suspended
+// organizer; the READ ONLY transaction db.WithPrincipal opens is the backstop.
+var errOrganizerSuspended = &apiError{403, "organizer_suspended", "This organizer is suspended, so nothing here can be changed. Email support@ticketslinger.com to talk to us about it."}
+
 var errScopeReadOnly = &apiError{403, "scope_read_only", "This API key can only read. Create a key with write access to change things."}
 
 // inOrganizer runs fn inside a transaction scoped to the organizer named by
@@ -701,6 +705,9 @@ func (s *server) inOrganizer(ctx context.Context, slug string, access Access, fn
 		}
 		if (role == "owner" || role == "admin") && !a.sess.MFA {
 			return &apiError{403, "mfa_required", "Sign in with a passkey or your authenticator app to manage this organizer."}
+		}
+		if org.Suspended && access.Write {
+			return errOrganizerSuspended
 		}
 		org.Role = role
 		return fn(org, tx)
@@ -787,6 +794,9 @@ func (s *server) inOrganizerAsKey(ctx context.Context, key db.Principal, slug st
 		if access.Write && key.KeyScope != "write" {
 			return errScopeReadOnly
 		}
+		if org.Suspended && access.Write {
+			return errOrganizerSuspended
+		}
 		return fn(org, tx)
 	})
 	if errors.Is(err, db.ErrNotMember) {
@@ -805,7 +815,7 @@ var (
 )
 
 func toOrganizer(o organizers.Organizer) Organizer {
-	return Organizer{Id: o.ID, Name: o.Name, Slug: o.Slug, Role: OrganizerRole(o.Role)}
+	return Organizer{Id: o.ID, Name: o.Name, Slug: o.Slug, Role: OrganizerRole(o.Role), Suspended: o.Suspended}
 }
 
 func (s *server) ListOrganizers(ctx context.Context, _ ListOrganizersRequestObject) (ListOrganizersResponseObject, error) {
