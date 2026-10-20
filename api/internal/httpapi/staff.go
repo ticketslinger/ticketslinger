@@ -263,6 +263,10 @@ func (s *server) TakeStaffAction(ctx context.Context, req TakeStaffActionRequest
 		return nil, &apiError{409, "already_suspended", "This organizer is already suspended."}
 	case errors.Is(err, staff.ErrNotSuspended):
 		return nil, &apiError{409, "not_suspended", "This organizer isn't suspended."}
+	case errors.Is(err, staff.ErrBusy):
+		// 5xx, so Idempotency-Key doesn't keep it; the touch is spent, so
+		// confirming again asks for a new one.
+		return nil, retryError{&apiError{503, "try_again", "Someone's changing this organizer right now. Give it a few seconds, then confirm again."}, "5"}
 	case errors.Is(err, staff.ErrAlreadyDone):
 		return nil, &apiError{409, "already_done", "That refund has already been made."}
 	case errors.Is(err, catalogue.ErrNotFound), errors.Is(err, staff.ErrNotAllowed):

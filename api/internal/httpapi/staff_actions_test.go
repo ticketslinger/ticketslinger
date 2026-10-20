@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -284,3 +285,32 @@ func TestStaffActionsNeedAnAlertAddress(t *testing.T) {
 }
 
 func asMap(v any) map[string]any { m, _ := v.(map[string]any); return m }
+
+// Final review Minor 2: a staff action waits at most 5 seconds for the
+// organizer row, then answers 503 try_again rather than queue every member
+// write behind it.
+func TestStaffActionGivesUpOnABusyOrganizer(t *testing.T) {
+	ctx := context.Background()
+	w := newStaffWorld(t)
+	tx, err := w.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `select 1 from organizers where slug = 'acme' for key share`); err != nil {
+		t.Fatal(err)
+	}
+	ch := w.must(w.do(w.staffTok, "POST", "/v1/staff/actions/challenge", `{"kind":"suspend"}`), 200)
+	start := time.Now()
+	res := w.do(w.staffTok, "POST", "/v1/staff/actions", actBody(ch["challenge_id"].(string), w.dev.assert(t, ch["options"]), "suspend", takedownReason))
+	if got := w.errorCode(res); res.StatusCode != 503 || got != "try_again" || res.Header.Get("Retry-After") == "" || time.Since(start) > 15*time.Second {
+		t.Fatalf("suspend behind a busy organizer: %d %q Retry-After %q after %v, want 503 try_again", res.StatusCode, got, res.Header.Get("Retry-After"), time.Since(start))
+	}
+	if n := countRows(t, w.owner, `select count(*) from staff_actions`); n != 0 {
+		t.Fatalf("staff_actions = %d, want none", n)
+	}
+	_ = tx.Rollback(ctx)
+	if b := w.act(w.staffTok, "suspend"); b["status"] != 200 {
+		t.Fatalf("suspend once the organizer is free: %v", b)
+	}
+}

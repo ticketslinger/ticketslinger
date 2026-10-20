@@ -23,6 +23,8 @@ var (
 	ErrNotSuspended = errors.New("staff: not suspended")
 	// ErrAlreadyDone: a refund_event action that has already been carried out.
 	ErrAlreadyDone = errors.New("staff: already done")
+	// ErrBusy: the organizer row stayed locked past lock_timeout; try again.
+	ErrBusy = errors.New("staff: organizer busy")
 )
 
 // Action is one staff write: a suspension, a lift, or an event refund.
@@ -99,6 +101,11 @@ func (s *Service) Act(ctx context.Context, sess Session, kind string, event *uui
 	}
 	out := Action{Kind: kind, OrganizerSlug: sess.OrganizerSlug, Event: event}
 	err := db.WithUser(ctx, s.pool, sess.UserID, func(tx pgx.Tx) error {
+		// staff_act's FOR UPDATE queues every new member write behind it
+		// while it waits, so it gives up after 5 seconds instead.
+		if _, err := tx.Exec(ctx, `set local lock_timeout = '5s'`); err != nil {
+			return err
+		}
 		if err := tx.QueryRow(ctx, `select staff_act($1, $2, $3, $4, $5)`, sess.ID, sess.LoginSession, kind, event, reason).Scan(&out.ID); err != nil {
 			return err
 		}
@@ -126,6 +133,8 @@ func (s *Service) Act(ctx context.Context, sess Session, kind string, event *uui
 			return Action{}, catalogue.ErrNotFound
 		case pg.Code == "42501":
 			return Action{}, ErrNotAllowed
+		case pg.Code == "55P03":
+			return Action{}, ErrBusy
 		}
 	}
 	if err != nil {
