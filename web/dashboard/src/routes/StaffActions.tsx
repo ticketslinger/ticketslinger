@@ -1,5 +1,5 @@
 import type { components } from "@ticketslinger/api-client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, must, touchPasskey } from "../api";
 import { FormDialog } from "../forms";
 import { formatCents } from "../money";
@@ -65,8 +65,9 @@ export function ActionLog({ actions }: { actions: components["schemas"]["StaffAc
           <br />"{a.reason}"
           {a.kind === "refund_event" && !a.finished_at && (
             <p className="muted">
-              Not finished yet. Still like this after 10 minutes? Take it again: nobody gets
-              refunded twice.
+              {a.failed
+                ? REFUND_FAILED
+                : "Not finished yet. Still like this after 10 minutes? Take it again: nobody gets refunded twice."}
             </p>
           )}
           {a.result && <RefundResult result={a.result} />}
@@ -133,31 +134,71 @@ export function ActionDialog({
 
 type Sessions = components["schemas"]["StaffSessionLog"][];
 
+/** How a refund being followed ended; aborted means nobody's watching any more. */
+export type Followed =
+  | { status: "done"; result?: Result }
+  | { status: "failed" }
+  | { status: "late" }
+  | { status: "aborted" };
+
 /**
- * Polls the staff log until refund action id has finished and returns its
- * result, or undefined once the refund's own 10 minutes are certainly up.
- * A failed poll is just tried again.
+ * Polls the staff log until refund action id has finished or failed, and
+ * gives up once the refund's own 10 minutes are certainly up. A failed poll
+ * is just tried again; signal stops it.
  */
 export async function waitForRefund(
   id: string,
+  signal: AbortSignal,
   list: () => Promise<Sessions> = async () => must(await api.GET("/staff/sessions")),
   sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)),
   now = Date.now,
-): Promise<Result | undefined> {
+): Promise<Followed> {
   const giveUp = now() + 11 * 60_000;
   while (now() < giveUp) {
     await sleep(1000);
+    if (signal.aborted) return { status: "aborted" };
     const sessions = await list().catch(() => [] as Sessions);
     const a = sessions.flatMap((s) => s.actions ?? []).find((a) => a.id === id);
-    if (a?.finished_at) return a.result ?? undefined;
+    if (a?.finished_at) return { status: "done", result: a.result ?? undefined };
+    if (a?.failed) return { status: "failed" };
   }
-  return undefined;
+  return { status: "late" };
 }
 
 export const REFUNDING =
   "Refunding every order. A big event can take a few minutes, and it carries on if you leave this page.";
+export const REFUND_FAILED = "The refund didn't finish. Try again: nobody gets refunded twice.";
 export const REFUND_LATE =
-  "The refund didn't finish within 10 minutes, so it stopped. Take it again: nobody gets refunded twice.";
+  "The refund didn't finish within 10 minutes, so it stopped. Try again: nobody gets refunded twice.";
+
+type Following = { id: string; event: string; state: Followed | { status: "running" } };
+
+/** One line per refund being followed: running, failed, or its totals. */
+export function RefundLines({ refunds }: { refunds: Following[] }) {
+  if (refunds.length === 0) return null;
+  return (
+    <ul>
+      {refunds.map((r) => (
+        <li key={r.id} role="status">
+          <strong>{r.event}</strong>{" "}
+          {r.state.status === "done" && r.state.result ? (
+            <RefundResult result={r.state.result} />
+          ) : (
+            <span className={r.state.status === "running" ? "muted" : undefined}>
+              {r.state.status === "running"
+                ? REFUNDING
+                : r.state.status === "late"
+                  ? REFUND_LATE
+                  : r.state.status === "failed"
+                    ? REFUND_FAILED
+                    : "Done."}
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 /** Staff mode's takedown controls: suspend or lift, and once suspended, refund an event. */
 export function StaffActions({
@@ -180,17 +221,23 @@ export function StaffActions({
   const [open, setOpen] = useState<{ kind: Kind; event?: { id: string; name: string } } | null>(
     null,
   );
-  const [result, setResult] = useState<Result>();
-  const [refunding, setRefunding] = useState("");
+  const [refunds, setRefunds] = useState<Following[]>([]);
   const action = useAction();
+  // Polling stops when staff leave the page; the refunds themselves don't.
+  const leaving = useRef(new AbortController());
+  useEffect(() => {
+    const ctrl = new AbortController();
+    leaving.current = ctrl;
+    return () => ctrl.abort();
+  }, []);
 
-  // The refund answers 202 and runs on: follow it in the staff log.
-  const follow = async (id: string) => {
-    setResult(undefined);
-    setRefunding(REFUNDING);
-    const r = await waitForRefund(id);
-    if (r) setResult(r);
-    setRefunding(r ? "" : REFUND_LATE);
+  // A refund answers 202 and runs on: follow it in the staff log.
+  const follow = async (id: string, event: string) => {
+    const set = (state: Following["state"]) =>
+      setRefunds((rs) => rs.map((r) => (r.id === id ? { ...r, state } : r)));
+    setRefunds((rs) => [...rs, { id, event, state: { status: "running" } }]);
+    const end = await waitForRefund(id, leaving.current.signal);
+    if (end.status !== "aborted") set(end);
   };
 
   const confirm = (reason: string) =>
@@ -210,7 +257,7 @@ export function StaffActions({
         }),
       );
       setOpen(null);
-      if (done.kind === "refund_event") void follow(done.id);
+      if (done.kind === "refund_event") void follow(done.id, open.event?.name ?? "");
       window.dispatchEvent(new Event(ORG_CHANGED));
       await org.reload();
       await events.reload();
@@ -237,12 +284,7 @@ export function StaffActions({
           ))}
         </ul>
       )}
-      {refunding && (
-        <p className="muted" role="status">
-          {refunding}
-        </p>
-      )}
-      {result && <RefundResult result={result} />}
+      <RefundLines refunds={refunds} />
       {open && (
         <ActionDialog
           kind={open.kind}
