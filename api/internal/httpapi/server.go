@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -223,7 +224,7 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 				return
 			}
 			ctx = context.WithValue(ctx, authKey, a)
-			if !a.isKey() && strings.HasPrefix(r.URL.Path, "/v1/organizers/") {
+			if !a.isKey() {
 				ctx = context.WithValue(ctx, routeKey, staffRoute{r.Method, s.routeName(r)})
 			}
 			// Staff routes answer anyone else as an unknown route would,
@@ -716,12 +717,18 @@ func (s *server) inOrganizer(ctx context.Context, slug string, access Access, fn
 // no log, no request), writes and StaffDenied reads are refused, and fn runs
 // read-only through db.WithStaff with role "staff". Roles and MFA aren't
 // checked: a staff session exists only on an MFA login session.
+//
+// Not logged, because they never get here and never reach organizer data:
+// requests the generated wrapper refuses with 400 before any handler, and
+// Idempotency-Key replays. A staff write is always refused, so a replay
+// only repeats a 403 that was logged when it was first answered.
 func (s *server) inOrganizerAsStaff(ctx context.Context, a authed, slug string, access Access, fn func(org organizers.Organizer, tx pgx.Tx) error) error {
 	cur, err := s.Staff.Current(ctx, a.user.ID, a.sess.ID)
 	if err != nil {
 		return err
 	}
-	if cur == nil || !strings.EqualFold(cur.OrganizerSlug, slug) {
+	// Slugs are ASCII; EqualFold alone would also fold, say, the Kelvin sign into k.
+	if cur == nil || !isASCII(slug) || !strings.EqualFold(cur.OrganizerSlug, slug) {
 		return notFound()
 	}
 	rt, _ := ctx.Value(routeKey).(staffRoute)
@@ -729,13 +736,21 @@ func (s *server) inOrganizerAsStaff(ctx context.Context, a authed, slug string, 
 		slog.ErrorContext(ctx, "staff access log failed", "staff_session", cur.ID, "user", a.user.ID, "organizer", cur.OrganizerID, "err", err)
 		return errStaffLog
 	}
+	var refused *apiError
 	switch {
 	case access.Write:
-		return errStaffReadOnly
+		refused = errStaffReadOnly
 	case access.StaffDenied:
-		return errStaffNotAllowed
+		refused = errStaffNotAllowed
 	}
-	slog.InfoContext(ctx, "staff_access", "staff_session", cur.ID, "user", a.user.ID, "organizer", cur.OrganizerID, "route", rt.name)
+	outcome := "read"
+	if refused != nil {
+		outcome = refused.Code
+	}
+	slog.InfoContext(ctx, "staff_access", "staff_session", cur.ID, "user", a.user.ID, "organizer", cur.OrganizerID, "route", rt.name, "outcome", outcome)
+	if refused != nil {
+		return refused
+	}
 	err = db.WithStaff(ctx, s.Pool, a.user.ID, cur.ID, cur.OrganizerID, func(tx pgx.Tx) error {
 		org := organizers.Organizer{ID: cur.OrganizerID, Role: "staff"}
 		if err := tx.QueryRow(ctx, `select name, slug::text from organizers where id = $1`, org.ID).Scan(&org.Name, &org.Slug); err != nil {
@@ -747,6 +762,10 @@ func (s *server) inOrganizerAsStaff(ctx context.Context, a authed, slug string, 
 		return notFound() // ended or revoked since Current looked
 	}
 	return err
+}
+
+func isASCII(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return r > unicode.MaxASCII }) < 0
 }
 
 // inOrganizerAsKey resolves slug inside the key's own scope, where RLS shows

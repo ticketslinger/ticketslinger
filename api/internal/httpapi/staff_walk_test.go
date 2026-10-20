@@ -84,6 +84,9 @@ func TestStaffModeWalk(t *testing.T) {
 			wantCode = "staff_not_allowed"
 		case method == "GET":
 			wantStatus, wantCode = w.do(w.ownerA, method, "/v1"+url, "").StatusCode, ""
+			if wantStatus >= 300 {
+				t.Errorf("owner: %s %s (%s) got %d; seed a fixture so the read succeeds", method, url, id, wantStatus)
+			}
 		}
 		res := w.do(w.staffTok, method, "/v1"+url, `{}`)
 		if got := w.errorCode(res); res.StatusCode != wantStatus || (wantCode != "" && got != wantCode) {
@@ -91,6 +94,9 @@ func TestStaffModeWalk(t *testing.T) {
 		}
 		called++
 	})
+	// The slug matches in any case, as it does for members.
+	w.must(w.do(w.staffTok, "GET", "/v1/organizers/ACME/events", ""), 200)
+	called++
 	if called < 40 {
 		t.Fatalf("walked %d organizer operations; the walk is broken", called)
 	}
@@ -127,6 +133,18 @@ func TestStaffRequestIsLoggedFirst(t *testing.T) {
 		t.Fatalf("no staff_access line: %s", logs.String())
 	}
 
+	// A refused write gets its journald line too, saying so.
+	w.must(w.do(w.staffTok, "POST", "/v1/organizers/acme/events", `{}`), 403)
+	if !strings.Contains(logs.String(), "route=createEvent organizer=acme") && !strings.Contains(logs.String(), `route="createEvent organizer=acme"`) {
+		t.Fatalf("no staff_access line for the refused write: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "outcome=staff_read_only") || !strings.Contains(logs.String(), "outcome=read") {
+		t.Fatalf("staff_access lines don't say what happened: %s", logs.String())
+	}
+	if n := accessRows(t, w.owner, w.session); n != 2 {
+		t.Fatalf("log rows: %d, want 2", n)
+	}
+
 	if _, err := w.owner.Exec(context.Background(), `revoke execute on function log_staff_access(uuid, text, text) from ts_app`); err != nil {
 		t.Fatal(err)
 	}
@@ -137,8 +155,8 @@ func TestStaffRequestIsLoggedFirst(t *testing.T) {
 	if e, _ := b["error"].(map[string]any); res.StatusCode != http.StatusServiceUnavailable || len(b) != 1 || e["code"] != "staff_log_unavailable" {
 		t.Fatalf("with the log refused: got %d %v, want 503 staff_log_unavailable and only the error envelope", res.StatusCode, b)
 	}
-	if n := accessRows(t, w.owner, w.session); n != 1 {
-		t.Fatalf("log rows after the refusal: %d, want 1", n)
+	if n := accessRows(t, w.owner, w.session); n != 2 {
+		t.Fatalf("log rows after the refusal: %d, want 2", n)
 	}
 	if after := strings.Count(logs.String(), "msg=staff_access "); after != before {
 		t.Fatalf("staff_access logged after the log write failed: %s", logs.String())
