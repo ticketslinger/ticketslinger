@@ -80,9 +80,6 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 	var free PaymentStart
 	var event uuid.UUID
 	err = system.Run(ctx, s.Pool, org, func(tx pgx.Tx) error {
-		if err := offSale(ctx, tx, org); err != nil {
-			return err
-		}
 		// The event first (lock order: events, then checkouts), held FOR
 		// SHARE to the end: a free order is paid in this transaction, and a
 		// cancellation (FOR NO KEY UPDATE) must wait for it, then find it to
@@ -94,6 +91,11 @@ func (s *Service) Pay(ctx context.Context, token string, d Details) (PaymentStar
 		}
 		c, err := lockCheckout(ctx, tx, HashToken(token))
 		if err != nil {
+			return err
+		}
+		// Before anything is written. A completed checkout (lockCheckout) still
+		// says so, so a buyer who paid finds their order.
+		if err := offSale(ctx, tx, org); err != nil {
 			return err
 		}
 		event = c.event

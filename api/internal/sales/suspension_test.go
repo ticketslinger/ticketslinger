@@ -68,6 +68,10 @@ func TestSuspendedEventsAreGone(t *testing.T) {
 	if n := f.count(t, `select count(*) from orders where checkout_id = $1`, open.ID); n != 0 {
 		t.Errorf("Pay wrote %d orders", n)
 	}
+	var completed sales.CheckoutCompleted
+	if _, err := s.Pay(ctx, done.Token, sales.Details{Email: "buyer@example.com"}); !errors.As(err, &completed) || completed.OrderCode != code {
+		t.Errorf("completed Pay: %v, want checkout_completed %s", err, code)
+	}
 	if got, err := s.GetCheckout(ctx, done.Token); err != nil || got.Status != "completed" || got.OrderCode != code {
 		t.Errorf("completed GetCheckout: %q %q %v, want completed %s", got.Status, got.OrderCode, err, code)
 	}
