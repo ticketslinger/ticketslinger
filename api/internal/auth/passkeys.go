@@ -393,3 +393,30 @@ func (s *Service) VerifyStaffAssertion(ctx context.Context, user, loginSession, 
 	}
 	return nil
 }
+
+// PasskeyInfo is what the account page shows about one passkey.
+type PasskeyInfo struct {
+	ID         uuid.UUID
+	Name       string
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
+}
+
+// ListPasskeys returns the user's own passkeys, oldest first.
+func (s *Service) ListPasskeys(ctx context.Context, userID uuid.UUID) ([]PasskeyInfo, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, name, created_at, last_used_at FROM passkeys WHERE user_id = $1 ORDER BY created_at, id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PasskeyInfo{}
+	for rows.Next() {
+		var p PasskeyInfo
+		if err := rows.Scan(&p.ID, &p.Name, &p.CreatedAt, &p.LastUsedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}

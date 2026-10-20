@@ -113,6 +113,14 @@ paths:
         "429": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+  /auth/passkeys:
+    get:
+      operationId: listPasskeys
+      description: The caller's own passkeys, oldest first. Session only (403 session_required for an API key). Never includes the credential itself.
+      responses:
+        "200": { description: Passkeys, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/PasskeySummary" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /auth/passkeys/register:
     post:
       operationId: beginPasskeyRegistration
@@ -1809,6 +1817,14 @@ components:
       type: object
       required: [id, name, created_at]
       properties: { id: { type: string, format: uuid }, name: { type: string }, created_at: { type: string, format: date-time } }
+    PasskeySummary:
+      type: object
+      required: [id, name, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time, description: When it last signed you in. Left out if it never has. }
     CreateOrganizer:
       type: object
       required: [name, slug]

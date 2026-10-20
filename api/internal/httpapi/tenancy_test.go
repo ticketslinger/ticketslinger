@@ -26,6 +26,7 @@ var userScoped = map[string]string{
 	"startTotp":                 "enrols an authenticator on the caller's own account",
 	"confirmTotp":               "confirms the caller's own authenticator",
 	"createRecoveryCodes":       "replaces the caller's own recovery codes",
+	"listPasskeys":              "lists only the caller's own passkeys",
 	"beginPasskeyRegistration":  "starts a passkey on the caller's own account",
 	"finishPasskeyRegistration": "finishes a passkey on the caller's own account",
 	"completeStripeLink":        "the state names the organizer, and only the session that started it may use it; anyone else gets 400 invalid_state",

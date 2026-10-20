@@ -7,7 +7,8 @@ import { staffRow } from "./Audit";
 import { eventTabs } from "./Events";
 import { Home } from "./Home";
 import { canEdit, canRead, membersBanner, navFor, type Org } from "./Organizer";
-import { reasonOk, staffAuditLine } from "./Staff";
+import { passkeyFailureMessage } from "./Security";
+import { Found, reasonOk, staffAuditLine } from "./Staff";
 
 test("minutesLeft rounds down and never goes below 0", () => {
   const now = Date.parse("2026-10-20T10:00:00Z");
@@ -127,4 +128,23 @@ test("staff in support mode don't get the members' suspension banner", () => {
   expect(membersBanner(o("checkin", true))).toBe(true);
   expect(membersBanner(o("owner", false))).toBe(false);
   expect(membersBanner(o("staff", true))).toBe(false);
+});
+
+test("support search says so when nothing matches, and stays quiet before a search", () => {
+  const html = (found: { name: string; slug: string }[] | null) =>
+    renderToString(createElement(Found, { found: found as never, picked: "", onPick: () => {} }));
+  expect(html(null)).toBe("");
+  expect(html([])).toContain("No organizer matches that.");
+  expect(html([{ name: "Acme", slug: "acme" }])).not.toContain("No organizer matches that.");
+});
+
+test("a passkey the device already holds gets its own message; the rest keep the generic one", () => {
+  const named = (name: string) => Object.assign(new Error("x"), { name });
+  expect(passkeyFailureMessage(named("InvalidStateError"))).toBe(
+    "This device already has a passkey for your account.",
+  );
+  for (const e of [named("NotAllowedError"), new Error("boom"), "nope", undefined])
+    expect(passkeyFailureMessage(e)).toBe(
+      "Your device didn't save the passkey. Give it another go when you're ready.",
+    );
 });
