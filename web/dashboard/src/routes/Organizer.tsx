@@ -1,17 +1,20 @@
 import type { components } from "@ticketslinger/api-client";
 import { type ReactNode, useEffect } from "react";
 import { api, must } from "../api";
+import { SuspendedBanner } from "../SuspendedBanner";
 import { ErrorText, Link, type Me, NotFound, useLoad } from "../ui";
 import { ROLE, SecondStepNotice } from "./Home";
 
 export type Org = components["schemas"]["Organizer"];
 export type Section = "events" | "payments" | "team" | "api-keys" | "audit";
 
-/** Owners and admins change things; check-in staff only look. */
-export const canEdit = (org: Org) => org.role === "owner" || org.role === "admin";
+const isEditor = (org: Org) => org.role === "owner" || org.role === "admin";
+
+/** Owners and admins change things, unless the organizer is suspended; check-in staff only look. */
+export const canEdit = (org: Org) => isEditor(org) && !org.suspended;
 
 /** Support staff read what owners and admins read, and change nothing. */
-export const canRead = (org: Org) => canEdit(org) || org.role === "staff";
+export const canRead = (org: Org) => isEditor(org) || org.role === "staff";
 
 const NAV: { section: Section; label: string; path: string; editorsOnly?: boolean }[] = [
   { section: "events", label: "Events", path: "" },
@@ -21,8 +24,12 @@ const NAV: { section: Section; label: string; path: string; editorsOnly?: boolea
   { section: "audit", label: "Audit log", path: "/audit", editorsOnly: true },
 ];
 
-// Team, API keys and Audit log show write controls unconditionally, so staff don't get them.
-export const navFor = (org: Org) => NAV.filter((n) => !n.editorsOnly || canEdit(org));
+// Team, API keys and Audit log are for owners and admins; staff don't get them.
+// Read-only pages stay open while suspended; their write controls check canEdit.
+export const navFor = (org: Org) => NAV.filter((n) => !n.editorsOnly || isEditor(org));
+
+/** Fired by support-mode actions so the open organizer page refetches. */
+export const ORG_CHANGED = "ts:org-changed";
 
 /** The frame around every /o/:slug page: which organizer, and where to go in it. */
 export function Organizer({
@@ -38,9 +45,19 @@ export function Organizer({
   onSignedOut: () => void;
   children: (org: Org) => ReactNode;
 }) {
-  const { data: org, error } = useLoad(async () =>
+  const {
+    data: org,
+    error,
+    reload,
+  } = useLoad(async () =>
     must(await api.GET("/organizers/{organizer}", { params: { path: { organizer: slug } } })),
   );
+
+  // Staff mode changed the organizer (suspended or lifted): fetch it again.
+  useEffect(() => {
+    window.addEventListener(ORG_CHANGED, reload);
+    return () => window.removeEventListener(ORG_CHANGED, reload);
+  }, [reload]);
 
   // The page's heading arrives with the organizer, after the router's focus move.
   useEffect(() => {
@@ -72,6 +89,7 @@ export function Organizer({
             <p className="org-name">
               {org.name} <span className="muted">· {ROLE[org.role]}</span>
             </p>
+            {org.suspended && <SuspendedBanner organizer={org.name} />}
             <nav className="tabs" aria-label={org.name}>
               {navFor(org).map((n) => (
                 <Link

@@ -39,7 +39,7 @@ export function Team({ org }: { org: Org }) {
   } = useLoad(async () =>
     must(await api.GET("/organizers/{organizer}/members", { params: { path } })),
   );
-  const owner = org.role === "owner";
+  const owner = org.role === "owner" && !org.suspended;
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<Role>("checkin");
   const add = useAction();

@@ -2,7 +2,7 @@ import type { components } from "@ticketslinger/api-client";
 import { useState } from "react";
 import { api, must } from "../api";
 import { ErrorText, Field, focusOnMount, useAction, useLoad } from "../ui";
-import type { Org } from "./Organizer";
+import { canEdit, type Org } from "./Organizer";
 
 type Key = components["schemas"]["ApiKey"];
 
@@ -26,6 +26,7 @@ export function ApiKeys({ org }: { org: Org }) {
   const [token, setToken] = useState("");
   const [copied, setCopied] = useState("");
   const create = useAction();
+  const editor = canEdit(org);
   const active = keys?.filter((k) => !k.revoked_at);
 
   return (
@@ -100,75 +101,87 @@ export function ApiKeys({ org }: { org: Org }) {
             </thead>
             <tbody>
               {active.map((k) => (
-                <KeyRow key={k.id} k={k} org={org} onRevoked={reload} />
+                <KeyRow key={k.id} k={k} org={org} editor={editor} onRevoked={reload} />
               ))}
             </tbody>
           </table>
         </div>
       )}
 
-      <section>
-        <h2>Create a key</h2>
-        <form
-          className="narrow"
-          onSubmit={(e) => {
-            e.preventDefault();
-            create.run(async () => {
-              const r = must(
-                await api.POST("/organizers/{organizer}/api-keys", {
-                  params: { path },
-                  body: { name, scope },
-                }),
-              );
-              setToken(r.token);
-              setCopied("");
-              setName("");
-              await reload();
-            });
-          }}
-        >
-          <Field
-            id="key-name"
-            label="Key name"
-            hint="Something that tells you later what uses it, like “Box office laptop”."
-            required
-            maxLength={80}
-            autoComplete="off"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <fieldset className="choices">
-            <legend>Access</legend>
-            {(["read", "write"] as const).map((s) => (
-              <label className="check" key={s}>
-                <input
-                  type="radio"
-                  name="scope"
-                  checked={scope === s}
-                  onChange={() => setScope(s)}
-                />
-                <span>
-                  {ACCESS[s]}
-                  <span className="hint">
-                    {s === "read"
-                      ? "It can look at your events and everything set up for them."
-                      : "It can also create, change and delete them."}
+      {editor && (
+        <section>
+          <h2>Create a key</h2>
+          <form
+            className="narrow"
+            onSubmit={(e) => {
+              e.preventDefault();
+              create.run(async () => {
+                const r = must(
+                  await api.POST("/organizers/{organizer}/api-keys", {
+                    params: { path },
+                    body: { name, scope },
+                  }),
+                );
+                setToken(r.token);
+                setCopied("");
+                setName("");
+                await reload();
+              });
+            }}
+          >
+            <Field
+              id="key-name"
+              label="Key name"
+              hint="Something that tells you later what uses it, like “Box office laptop”."
+              required
+              maxLength={80}
+              autoComplete="off"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <fieldset className="choices">
+              <legend>Access</legend>
+              {(["read", "write"] as const).map((s) => (
+                <label className="check" key={s}>
+                  <input
+                    type="radio"
+                    name="scope"
+                    checked={scope === s}
+                    onChange={() => setScope(s)}
+                  />
+                  <span>
+                    {ACCESS[s]}
+                    <span className="hint">
+                      {s === "read"
+                        ? "It can look at your events and everything set up for them."
+                        : "It can also create, change and delete them."}
+                    </span>
                   </span>
-                </span>
-              </label>
-            ))}
-          </fieldset>
-          <ErrorText>{create.error}</ErrorText>
-          <button type="submit" className="inline" disabled={create.busy}>
-            Create key
-          </button>
-        </form>
-      </section>
+                </label>
+              ))}
+            </fieldset>
+            <ErrorText>{create.error}</ErrorText>
+            <button type="submit" className="inline" disabled={create.busy}>
+              Create key
+            </button>
+          </form>
+        </section>
+      )}
     </>
   );
 }
 
-function KeyRow({ k, org, onRevoked }: { k: Key; org: Org; onRevoked: () => void }) {
+function KeyRow({
+  k,
+  org,
+  editor,
+  onRevoked,
+}: {
+  k: Key;
+  org: Org;
+  editor: boolean;
+  onRevoked: () => void;
+}) {
   // null until asked; false after "Keep it", so focus can go back to the first button.
   const [confirming, setConfirming] = useState<boolean | null>(null);
   const revoke = useAction();
@@ -181,7 +194,7 @@ function KeyRow({ k, org, onRevoked }: { k: Key; org: Org; onRevoked: () => void
       <td>{ACCESS[k.scope]}</td>
       <td>{k.last_used_at ? when(k.last_used_at) : "Never"}</td>
       <td className="actions-cell">
-        {confirming ? (
+        {!editor ? null : confirming ? (
           <>
             <p>Anything using this key stops working straight away.</p>
             <div className="row">

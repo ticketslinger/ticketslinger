@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ApiFailure, api, must } from "./api";
 import { FormDialog } from "./forms";
+import { StaffActions } from "./routes/StaffActions";
 import { type Me, navigate, useAction } from "./ui";
 
 type StaffSession = NonNullable<Me["staff_session"]>;
@@ -44,6 +45,7 @@ export function StaffBanner({
           End
         </button>
       </div>
+      <StaffActions slug={session.organizer_slug} name={session.organizer_name} />
       {ending && (
         <FormDialog
           title="End support mode"
