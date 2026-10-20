@@ -753,7 +753,7 @@ func (s *server) inOrganizerAsStaff(ctx context.Context, a authed, slug string, 
 	}
 	err = db.WithStaff(ctx, s.Pool, a.user.ID, cur.ID, cur.OrganizerID, func(tx pgx.Tx) error {
 		org := organizers.Organizer{ID: cur.OrganizerID, Role: "staff"}
-		if err := tx.QueryRow(ctx, `select name, slug::text from organizers where id = $1`, org.ID).Scan(&org.Name, &org.Slug); err != nil {
+		if err := tx.QueryRow(ctx, `select name, slug::text, organizer_suspended(id) from organizers where id = $1`, org.ID).Scan(&org.Name, &org.Slug, &org.Suspended); err != nil {
 			return err
 		}
 		return fn(org, tx)
@@ -777,7 +777,7 @@ func (s *server) inOrganizerAsKey(ctx context.Context, key db.Principal, slug st
 	}
 	err := db.WithPrincipal(ctx, s.Pool, key, key.KeyOrg, func(tx pgx.Tx, role string) error {
 		org := organizers.Organizer{Role: role}
-		err := tx.QueryRow(ctx, `select id, name, slug::text from organizers where slug = $1`, slug).Scan(&org.ID, &org.Name, &org.Slug)
+		err := tx.QueryRow(ctx, `select id, name, slug::text, organizer_suspended(id) from organizers where slug = $1`, slug).Scan(&org.ID, &org.Name, &org.Slug, &org.Suspended)
 		if errors.Is(err, pgx.ErrNoRows) || (err == nil && org.ID != key.KeyOrg) {
 			return notFound()
 		}
@@ -845,6 +845,9 @@ func (s *server) CreateOrganizer(ctx context.Context, req CreateOrganizerRequest
 	o, err := s.Organizers.Create(ctx, u.ID, name, req.Body.Slug)
 	if errors.Is(err, organizers.ErrInvalid) {
 		return nil, errInvalidSlug
+	}
+	if errors.Is(err, organizers.ErrSuspendedMember) {
+		return nil, &apiError{403, "suspended_member", "You're on the team of a suspended organizer, so you can't start a new one. Email support@ticketslinger.com."}
 	}
 	if errors.Is(err, organizers.ErrSlugTaken) {
 		return nil, fieldError{&apiError{409, "slug_taken", "Someone already uses that web address. Try another."}, "slug"}

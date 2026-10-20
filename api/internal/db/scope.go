@@ -44,7 +44,8 @@ func WithOrganizer(ctx context.Context, pool *pgxpool.Pool, user, org uuid.UUID,
 // reaches its own organizer, with role "key:read" or "key:write"; the database
 // independently refuses a revoked key, another organizer, or a transaction
 // that names both a user and a key. A read key's transaction is READ ONLY, so
-// the database refuses its writes too.
+// the database refuses its writes too. So is every transaction on a suspended
+// organizer, for members and keys alike, SECURITY DEFINER functions included.
 func WithPrincipal(ctx context.Context, pool *pgxpool.Pool, p Principal, org uuid.UUID, fn func(tx pgx.Tx, role string) error) error {
 	if (p.UserID == uuid.Nil) == (p.KeyID == uuid.Nil) {
 		return errors.New("db: a principal is exactly one of a user or a key")
@@ -62,18 +63,35 @@ func WithPrincipal(ctx context.Context, pool *pgxpool.Pool, p Principal, org uui
 		opts.AccessMode = pgx.ReadOnly
 	}
 	return pgx.BeginTxFunc(ctx, pool, opts, func(tx pgx.Tx) error {
+		guc, id := `select set_config('app.user_id', $1, true), set_config('app.organizer_id', $2, true)`, p.UserID
 		if p.KeyID != uuid.Nil {
-			if _, err := tx.Exec(ctx,
-				`select set_config('app.api_key_id', $1, true), set_config('app.organizer_id', $2, true)`,
-				p.KeyID.String(), org.String()); err != nil {
+			guc, id = `select set_config('app.api_key_id', $1, true), set_config('app.organizer_id', $2, true)`, p.KeyID
+		}
+		if _, err := tx.Exec(ctx, guc, id.String(), org.String()); err != nil {
+			return err
+		}
+		// A transaction that may write holds the organizer row (KEY SHARE)
+		// first, so it and staff_act's FOR UPDATE run one after the other:
+		// it either finishes before a suspension commits or starts after it
+		// and sees it. The check is its own statement for a fresh snapshot.
+		// Going read-only after a query is allowed; going back is not. A read
+		// key's transaction is read-only already and can't take row locks.
+		if p.KeyScope != "read" {
+			if _, err := tx.Exec(ctx, `select 1 from organizers where id = $1 for key share`, org); err != nil {
 				return err
 			}
-			return fn(tx, "key:"+p.KeyScope)
+			var suspended bool
+			if err := tx.QueryRow(ctx, `select organizer_suspended($1)`, org).Scan(&suspended); err != nil {
+				return err
+			}
+			if suspended {
+				if _, err := tx.Exec(ctx, `set transaction read only`); err != nil {
+					return err
+				}
+			}
 		}
-		if _, err := tx.Exec(ctx,
-			`select set_config('app.user_id', $1, true), set_config('app.organizer_id', $2, true)`,
-			p.UserID.String(), org.String()); err != nil {
-			return err
+		if p.KeyID != uuid.Nil {
+			return fn(tx, "key:"+p.KeyScope)
 		}
 		var role string
 		err := tx.QueryRow(ctx, `select role from memberships where organizer_id = $1 and user_id = $2`, org, p.UserID).Scan(&role)

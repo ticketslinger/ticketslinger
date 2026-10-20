@@ -289,3 +289,27 @@ func TestCreateOrganizerValidation(t *testing.T) {
 		}
 	}
 }
+
+// Spec §13.2 item 4: an owner of a suspended organizer can't start another
+// one, and still reads the one they have.
+func TestSuspendedMemberCantCreateOrganizer(t *testing.T) {
+	h := newHarness(t)
+	tok := h.signupWithMFA("owner@example.com")
+	h.createOrganizer(tok, "acme")
+	if _, err := testdb.Owner(t, h.pool).Exec(context.Background(), `with
+		o as (select id from organizers where slug = 'acme'),
+		u as (insert into users(email, name, email_verified_at) values ('staff@example.com', 'Staff', now()) returning id),
+		st as (insert into staff(user_id, granted_by) select id, 'test' from u returning user_id),
+		ss as (insert into staff_sessions(user_id, session_id, organizer_id, organizer_slug, organizer_name, reason, expires_at)
+			select st.user_id, gen_random_uuid(), o.id, 'acme', 'Acme', 'Checking a takedown report', now() + interval '1 hour' from st, o returning id, user_id, organizer_id),
+		a as (insert into staff_actions(staff_session_id, user_id, organizer_id, kind, reason)
+			select id, user_id, organizer_id, 'suspend', 'Checking a takedown report' from ss returning id, organizer_id)
+		insert into organizer_suspensions(organizer_id, staff_action_id) select organizer_id, id from a`); err != nil {
+		t.Fatal(err)
+	}
+	if res := h.do(tok, "POST", "/v1/organizers", `{"name":"Again","slug":"acme-two"}`); res.StatusCode != 403 || h.errorCode(res) != "suspended_member" {
+		t.Fatalf("create while suspended: %d %q, want 403 suspended_member", res.StatusCode, h.errorCode(res))
+	}
+	h.must(h.do(tok, "GET", "/v1/organizers/acme", ""), 200)
+	h.must(h.do(h.signupVerified("other@example.com"), "POST", "/v1/organizers", `{"name":"Other","slug":"other"}`), 201)
+}

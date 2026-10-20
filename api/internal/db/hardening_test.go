@@ -36,6 +36,10 @@ func TestReadKeyScopeIsReadOnly(t *testing.T) {
 	}
 }
 
+// ownerOnly tables carry an organizer_id but only the schema owner's
+// definer functions read or write them.
+var ownerOnly = map[string]bool{"organizer_suspensions": true, "staff_actions": true}
+
 // Every tenant table and every SECURITY DEFINER function, checked from the
 // catalog, so a new migration can't quietly skip the hardening.
 func TestCatalogHardening(t *testing.T) {
@@ -57,12 +61,30 @@ func TestCatalogHardening(t *testing.T) {
 			t.Fatal(err)
 		}
 		n++
-		if !rls || !policy {
+		if !rls || !policy && !ownerOnly[name] {
 			t.Errorf("%s: row security %v, app_organizer() policy %v", name, rls, policy)
 		}
 	}
 	if rows.Err() != nil || n < 10 {
 		t.Fatalf("tenant tables: %d %v", n, rows.Err())
+	}
+
+	// The takedown tables have an organizer_id but no tenant reads them:
+	// row security on, no policy at all, and no right for any app role.
+	for name := range ownerOnly {
+		var policies int
+		var rls bool
+		var granted []string
+		if err := owner.QueryRow(ctx, `select c.relrowsecurity, (select count(*) from pg_policy p where p.polrelid = c.oid),
+				array(select r from unnest(array['ts_app', 'ts_public', 'ts_system']) r
+				       where has_table_privilege(r, c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+				          or has_any_column_privilege(r, c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'))
+			from pg_class c where c.oid = to_regclass($1)`, name).Scan(&rls, &policies, &granted); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !rls || policies != 0 || len(granted) != 0 {
+			t.Errorf("%s: row security %v, %d policies, rights for %v; want on, none, none", name, rls, policies, granted)
+		}
 	}
 
 	rows, err = owner.Query(ctx, `select p.oid::regprocedure::text, coalesce(p.proconfig, '{}'),
@@ -92,6 +114,23 @@ func TestCatalogHardening(t *testing.T) {
 	}
 	if rows.Err() != nil || n == 0 {
 		t.Fatalf("definer functions: %d %v", n, rows.Err())
+	}
+
+	// Takedown: ts_app checks and acts, ts_system checks and runs the
+	// refund, and the storefront role runs none of them.
+	for fn, want := range map[string][2]bool{
+		"organizer_suspended(uuid)":           {true, true},
+		"staff_act(uuid,uuid,text,uuid,text)": {true, false},
+		"claim_staff_refund(uuid)":            {false, true},
+		"finish_staff_refund(uuid,jsonb)":     {false, true},
+	} {
+		var definer, app, public, system bool
+		err := owner.QueryRow(ctx, `select p.prosecdef, has_function_privilege('ts_app', p.oid, 'EXECUTE'),
+				has_function_privilege('ts_public', p.oid, 'EXECUTE'), has_function_privilege('ts_system', p.oid, 'EXECUTE')
+			from pg_proc p where p.oid = to_regprocedure($1)`, fn).Scan(&definer, &app, &public, &system)
+		if err != nil || !definer || app != want[0] || public || system != want[1] {
+			t.Errorf("%s: definer %v, ts_app %v, ts_public %v, ts_system %v, %v", fn, definer, app, public, system, err)
+		}
 	}
 
 	// Staff mode's functions are all definers (so the loop above covers
