@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -62,6 +63,12 @@ type Service struct {
 	pool    *pgxpool.Pool
 	alertTo string
 	refund  Refunder
+	refunds sync.WaitGroup  // refund_event actions running in the background
+	life    context.Context // background refunds stop when it's done
+	mu      sync.Mutex
+	// ponytail: in memory, so a restart forgets it (the action stays
+	// unfinished and retryable); a column if it ever has to survive one.
+	failed map[uuid.UUID]bool // refund_event actions whose refund failed
 }
 
 // Refunder carries out a refund_event action as the organizer's system
@@ -71,7 +78,7 @@ type Refunder func(ctx context.Context, org, action uuid.UUID) (RefundResult, er
 // New returns the service; alertTo is TS_MAIL_ALERT_TO, and without it
 // Start refuses. refund carries out refund_event actions.
 func New(pool *pgxpool.Pool, alertTo string, refund Refunder) *Service {
-	return &Service{pool, alertTo, refund}
+	return &Service{pool: pool, alertTo: alertTo, refund: refund, life: context.Background(), failed: map[uuid.UUID]bool{}}
 }
 
 // AlertsOff reports whether Start would refuse with ErrAlertsOff.
@@ -96,8 +103,9 @@ func (s *Service) Status(ctx context.Context, user, loginSession uuid.UUID) (boo
 	)
 	err := db.WithUser(ctx, s.pool, user, func(tx pgx.Tx) error {
 		// staff_sessions' policy shows rows only to live staff, so a revoked
-		// user's session is gone here at once.
-		return tx.QueryRow(ctx, `select app_is_staff(), ss.id, ss.organizer_id, ss.organizer_slug::text, ss.organizer_name, ss.reason, ss.expires_at
+		// user's session is gone here at once. The slug is the organizer's
+		// current one, not the one staff mode was started with.
+		return tx.QueryRow(ctx, `select app_is_staff(), ss.id, ss.organizer_id, coalesce(staff_session_slug(ss.id), ss.organizer_slug::text), ss.organizer_name, ss.reason, ss.expires_at
 			  from (select 1) one
 			  left join staff_sessions ss on ss.session_id = $1 and ss.user_id = app_user() and ss.organizer_id is not null
 			   and ss.ended_at is null and ss.expires_at > now()`, loginSession).
@@ -209,6 +217,7 @@ func (s *Service) List(ctx context.Context, user uuid.UUID) ([]SessionLog, error
 		out, err = sessionLogs(ctx, tx, `users u on u.id = ss.user_id`)
 		return err
 	})
+	s.markFailed(out)
 	return out, err
 }
 

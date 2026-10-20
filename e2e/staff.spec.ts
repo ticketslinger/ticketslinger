@@ -191,11 +191,16 @@ test("staff takes an organizer down and restores it", async ({ browser }) => {
   await expect(owner.getByLabel("Event name")).toHaveValue("Spring Social");
   await expect(owner.getByRole("button", { name: "Save changes" })).toHaveCount(0);
 
-  // Refund: the event's name has to be typed out, and the totals come back.
+  // Refund: the event's name has to be typed out. The request answers 202 at
+  // once, and the page follows the refund in the staff log until the totals come back.
   const go = await confirmAction(staff, "Refund every order", REASON, "Spring Soci");
   await expect(go).toBeDisabled();
   await staff.getByLabel("Type the event's name to confirm").fill("Spring Social");
+  const accepted = staff.waitForResponse(
+    (r) => r.url().endsWith("/staff/actions") && r.request().method() === "POST",
+  );
   await go.click();
+  expect((await accepted).status()).toBe(202);
   await expect(
     staff.getByText(
       "Refunded 1 order, $52.00 in all, $2.00 of it our fee. 0 unfinished payments stopped.",

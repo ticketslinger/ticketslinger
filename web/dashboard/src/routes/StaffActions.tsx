@@ -1,5 +1,5 @@
 import type { components } from "@ticketslinger/api-client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, must, touchPasskey } from "../api";
 import { FormDialog } from "../forms";
 import { formatCents } from "../money";
@@ -64,7 +64,11 @@ export function ActionLog({ actions }: { actions: components["schemas"]["StaffAc
           {KIND[a.kind]} <span className="muted">· {new Date(a.at).toLocaleString()}</span>
           <br />"{a.reason}"
           {a.kind === "refund_event" && !a.finished_at && (
-            <p className="muted">Not finished. Take it again to finish the refunds.</p>
+            <p className="muted">
+              {a.failed
+                ? REFUND_FAILED
+                : "Not finished yet. Still like this after 10 minutes? Take it again: nobody gets refunded twice."}
+            </p>
           )}
           {a.result && <RefundResult result={a.result} />}
         </li>
@@ -128,11 +132,84 @@ export function ActionDialog({
   );
 }
 
-/** Staff mode's takedown controls: suspend or lift, and once suspended, refund an event. */
-export function StaffActions({ slug, name }: { slug: string; name: string }) {
-  const org = useLoad(async () =>
-    must(await api.GET("/organizers/{organizer}", { params: { path: { organizer: slug } } })),
+type Sessions = components["schemas"]["StaffSessionLog"][];
+
+/** How a refund being followed ended; aborted means nobody's watching any more. */
+export type Followed =
+  | { status: "done"; result?: Result }
+  | { status: "failed" }
+  | { status: "late" }
+  | { status: "aborted" };
+
+/**
+ * Polls the staff log until refund action id has finished or failed, and
+ * gives up once the refund's own 10 minutes are certainly up. A failed poll
+ * is just tried again; signal stops it.
+ */
+export async function waitForRefund(
+  id: string,
+  signal: AbortSignal,
+  list: () => Promise<Sessions> = async () => must(await api.GET("/staff/sessions")),
+  sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)),
+  now = Date.now,
+): Promise<Followed> {
+  const giveUp = now() + 11 * 60_000;
+  while (now() < giveUp) {
+    await sleep(1000);
+    if (signal.aborted) return { status: "aborted" };
+    const sessions = await list().catch(() => [] as Sessions);
+    const a = sessions.flatMap((s) => s.actions ?? []).find((a) => a.id === id);
+    if (a?.finished_at) return { status: "done", result: a.result ?? undefined };
+    if (a?.failed) return { status: "failed" };
+  }
+  return { status: "late" };
+}
+
+export const REFUNDING =
+  "Refunding every order. A big event can take a few minutes, and it carries on if you leave this page.";
+export const REFUND_FAILED = "The refund didn't finish. Try again: nobody gets refunded twice.";
+export const REFUND_LATE =
+  "The refund didn't finish within 10 minutes, so it stopped. Try again: nobody gets refunded twice.";
+
+type Following = { id: string; event: string; state: Followed | { status: "running" } };
+
+/** One line per refund being followed: running, failed, or its totals. */
+export function RefundLines({ refunds }: { refunds: Following[] }) {
+  if (refunds.length === 0) return null;
+  return (
+    <ul>
+      {refunds.map((r) => (
+        <li key={r.id} role="status">
+          <strong>{r.event}</strong>{" "}
+          {r.state.status === "done" && r.state.result ? (
+            <RefundResult result={r.state.result} />
+          ) : (
+            <span className={r.state.status === "running" ? "muted" : undefined}>
+              {r.state.status === "running"
+                ? REFUNDING
+                : r.state.status === "late"
+                  ? REFUND_LATE
+                  : r.state.status === "failed"
+                    ? REFUND_FAILED
+                    : "Done."}
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
   );
+}
+
+/** Staff mode's takedown controls: suspend or lift, and once suspended, refund an event. */
+export function StaffActions({
+  slug,
+  name,
+  org,
+}: {
+  slug: string;
+  name: string;
+  org: ReturnType<typeof useLoad<components["schemas"]["Organizer"]>>;
+}) {
   const suspended = org.data?.suspended === true;
   // Always fetched: reload() runs the last render's loader, which would still say "not suspended"
   // right after a suspend and leave the list empty.
@@ -144,8 +221,24 @@ export function StaffActions({ slug, name }: { slug: string; name: string }) {
   const [open, setOpen] = useState<{ kind: Kind; event?: { id: string; name: string } } | null>(
     null,
   );
-  const [result, setResult] = useState<Result>();
+  const [refunds, setRefunds] = useState<Following[]>([]);
   const action = useAction();
+  // Polling stops when staff leave the page; the refunds themselves don't.
+  const leaving = useRef(new AbortController());
+  useEffect(() => {
+    const ctrl = new AbortController();
+    leaving.current = ctrl;
+    return () => ctrl.abort();
+  }, []);
+
+  // A refund answers 202 and runs on: follow it in the staff log.
+  const follow = async (id: string, event: string) => {
+    const set = (state: Following["state"]) =>
+      setRefunds((rs) => rs.map((r) => (r.id === id ? { ...r, state } : r)));
+    setRefunds((rs) => [...rs, { id, event, state: { status: "running" } }]);
+    const end = await waitForRefund(id, leaving.current.signal);
+    if (end.status !== "aborted") set(end);
+  };
 
   const confirm = (reason: string) =>
     open &&
@@ -164,7 +257,7 @@ export function StaffActions({ slug, name }: { slug: string; name: string }) {
         }),
       );
       setOpen(null);
-      if (done.result) setResult(done.result);
+      if (done.kind === "refund_event") void follow(done.id, open.event?.name ?? "");
       window.dispatchEvent(new Event(ORG_CHANGED));
       await org.reload();
       await events.reload();
@@ -191,7 +284,7 @@ export function StaffActions({ slug, name }: { slug: string; name: string }) {
           ))}
         </ul>
       )}
-      {result && <RefundResult result={result} />}
+      <RefundLines refunds={refunds} />
       {open && (
         <ActionDialog
           kind={open.kind}

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ApiFailure, api, must } from "./api";
 import { FormDialog } from "./forms";
 import { StaffActions } from "./routes/StaffActions";
-import { type Me, navigate, useAction } from "./ui";
+import { type Me, navigate, useAction, useLoad } from "./ui";
 
 type StaffSession = NonNullable<Me["staff_session"]>;
 
@@ -10,8 +10,9 @@ type StaffSession = NonNullable<Me["staff_session"]>;
 export const minutesLeft = (expiresAt: string, now = Date.now()) =>
   Math.max(0, Math.floor((new Date(expiresAt).getTime() - now) / 60_000));
 
-export const bannerText = (s: Pick<StaffSession, "organizer_name">, n: number) =>
-  `Support mode: viewing ${s.organizer_name}, read-only. ${n} min left.`;
+/** The spec's line, and for staff (who don't get the members' banner) whether it's suspended. */
+export const bannerText = (s: Pick<StaffSession, "organizer_name">, n: number, suspended = false) =>
+  `Support mode: viewing ${s.organizer_name}, read-only. ${n} min left.${suspended ? " This organizer is suspended." : ""}`;
 
 /** Full width, not dismissible, on every page while support mode runs. */
 export function StaffBanner({
@@ -26,6 +27,14 @@ export function StaffBanner({
   const [note, setNote] = useState("");
   const end = useAction();
   const left = minutesLeft(session.expires_at, now);
+  // Here rather than in StaffActions, so the banner can say it's suspended.
+  const org = useLoad(async () =>
+    must(
+      await api.GET("/organizers/{organizer}", {
+        params: { path: { organizer: session.organizer_slug } },
+      }),
+    ),
+  );
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 30_000);
@@ -40,12 +49,12 @@ export function StaffBanner({
   return (
     <>
       <div className="staff-banner" role="status">
-        <p>{bannerText(session, left)}</p>
+        <p>{bannerText(session, left, org.data?.suspended === true)}</p>
         <button type="button" onClick={() => setEnding(true)}>
           End
         </button>
       </div>
-      <StaffActions slug={session.organizer_slug} name={session.organizer_name} />
+      <StaffActions slug={session.organizer_slug} name={session.organizer_name} org={org} />
       {ending && (
         <FormDialog
           title="End support mode"

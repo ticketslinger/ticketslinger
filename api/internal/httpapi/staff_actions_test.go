@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -41,6 +42,31 @@ func (w staffWorld) actOn(tok, kind, event string) map[string]any {
 	b := w.json(res)
 	b["status"] = res.StatusCode
 	return b
+}
+
+// refunded waits for the refund_event action id to finish, as the Staff
+// page does, and returns its result.
+func (w staffWorld) refunded(id string) map[string]any {
+	w.t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var sessions []map[string]any
+		if err := json.NewDecoder(w.do(w.staffTok, "GET", "/v1/staff/sessions", "").Body).Decode(&sessions); err != nil {
+			w.t.Fatal(err)
+		}
+		for _, s := range sessions {
+			acts, _ := s["actions"].([]any)
+			for _, a := range acts {
+				if m := asMap(a); m["id"] == id && m["finished_at"] != nil {
+					return asMap(m["result"])
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			w.t.Fatalf("refund %s didn't finish", id)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 func (w staffWorld) orgID(slug string) uuid.UUID {
@@ -172,8 +198,11 @@ func TestSuspendAndLift(t *testing.T) {
 	}
 	b = w.actOn(w.staffTok, "refund_event", w.fixture["event"])
 	want := map[string]any{"orders": 1.0, "amount_cents": 2600.0, "fee_cents": 100.0, "pending_orders": 0.0, "failed_orders": []any{}}
-	if b["status"] != 200 || b["kind"] != "refund_event" || b["event"] != w.fixture["event"] || !jsonEqual(asMap(b["result"]), want) {
-		t.Fatalf("refund_event: %v", b)
+	if b["status"] != 202 || b["kind"] != "refund_event" || b["event"] != w.fixture["event"] || b["result"] != nil {
+		t.Fatalf("refund_event: %v, want 202 with no result yet", b)
+	}
+	if r := w.refunded(b["id"].(string)); !jsonEqual(r, want) {
+		t.Fatalf("refund_event result: %v", r)
 	}
 	if alerts("Staff refunded an event of acme") != 1 || alerts("Refund finished on acme") != 1 {
 		t.Fatal("no refund alerts")
@@ -191,7 +220,10 @@ func TestSuspendAndLift(t *testing.T) {
 	// left to refund. (already_done is for the same action twice, which
 	// RefundEventForStaff's tests cover.)
 	b = w.actOn(w.staffTok, "refund_event", w.fixture["event"])
-	if want["orders"], want["amount_cents"], want["fee_cents"] = 0.0, 0.0, 0.0; b["status"] != 200 || !jsonEqual(asMap(b["result"]), want) {
+	if b["status"] != 202 {
+		t.Fatalf("refund_event again: %v", b)
+	}
+	if want["orders"], want["amount_cents"], want["fee_cents"] = 0.0, 0.0, 0.0; !jsonEqual(w.refunded(b["id"].(string)), want) {
 		t.Fatalf("refund_event again: %v", b)
 	}
 	if n := countRows(t, w.owner, `select count(*) from refunds where reason = 'platform'`); n != 1 {
@@ -284,3 +316,32 @@ func TestStaffActionsNeedAnAlertAddress(t *testing.T) {
 }
 
 func asMap(v any) map[string]any { m, _ := v.(map[string]any); return m }
+
+// Final review Minor 2: a staff action waits at most 5 seconds for the
+// organizer row, then answers 503 try_again rather than queue every member
+// write behind it.
+func TestStaffActionGivesUpOnABusyOrganizer(t *testing.T) {
+	ctx := context.Background()
+	w := newStaffWorld(t)
+	tx, err := w.owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `select 1 from organizers where slug = 'acme' for key share`); err != nil {
+		t.Fatal(err)
+	}
+	ch := w.must(w.do(w.staffTok, "POST", "/v1/staff/actions/challenge", `{"kind":"suspend"}`), 200)
+	start := time.Now()
+	res := w.do(w.staffTok, "POST", "/v1/staff/actions", actBody(ch["challenge_id"].(string), w.dev.assert(t, ch["options"]), "suspend", takedownReason))
+	if got := w.errorCode(res); res.StatusCode != 503 || got != "try_again" || res.Header.Get("Retry-After") == "" || time.Since(start) > 15*time.Second {
+		t.Fatalf("suspend behind a busy organizer: %d %q Retry-After %q after %v, want 503 try_again", res.StatusCode, got, res.Header.Get("Retry-After"), time.Since(start))
+	}
+	if n := countRows(t, w.owner, `select count(*) from staff_actions`); n != 0 {
+		t.Fatalf("staff_actions = %d, want none", n)
+	}
+	_ = tx.Rollback(ctx)
+	if b := w.act(w.staffTok, "suspend"); b["status"] != 200 {
+		t.Fatalf("suspend once the organizer is free: %v", b)
+	}
+}

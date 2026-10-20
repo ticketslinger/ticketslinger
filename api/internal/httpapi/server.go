@@ -48,6 +48,9 @@ type Deps struct {
 	Turnstile *turnstile.Verifier
 	// Staff runs staff mode; nil builds one from Pool and Config.MailAlertTo.
 	Staff *staff.Service
+	// Context is the server's lifetime: when it's done, background work (a
+	// staff refund) stops and rolls back. nil means it never stops.
+	Context context.Context
 }
 
 type server struct {
@@ -83,6 +86,9 @@ func New(d Deps) http.Handler {
 			}
 			return out, err
 		})
+	}
+	if d.Context != nil {
+		d.Staff.StopWith(d.Context)
 	}
 	noStore := noStoreRoutes()
 	s := &server{Deps: d, public: publicRoutes(), opIDs: operationIDs(), checkoutLimit: ratelimit.New(10, time.Minute), payLimit: ratelimit.New(20, time.Minute),
@@ -708,7 +714,7 @@ func (s *server) inOrganizer(ctx context.Context, slug string, access Access, fn
 	if err != nil {
 		return err
 	}
-	err = db.WithOrganizer(ctx, s.Pool, a.user.ID, org.ID, func(tx pgx.Tx, role string) error {
+	err = db.WithPrincipal(ctx, s.Pool, db.Principal{UserID: a.user.ID, ReadOnly: !access.Write}, org.ID, func(tx pgx.Tx, role string) error {
 		if len(access.Roles) > 0 && !slices.Contains(access.Roles, role) {
 			return &apiError{403, "forbidden_role", "Your role here doesn't allow that."}
 		}
@@ -743,7 +749,10 @@ func (s *server) inOrganizerAsStaff(ctx context.Context, a authed, slug string, 
 	if err != nil {
 		return err
 	}
-	// Slugs are ASCII; EqualFold alone would also fold, say, the Kelvin sign into k.
+	// cur.OrganizerSlug is the organizer's current slug, so an old one is a
+	// 404 here even once another organizer takes it, and the log below
+	// names the organizer staff actually read. Slugs are ASCII; EqualFold
+	// alone would also fold, say, the Kelvin sign into k.
 	if cur == nil || !isASCII(slug) || !strings.EqualFold(cur.OrganizerSlug, slug) {
 		return notFound()
 	}
@@ -772,6 +781,9 @@ func (s *server) inOrganizerAsStaff(ctx context.Context, a authed, slug string, 
 		if err := tx.QueryRow(ctx, `select name, slug::text, organizer_suspended(id) from organizers where id = $1`, org.ID).Scan(&org.Name, &org.Slug, &org.Suspended); err != nil {
 			return err
 		}
+		if !strings.EqualFold(org.Slug, slug) {
+			return db.ErrNotMember // renamed since Current looked
+		}
 		return fn(org, tx)
 	})
 	if errors.Is(err, db.ErrNotMember) {
@@ -791,6 +803,7 @@ func (s *server) inOrganizerAsKey(ctx context.Context, key db.Principal, slug st
 	if access.SessionOnly {
 		return errSessionRequired
 	}
+	key.ReadOnly = !access.Write
 	err := db.WithPrincipal(ctx, s.Pool, key, key.KeyOrg, func(tx pgx.Tx, role string) error {
 		org := organizers.Organizer{Role: role}
 		err := tx.QueryRow(ctx, `select id, name, slug::text, organizer_suspended(id) from organizers where slug = $1`, slug).Scan(&org.ID, &org.Name, &org.Slug, &org.Suspended)

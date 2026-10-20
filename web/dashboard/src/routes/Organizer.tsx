@@ -15,6 +15,8 @@ export const canEdit = (org: Org) => isEditor(org) && !org.suspended;
 
 /** Support staff read what owners and admins read, and change nothing. */
 export const canRead = (org: Org) => isEditor(org) || org.role === "staff";
+/** The suspension banner is the members'; staff get a line in their own banner. */
+export const membersBanner = (org: Org) => org.suspended && org.role !== "staff";
 
 const NAV: { section: Section; label: string; path: string; editorsOnly?: boolean }[] = [
   { section: "events", label: "Events", path: "" },
@@ -89,7 +91,7 @@ export function Organizer({
             <p className="org-name">
               {org.name} <span className="muted">· {ROLE[org.role]}</span>
             </p>
-            {org.suspended && <SuspendedBanner organizer={org.name} />}
+            {membersBanner(org) && <SuspendedBanner organizer={org.name} />}
             <nav className="tabs" aria-label={org.name}>
               {navFor(org).map((n) => (
                 <Link

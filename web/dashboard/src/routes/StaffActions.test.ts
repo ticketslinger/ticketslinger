@@ -6,7 +6,15 @@ import { ApiKeys } from "./ApiKeys";
 import { eventTabs } from "./Events";
 import { canEdit, navFor, type Org } from "./Organizer";
 import { SessionList } from "./Staff";
-import { ActionDialog, ActionLog, actionText, canConfirm, RefundResult } from "./StaffActions";
+import {
+  ActionDialog,
+  ActionLog,
+  actionText,
+  canConfirm,
+  RefundLines,
+  RefundResult,
+  waitForRefund,
+} from "./StaffActions";
 
 const reason = "Chargebacks all week";
 
@@ -148,4 +156,97 @@ test("each session shows its actions with reason and refund totals", () => {
   expect(
     renderToString(createElement(SessionList, { sessions: [session], showOrganizer: true })),
   ).toContain("Fraud ring on this event");
+});
+
+test("a refund is followed in the staff log until it finishes, and given up on after 11 minutes", async () => {
+  const result = {
+    orders: 1,
+    amount_cents: 5200,
+    fee_cents: 200,
+    pending_orders: 0,
+    failed_orders: [],
+  };
+  const session = (finished: boolean, failed = false) =>
+    [
+      {
+        actions: [
+          { id: "other", finished_at: "x", failed: false, result: { ...result, orders: 9 } },
+          {
+            id: "a1",
+            finished_at: finished ? "2026-10-20T10:01:00Z" : null,
+            failed,
+            result: finished ? result : null,
+          },
+        ],
+      },
+    ] as unknown as Parameters<typeof SessionList>[0]["sessions"];
+  let polls = 0;
+  let t = 0;
+  const sleep = async (ms: number) => {
+    t += ms;
+  };
+  const live = new AbortController().signal;
+  const list = async () => {
+    polls++;
+    if (polls === 2) throw new Error("network");
+    return session(polls >= 4);
+  };
+  expect(await waitForRefund("a1", live, list, sleep, () => t)).toEqual({ status: "done", result });
+  expect(polls).toBe(4);
+
+  // A failure shows at the next poll, not after 11 minutes.
+  t = 0;
+  expect(
+    await waitForRefund(
+      "a1",
+      live,
+      async () => session(false, true),
+      sleep,
+      () => t,
+    ),
+  ).toEqual({ status: "failed" });
+  expect(t).toBe(1000);
+
+  t = 0;
+  expect(
+    await waitForRefund(
+      "a1",
+      live,
+      async () => session(false),
+      sleep,
+      () => t,
+    ),
+  ).toEqual({
+    status: "late",
+  });
+  expect(t).toBe(11 * 60_000);
+
+  // Leaving the page stops the polling.
+  const gone = new AbortController();
+  polls = 0;
+  t = 0;
+  const leave = async () => {
+    polls++;
+    if (polls === 3) gone.abort();
+    return session(false);
+  };
+  expect(await waitForRefund("a1", gone.signal, leave, sleep, () => t)).toEqual({
+    status: "aborted",
+  });
+  expect(polls).toBe(3);
+});
+
+test("each refund gets its own line, and a failed one says so", () => {
+  const html = renderToString(
+    createElement(RefundLines, {
+      refunds: [
+        { id: "a", event: "Gala", state: { status: "running" } },
+        { id: "b", event: "Ball", state: { status: "failed" } },
+      ],
+    }),
+  );
+  expect(html).toContain("Gala");
+  expect(html).toContain("Refunding every order.");
+  expect(html).toContain("Ball");
+  expect(html).toContain("The refund didn&#x27;t finish. Try again: nobody gets refunded twice.");
 });

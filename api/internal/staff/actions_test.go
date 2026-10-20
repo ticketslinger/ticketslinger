@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -87,25 +88,84 @@ func TestActSuspendsLiftsAndAlerts(t *testing.T) {
 	}
 }
 
-// refund_event: the refund runs after the action is recorded, and a refund
-// that fails leaves the action recorded and unfinished.
+// refund_event: the refund runs after the action is recorded, in the
+// background, outliving the request; a refund that fails leaves the action
+// recorded and unfinished.
 func TestActRefundsTheEvent(t *testing.T) {
-	ctx := context.Background()
 	f := newFixture(t)
 	var ev uuid.UUID
-	if err := f.owner.QueryRow(ctx, `insert into events(organizer_id, slug, name, timezone, starts_at, ends_at)
+	if err := f.owner.QueryRow(context.Background(), `insert into events(organizer_id, slug, name, timezone, starts_at, ends_at)
 		values ($1, 'gala', 'Gala', 'UTC', now() + interval '1 day', now() + interval '2 days') returning id`, f.org).Scan(&ev); err != nil {
 		t.Fatal(err)
 	}
 	var called []uuid.UUID
 	fail := error(nil)
-	svc := staff.New(f.pool, alertTo, func(_ context.Context, org, action uuid.UUID) (staff.RefundResult, error) {
+	release := make(chan struct{})
+	svc := staff.New(f.pool, alertTo, func(ctx context.Context, org, action uuid.UUID) (staff.RefundResult, error) {
+		<-release
 		if org != f.org {
 			t.Errorf("refund for organizer %v", org)
 		}
+		if dl, ok := ctx.Deadline(); ctx.Err() != nil || !ok || time.Until(dl) < 9*time.Minute {
+			t.Errorf("refund context: err %v, deadline %v %v; want live, about 10 minutes", ctx.Err(), dl, ok)
+		}
 		called = append(called, action)
-		return staff.RefundResult{Orders: 2, PendingOrders: 1, AmountCents: 7800, FeeCents: 300}, fail
+		return staff.RefundResult{}, fail
 	})
+	sess, err := svc.Start(context.Background(), f.user, f.login, "acme", "Reported for selling fake tickets", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const why = "Refunding the buyers of an illegal event"
+	if _, err := svc.Act(context.Background(), sess, "suspend", nil, why); err != nil {
+		t.Fatal(err)
+	}
+	// Act returns while the refund is still running, and the request going
+	// away doesn't stop it.
+	ctx, cancel := context.WithCancel(context.Background())
+	a, err := svc.Act(ctx, sess, "refund_event", &ev, why)
+	cancel()
+	if err != nil || a.Kind != "refund_event" || a.Event == nil || *a.Event != ev {
+		t.Fatalf("refund: %+v %v", a, err)
+	}
+	close(release)
+	svc.Wait()
+	if len(called) != 1 || called[0] != a.ID {
+		t.Fatalf("refunds run: %v, want %v", called, a.ID)
+	}
+	for _, e := range []error{errors.New("boom"), &pgconn.PgError{Code: "55000", Message: "already_done"}} {
+		fail = e
+		if _, err := svc.Act(context.Background(), sess, "refund_event", &ev, why); err != nil {
+			t.Fatalf("%v: the action itself: %v", e, err)
+		}
+		svc.Wait()
+	}
+	if len(called) != 3 {
+		t.Fatalf("refunds run: %d, want 3", len(called))
+	}
+	if n := f.count(t, `select count(*) from staff_actions where kind = 'refund_event'`); n != 3 {
+		t.Fatalf("refund_event actions = %d, want all recorded", n)
+	}
+}
+
+// Round 2: a refund that panics or fails is caught, logged and shown as
+// failed in the staff log at once, the action stays unfinished, and the
+// process lives on. Shutting the server down stops a running refund.
+func TestBackgroundRefundFailsSafely(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	var ev uuid.UUID
+	if err := f.owner.QueryRow(ctx, `insert into events(organizer_id, slug, name, timezone, starts_at, ends_at)
+		values ($1, 'gala', 'Gala', 'UTC', now() + interval '1 day', now() + interval '2 days') returning id`, f.org).Scan(&ev); err != nil {
+		t.Fatal(err)
+	}
+	life, stop := context.WithCancel(ctx)
+	defer stop()
+	var refund staff.Refunder
+	svc := staff.New(f.pool, alertTo, func(ctx context.Context, org, action uuid.UUID) (staff.RefundResult, error) {
+		return refund(ctx, org, action)
+	})
+	svc.StopWith(life)
 	sess, err := svc.Start(ctx, f.user, f.login, "acme", "Reported for selling fake tickets", "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -114,35 +174,64 @@ func TestActRefundsTheEvent(t *testing.T) {
 	if _, err := svc.Act(ctx, sess, "suspend", nil, why); err != nil {
 		t.Fatal(err)
 	}
-	a, err := svc.Act(ctx, sess, "refund_event", &ev, why)
-	if err != nil || len(called) != 1 || called[0] != a.ID || a.Result == nil || a.Result.Orders != 2 || a.Result.PendingOrders != 1 ||
-		a.Result.AmountCents != 7800 || a.Result.FeeCents != 300 {
-		t.Fatalf("refund: %+v %v %v", a, err, called)
-	}
-	fail = errors.New("boom")
-	if _, err := svc.Act(ctx, sess, "refund_event", &ev, why); err == nil || len(called) != 2 {
-		t.Fatalf("a failed refund: %v", err)
-	}
-	for _, c := range []struct {
-		err  *pgconn.PgError
-		want error
-	}{
-		{&pgconn.PgError{Code: "55000", Message: "already_done"}, staff.ErrAlreadyDone},
-		{&pgconn.PgError{Code: "55000", Message: "not_suspended"}, staff.ErrNotSuspended},
-	} {
-		fail = c.err
-		if _, err := svc.Act(ctx, sess, "refund_event", &ev, why); !errors.Is(err, c.want) {
-			t.Fatalf("%s: %v", c.err.Message, err)
+	failed := func(id uuid.UUID) bool {
+		t.Helper()
+		list, err := svc.List(ctx, f.user)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	// A claim or finish error is a bug: not a 404 dressed as no such event.
-	for _, pg := range []*pgconn.PgError{{Code: "P0002", Message: "claim_staff_refund: no such action"}, {Code: "42501", Message: "finish_staff_refund: not claimed"}} {
-		fail = pg
-		if _, err := svc.Act(ctx, sess, "refund_event", &ev, why); errors.Is(err, catalogue.ErrNotFound) || errors.Is(err, staff.ErrNotAllowed) || err == nil {
-			t.Fatalf("%s: %v, want it passed through", pg.Code, err)
+		for _, l := range list {
+			for _, a := range l.Actions {
+				if a.ID == id {
+					return a.Failed && a.FinishedAt == nil
+				}
+			}
 		}
+		t.Fatalf("action %v not in the log", id)
+		return false
 	}
-	if n := f.count(t, `select count(*) from staff_actions where kind = 'refund_event'`); n != 6 {
-		t.Fatalf("refund_event actions = %d, want all recorded", n)
+	take := func() uuid.UUID {
+		t.Helper()
+		a, err := svc.Act(ctx, sess, "refund_event", &ev, why)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a.ID
+	}
+
+	refund = func(context.Context, uuid.UUID, uuid.UUID) (staff.RefundResult, error) { panic("boom") }
+	if id := take(); waited(svc) && !failed(id) {
+		t.Fatal("a refund that panicked isn't shown as failed")
+	}
+	refund = func(context.Context, uuid.UUID, uuid.UUID) (staff.RefundResult, error) {
+		return staff.RefundResult{}, errors.New("boom")
+	}
+	if id := take(); waited(svc) && !failed(id) {
+		t.Fatal("a refund that failed isn't shown as failed")
+	}
+	refund = func(context.Context, uuid.UUID, uuid.UUID) (staff.RefundResult, error) {
+		return staff.RefundResult{}, nil
+	}
+	if id := take(); waited(svc) && failed(id) {
+		t.Fatal("a refund that went through is shown as failed")
+	}
+
+	started := make(chan struct{})
+	refund = func(ctx context.Context, _, _ uuid.UUID) (staff.RefundResult, error) {
+		close(started)
+		<-ctx.Done()
+		return staff.RefundResult{}, ctx.Err()
+	}
+	take()
+	<-started
+	stop()
+	done := make(chan struct{})
+	go func() { svc.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutting down didn't stop the running refund")
 	}
 }
+
+func waited(s *staff.Service) bool { s.Wait(); return true }

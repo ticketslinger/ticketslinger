@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { describeAction as say, who } from "./Audit";
+import { describeAction as say, staffRow, who } from "./Audit";
 
 test("audit actions read as plain words", () => {
   expect(say("event.created")).toBe("Event created");
@@ -35,4 +35,26 @@ test("the Who cell names members and keys, and falls back kindly", () => {
   );
   expect(who({ actor_type: "api_key", actor_api_key_id: "k1" }, me)).toBe("An API key");
   expect(who({ actor_type: "system", actor_name: null }, me)).toBe("Automatic");
+});
+
+test("support's rows say what support did, and the Who cell says it was support", () => {
+  const row = (action: string) => staffRow({ action, actor_name: "Sam" });
+  expect(row("staff.suspended")).toBe("Suspended your organizer, so your events went off sale");
+  expect(row("staff.lifted")).toBe("Lifted your organizer's suspension");
+  expect(row("staff.refund_requested")).toBe("Started refunding every order of an event");
+  expect(row("staff.session_started")).toBe("Opened your organizer in support mode");
+  expect(row("staff.session_ended")).toBe("TicketSlinger support (Sam) ended support mode");
+  expect(say("event.refunded_by_support")).toBe(
+    "Every order of an event refunded in full, our fee too",
+  );
+  const me = "u1";
+  expect(who({ actor_type: "staff", actor_user_id: "s1", actor_name: "Sam" }, me)).toBe(
+    "TicketSlinger support (Sam)",
+  );
+  expect(who({ actor_type: "staff", actor_user_id: "s1", actor_name: null }, me)).toBe(
+    "TicketSlinger support",
+  );
+  expect(
+    who({ actor_type: "system", actor_name: null, action: "event.refunded_by_support" }, me),
+  ).toBe("TicketSlinger support");
 });
