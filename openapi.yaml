@@ -5,6 +5,8 @@ info:
   license: { name: AGPL-3.0-only, identifier: AGPL-3.0-only }
   description: |
     Every POST, PUT, PATCH and DELETE accepts an Idempotency-Key header: 1 to 255 printable ASCII characters, a fresh random value per intended action (400 bad_idempotency_key otherwise). Send the same key to retry and nothing happens twice. The first response is kept for 24 hours and replayed with Idempotent-Replayed: true. Keys belong to the caller (the signed-in user, the API key, or nobody for public calls) and to the method and path, so they never cross between callers. The same key with a different body is 422 idempotency_key_reused. The same key while the first request is still running is 409 idempotency_in_progress; wait a moment and retry. Responses with a 5xx status, and 429 rate-limit answers, are not kept, so a retry runs fresh; 409 idempotency_in_progress carries Retry-After: 1. Operations that hand back credentials (sign-up, sign-in, authenticator setup, recovery codes, API key creation, Stripe onboarding and account-linking links, checkout tokens and payment client secrets) never keep their responses, so a retry runs again. Without signing in, the key must be random and at least 22 letters, digits, - or _ (a UUID works). Busy moments on a sale answer 503 try_again with Retry-After: 1.
+
+    TicketSlinger support can read one organizer at a time in support mode, for at most an hour, with a written reason the organizer's owners can read (listStaffAccess). Every request it makes there is recorded before it runs: if that record can't be written, the answer is 503 staff_log_unavailable and nothing else happens. In support mode every write is 403 staff_read_only, CSV exports are 403 staff_not_allowed, and getOrganizer says role staff.
 servers:
   - url: https://api.ticketslinger.com/v1
 security:
@@ -267,6 +269,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/audit:
     get:
       operationId: listAudit
@@ -276,6 +279,18 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/staff-access:
+    get:
+      operationId: listStaffAccess
+      description: "Owners and admins only, from a signed-in session. Every time TicketSlinger support looked at this organizer, newest first (up to 100): who, why, when it ended and how, and each request it made. Names only, never emails. An API key gets 403 session_required."
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/StaffSessionLog" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/api-keys:
     get:
       operationId: listApiKeys
@@ -286,6 +301,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     post:
       operationId: createApiKey
       x-idempotency-store: false
@@ -300,6 +316,7 @@ paths:
         "422": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/api-keys/{apiKey}:
     delete:
       operationId: revokeApiKey
@@ -316,6 +333,7 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/members:
     get:
       operationId: listMembers
@@ -326,6 +344,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     post:
       operationId: addMember
       description: "Owners only, from a signed-in session. Adds an existing, verified TicketSlinger account to the team as admin or checkin; nobody is emailed. 404 no_account when no verified account has that email (an unknown email and an unverified one get the same answer). 409 already_member when they're on the team already, in any role. 422 with field role for any role but admin or checkin: owners can't be made here."
@@ -339,6 +358,7 @@ paths:
         "422": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/members/{member}:
     delete:
       operationId: removeMember
@@ -355,6 +375,7 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/payments:
     get:
       operationId: getPayments
@@ -365,6 +386,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/payments/connect:
     post:
       operationId: connectPayments
@@ -446,6 +468,7 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Event" } } } } }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     post:
       operationId: createEvent
       description: Owners and admins, or a write API key. The event starts as a draft. starts_at and ends_at are required (422 missing_field).
@@ -459,6 +482,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}:
     get:
       operationId: getEvent
@@ -470,6 +494,7 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Event" } } } }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     patch:
       operationId: updateEvent
       description: "Owners and admins, or a write API key. Send only what changes. status moves between draft and live (422 status_not_allowed otherwise): cancelling has its own operation, cancelEvent, because it refunds everyone, and ending isn't available yet. Going live is refused with 422 event_over once ends_at has passed (an event that has started but not ended can go live), 422 no_ticket_types without a ticket type, 422 unquotaed_ticket_type while a ticket type has no quota, and 422 payments_not_ready when any ticket type costs money and the organizer's Stripe account can't take payments yet (see /organizers/{organizer}/payments). A live event's ends_at can still change. The slug changes only on a draft (409 slug_locked). Once tickets are sold or held in an open checkout, tax_rate_bp, prices_include_tax, fee_mode and timezone can't change and the event can't go back to draft (409 has_sales; any order counts, even one without tickets); field names the property refused."
@@ -486,6 +511,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteEvent
       description: Owners and admins, or a write API key. Drafts only; a live event answers 409 event_not_draft, and a draft with orders answers 409 has_sales.
@@ -501,6 +527,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/ticket-types:
     get:
       operationId: listTicketTypes
@@ -512,6 +539,7 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/TicketType" } } } } }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     post:
       operationId: createTicketType
       description: Owners and admins, or a write API key. It goes to the end of the list. price_cents is required (422 missing_field).
@@ -528,6 +556,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/ticket-types/order:
     put:
       operationId: reorderTicketTypes
@@ -545,6 +574,7 @@ paths:
         "422": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/ticket-types/{ticketType}:
     get:
       operationId: getTicketType
@@ -557,6 +587,7 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TicketType" } } } }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     patch:
       operationId: updateTicketType
       description: "Owners and admins, or a write API key. Send only what changes. Showing a hidden ticket type that a promo code unlocks answers 409 unlocked_by_promo. Once this ticket type is sold or held in an open checkout, price_cents, tax_rate_bp, prices_include_tax, min_per_order and max_per_order can't change (409 has_sales); name, description, the sales window and hidden still can."
@@ -574,6 +605,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteTicketType
       description: Owners and admins, or a write API key. The last ticket type of a live event answers 409 last_ticket_type_live. One that has been sold, or is held in an open checkout, answers 409 has_sales.
@@ -590,6 +622,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/quotas:
     get:
       operationId: listQuotas
@@ -601,6 +634,7 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Quota" } } } } }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     post:
       operationId: createQuota
       description: Owners and admins, or a write API key. size is required (422 missing_field). ticket_type_ids may be empty; every id must belong to this event (422 unknown_ticket_type). A size below what those ticket types have already sold and hold in open checkouts answers 409 quota_below_sales.
@@ -617,6 +651,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/quotas/{quota}:
     get:
       operationId: getQuota
@@ -629,6 +664,7 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Quota" } } } }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     patch:
       operationId: updateQuota
       description: "Owners and admins, or a write API key. Send only what changes. A ticket_type_ids list replaces the whole set. On a live event, leaving a ticket type in no quota answers 409 live_needs_capacity. size can grow at any time but can't drop below what its ticket types have sold and hold in open checkouts, counting any ticket type the patch adds (409 quota_below_sales). A ticket type with sales can't leave the set (409 has_sales)."
@@ -646,6 +682,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteQuota
       description: Owners and admins, or a write API key. On a live event, a delete that leaves a ticket type in no quota answers 409 live_needs_capacity. A quota whose ticket types have sales, or are held in an open checkout, answers 409 has_sales.
@@ -662,6 +699,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/orders:
     get:
       operationId: listOrders
@@ -674,6 +712,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/orders/{order}:
     get:
       operationId: getOrderDetail
@@ -687,6 +726,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/orders/{order}/refunds:
     post:
       operationId: refundOrder
@@ -705,6 +745,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/orders/{order}/refunds/{refund}/retry:
     post:
       operationId: retryRefund
@@ -723,6 +764,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/orders/{order}/email:
     post:
       operationId: resendTicketEmail
@@ -740,6 +782,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/cancel:
     post:
       operationId: cancelEvent
@@ -757,6 +800,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/checkins:
     post:
       operationId: createCheckin
@@ -774,6 +818,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/checkins/search:
     get:
       operationId: searchCheckinTickets
@@ -790,6 +835,7 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/checkins/summary:
     get:
       operationId: getCheckinSummary
@@ -802,6 +848,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/report:
     get:
       operationId: getEventReport
@@ -814,6 +861,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/exports/{kind}:
     get:
       operationId: exportEventCsv
@@ -832,6 +880,7 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/promo-codes:
     get:
       operationId: listPromoCodes
@@ -843,6 +892,7 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/PromoCode" } } } } }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     post:
       operationId: createPromoCode
       description: "Owners and admins, or a write API key. code, kind and value are required (422 missing_field). The code is trimmed and upper-cased, and is unique within the event (409 code_taken). Every id in applies_to and unlocks must be a ticket type of this event (422 unknown_ticket_type); unlocks may list only hidden ones (422 unlock_not_hidden)."
@@ -859,6 +909,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/promo-codes/{promoCode}:
     get:
       operationId: getPromoCode
@@ -871,6 +922,7 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PromoCode" } } } }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     patch:
       operationId: updatePromoCode
       description: "Owners and admins, or a write API key. Send only what changes. Changing kind needs value too (422 value_required_with_kind). applies_to and unlocks replace the whole set when sent. null clears max_uses, valid_from or valid_until; leaving one out keeps it. used_count can't be set. Once an order has used the code, or an open checkout is using it, kind, value, applies_to_all and applies_to can't change (409 has_sales; field names the first one)."
@@ -888,6 +940,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     delete:
       operationId: deletePromoCode
       description: Owners and admins, or a write API key. A code an order has used, or an open checkout is using, answers 409 has_sales.
@@ -904,6 +957,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/questions:
     get:
       operationId: listQuestions
@@ -915,6 +969,7 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Question" } } } } }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     post:
       operationId: createQuestion
       description: "Owners and admins, or a write API key. label, kind and scope are required (422 missing_field). The question goes at the end of the list. Every id in applies_to must be a ticket type of this event (422 unknown_ticket_type)."
@@ -931,6 +986,7 @@ paths:
         "422": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/questions/order:
     put:
       operationId: reorderQuestions
@@ -948,6 +1004,7 @@ paths:
         "422": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/questions/{question}:
     get:
       operationId: getQuestion
@@ -960,6 +1017,7 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Question" } } } }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     patch:
       operationId: updateQuestion
       description: "Owners and admins, or a write API key. Send only what changes. Turning a question into a select needs options in the same request (422 options_required_with_kind); turning a select into anything else clears its options. applies_to replaces the whole set when sent. Order changes only through the order endpoint."
@@ -977,6 +1035,7 @@ paths:
         "422": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteQuestion
       description: Owners and admins, or a write API key. A question buyers have answered answers 409 has_sales.
@@ -993,6 +1052,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "400": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /storefront/{organizer}/{eventSlug}:
     get:
       operationId: getStorefrontEvent
@@ -1670,7 +1730,7 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         slug: { type: string }
-        role: { type: string, enum: [owner, admin, checkin, "key:read", "key:write"], description: "Your role here. An API key sees its own scope as key:read or key:write." }
+        role: { type: string, enum: [owner, admin, checkin, "key:read", "key:write", staff], description: "Your role here. An API key sees its own scope as key:read or key:write; TicketSlinger support in support mode sees staff." }
     AuditEntry:
       type: object
       required: [id, action, entity_type, entity_id, actor_type, at]
@@ -1681,9 +1741,9 @@ components:
         entity_id: { type: string, format: uuid }
         actor_user_id: { type: string, format: uuid }
         actor_api_key_id: { type: string, format: uuid, description: Set instead of actor_user_id when an API key did it. }
-        actor_type: { type: string, enum: [user, api_key, system], description: "Who did it: a person, an API key, or TicketSlinger itself (say, cancelling and refunding an order whose payment arrived after its tickets had gone)." }
-        actor_name: { type: [string, "null"], description: "The person's name if they are still a member of this organizer, or the API key's name. Null for former members." }
-        actor_email: { type: [string, "null"], description: "The person's email if they are still a member of this organizer. Null for API keys and former members." }
+        actor_type: { type: string, enum: [user, api_key, system, staff], description: "Who did it: a person, an API key, TicketSlinger itself (say, cancelling and refunding an order whose payment arrived after its tickets had gone), or TicketSlinger support starting or ending support mode." }
+        actor_name: { type: [string, "null"], description: "The person's name if they are still a member of this organizer, the support person's name, or the API key's name. Null for former members." }
+        actor_email: { type: [string, "null"], description: "The person's email if they are still a member of this organizer. Null for support, API keys and former members." }
         at: { type: string, format: date-time }
     AddMember:
       type: object

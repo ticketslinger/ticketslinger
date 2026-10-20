@@ -51,7 +51,8 @@ type Deps struct {
 
 type server struct {
 	Deps
-	public map[string]bool // mux patterns ("POST /v1/auth/login") whose spec says security: []
+	public map[string]bool   // mux patterns ("POST /v1/auth/login") whose spec says security: []
+	opIDs  map[string]string // mux pattern -> operationId, as openapi.yaml spells it
 	// Per client address (ratelimit.AddrKey): checkouts created, pay calls,
 	// storefront reads that try a code, order page reads, and order link requests.
 	checkoutLimit, payLimit, codeLimit, orderLimit, linkLimit *ratelimit.Limiter
@@ -74,7 +75,7 @@ func New(d Deps) http.Handler {
 			Payments: d.Payments, Direct: d.Config.PaymentsMode == "direct", StorefrontURL: d.Config.StorefrontURL, SecretKey: d.Config.SecretKey}
 	}
 	noStore := noStoreRoutes()
-	s := &server{Deps: d, public: publicRoutes(), checkoutLimit: ratelimit.New(10, time.Minute), payLimit: ratelimit.New(20, time.Minute),
+	s := &server{Deps: d, public: publicRoutes(), opIDs: operationIDs(), checkoutLimit: ratelimit.New(10, time.Minute), payLimit: ratelimit.New(20, time.Minute),
 		codeLimit: ratelimit.New(30, time.Minute), orderLimit: ratelimit.New(60, time.Minute), linkLimit: ratelimit.New(5, time.Hour),
 		checkinLimit: ratelimit.New(300, time.Minute), searchLimit: ratelimit.New(600, time.Minute)}
 	strict := NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
@@ -118,6 +119,38 @@ func publicRoutes() map[string]bool {
 	return public
 }
 
+// operationIDs maps each mux pattern to its operationId as openapi.yaml
+// spells it (the embedded spec capitalises the first letter).
+func operationIDs() map[string]string {
+	spec, err := GetSwagger()
+	if err != nil {
+		panic(err)
+	}
+	out := map[string]string{}
+	for path, item := range spec.Paths.Map() {
+		for method, op := range item.Operations() {
+			out[method+" /v1"+path] = strings.ToLower(op.OperationID[:1]) + op.OperationID[1:]
+		}
+	}
+	return out
+}
+
+var patternParam = regexp.MustCompile(`\{([^}]*)\}`)
+
+// routeName is what staff mode records of a request: the operation and its
+// path parameters ("getEvent organizer=acme event=0190..."), never the
+// query string, cut to the 200 characters staff_access_log holds.
+func (s *server) routeName(r *http.Request) string {
+	name := s.opIDs[r.Pattern]
+	for _, m := range patternParam.FindAllStringSubmatch(r.Pattern, -1) {
+		name += " " + m[1] + "=" + r.PathValue(m[1])
+	}
+	if utf8.RuneCountInString(name) > 200 {
+		name = string([]rune(name)[:200])
+	}
+	return name
+}
+
 // noStoreRoutes returns the mux patterns of operations marked
 // `x-idempotency-store: false`: their responses carry credentials, so they
 // are never kept for replay.
@@ -142,7 +175,11 @@ type ctxKey int
 const (
 	clientKey ctxKey = iota
 	authKey
+	routeKey
 )
+
+// staffRoute is the request as staff mode records it.
+type staffRoute struct{ method, name string }
 
 type client struct{ ip, ua string }
 
@@ -186,6 +223,9 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 				return
 			}
 			ctx = context.WithValue(ctx, authKey, a)
+			if !a.isKey() && strings.HasPrefix(r.URL.Path, "/v1/organizers/") {
+				ctx = context.WithValue(ctx, routeKey, staffRoute{r.Method, s.routeName(r)})
+			}
 			// Staff routes answer anyone else as an unknown route would,
 			// before the body is read or an Idempotency-Key is looked at.
 			if strings.HasPrefix(r.URL.Path, "/v1/staff/") {
@@ -615,13 +655,21 @@ func (s *server) ConfirmTotp(ctx context.Context, req ConfirmTotpRequestObject) 
 }
 
 // Access says who may call a tenant operation. Roles limits members (empty
-// means any member); Write marks a write, which a read API key may not do;
-// SessionOnly shuts API keys out entirely.
+// means any member); Write marks a write, which a read API key may not do,
+// nor staff mode; SessionOnly shuts API keys out entirely; StaffDenied
+// shuts staff mode out of a read.
 type Access struct {
 	Roles       []string
 	Write       bool
 	SessionOnly bool
+	StaffDenied bool
 }
+
+var (
+	errStaffReadOnly   = &apiError{403, "staff_read_only", "Support mode is read-only."}
+	errStaffNotAllowed = &apiError{403, "staff_not_allowed", "Support mode can't export data or send emails."}
+	errStaffLog        = &apiError{503, "staff_log_unavailable", "We couldn't record this request, so it didn't run. Try again in a moment."}
+)
 
 var errScopeReadOnly = &apiError{403, "scope_read_only", "This API key can only read. Create a key with write access to change things."}
 
@@ -641,7 +689,7 @@ func (s *server) inOrganizer(ctx context.Context, slug string, access Access, fn
 	}
 	org, err := s.Organizers.Resolve(ctx, a.user.ID, slug)
 	if errors.Is(err, organizers.ErrNotFound) {
-		return notFound()
+		return s.inOrganizerAsStaff(ctx, a, slug, access, fn)
 	}
 	if err != nil {
 		return err
@@ -658,6 +706,45 @@ func (s *server) inOrganizer(ctx context.Context, slug string, access Access, fn
 	})
 	if errors.Is(err, db.ErrNotMember) {
 		return notFound()
+	}
+	return err
+}
+
+// inOrganizerAsStaff is inOrganizer for a non-member: 404 unless the login
+// session's live staff session is on slug. Then the request is logged, in
+// its own committed transaction, before anything else (refusals included;
+// no log, no request), writes and StaffDenied reads are refused, and fn runs
+// read-only through db.WithStaff with role "staff". Roles and MFA aren't
+// checked: a staff session exists only on an MFA login session.
+func (s *server) inOrganizerAsStaff(ctx context.Context, a authed, slug string, access Access, fn func(org organizers.Organizer, tx pgx.Tx) error) error {
+	cur, err := s.Staff.Current(ctx, a.user.ID, a.sess.ID)
+	if err != nil {
+		return err
+	}
+	if cur == nil || !strings.EqualFold(cur.OrganizerSlug, slug) {
+		return notFound()
+	}
+	rt, _ := ctx.Value(routeKey).(staffRoute)
+	if err := s.Staff.Log(ctx, a.user.ID, cur.ID, rt.method, rt.name); err != nil {
+		slog.ErrorContext(ctx, "staff access log failed", "staff_session", cur.ID, "user", a.user.ID, "organizer", cur.OrganizerID, "err", err)
+		return errStaffLog
+	}
+	switch {
+	case access.Write:
+		return errStaffReadOnly
+	case access.StaffDenied:
+		return errStaffNotAllowed
+	}
+	slog.InfoContext(ctx, "staff_access", "staff_session", cur.ID, "user", a.user.ID, "organizer", cur.OrganizerID, "route", rt.name)
+	err = db.WithStaff(ctx, s.Pool, a.user.ID, cur.ID, cur.OrganizerID, func(tx pgx.Tx) error {
+		org := organizers.Organizer{ID: cur.OrganizerID, Role: "staff"}
+		if err := tx.QueryRow(ctx, `select name, slug::text from organizers where id = $1`, org.ID).Scan(&org.Name, &org.Slug); err != nil {
+			return err
+		}
+		return fn(org, tx)
+	})
+	if errors.Is(err, db.ErrNotMember) {
+		return notFound() // ended or revoked since Current looked
 	}
 	return err
 }
@@ -764,13 +851,17 @@ func (s *server) GetOrganizer(ctx context.Context, req GetOrganizerRequestObject
 func (s *server) ListAudit(ctx context.Context, req ListAuditRequestObject) (ListAuditResponseObject, error) {
 	out := ListAudit200JSONResponse{}
 	err := s.inOrganizer(ctx, req.Organizer, Access{Roles: ownerAdmin, SessionOnly: true}, func(_ organizers.Organizer, tx pgx.Tx) error {
-		// Names come from the member directory (current members only) and
-		// api_keys (revoked keys included); a former member's name is null.
+		// Names come from the member directory (current members only), the
+		// staff directory (names, never emails) and api_keys (revoked keys
+		// included); a former member's name is null.
 		rows, err := tx.Query(ctx, `select a.id, a.action, a.entity_type, a.entity_id, a.actor_user_id, a.actor_api_key_id, a.at,
-				coalesce(d.name, k.name), d.email,
-				case when a.actor_system then 'system' when a.actor_api_key_id is not null then 'api_key' else 'user' end
+				case when a.actor_staff_session_id is not null then sd.name else coalesce(d.name, k.name) end,
+				case when a.actor_staff_session_id is null then d.email end,
+				case when a.actor_system then 'system' when a.actor_api_key_id is not null then 'api_key'
+				     when a.actor_staff_session_id is not null then 'staff' else 'user' end
 			from audit_log a
 			left join app_member_directory() d on d.user_id = a.actor_user_id
+			left join app_staff_directory() sd on sd.user_id = a.actor_user_id
 			left join api_keys k on k.id = a.actor_api_key_id
 			order by a.at desc, a.id desc limit 100`)
 		if err != nil {

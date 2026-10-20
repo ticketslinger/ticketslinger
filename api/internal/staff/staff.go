@@ -194,21 +194,48 @@ func (s *Service) Search(ctx context.Context, user uuid.UUID, q string) ([]OrgRe
 
 // List is the newest 100 staff sessions, of every staff member, each with
 // its requests in order. Empty unless user is live staff.
-// ponytail: newest 100 and no paging; add a cursor when the log outgrows a page.
 func (s *Service) List(ctx context.Context, user uuid.UUID) ([]SessionLog, error) {
-	out := []SessionLog{}
-	err := db.WithUser(ctx, s.pool, user, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `select ss.id, u.name, ss.organizer_slug::text, ss.organizer_name, ss.reason, ss.started_at, ss.expires_at,
-				ss.ended_at, ss.ended_how, ss.end_note,
-				coalesce((select jsonb_agg(jsonb_build_object('Method', l.method, 'Route', l.route, 'At', l.at) order by l.at, l.id)
-				            from staff_access_log l where l.staff_session_id = ss.id), '[]')
-			  from staff_sessions ss join users u on u.id = ss.user_id
-			 order by ss.started_at desc, ss.id desc limit 100`)
-		if err != nil {
-			return err
-		}
-		out, err = pgx.CollectRows(rows, pgx.RowToStructByPos[SessionLog])
+	var out []SessionLog
+	err := db.WithUser(ctx, s.pool, user, func(tx pgx.Tx) (err error) {
+		out, err = sessionLogs(ctx, tx, `users u on u.id = ss.user_id`)
 		return err
 	})
 	return out, err
+}
+
+// ForOrganizer is List for the organizer tx is scoped to: its staff
+// sessions only, with staff names from app_staff_directory, which never
+// gives an email. The filter is explicit: RLS shows a staff reader every
+// staff session.
+func ForOrganizer(ctx context.Context, tx pgx.Tx) ([]SessionLog, error) {
+	return sessionLogs(ctx, tx, `app_staff_directory() u on u.user_id = ss.user_id where ss.organizer_id = app_organizer()`)
+}
+
+// sessionLogs reads the newest 100 staff sessions RLS shows, naming staff
+// from names (a join clause aliased u with a name column, and any where).
+// ponytail: newest 100 and no paging; add a cursor when the log outgrows a page.
+func sessionLogs(ctx context.Context, tx pgx.Tx, names string) ([]SessionLog, error) {
+	rows, err := tx.Query(ctx, `select ss.id, u.name, ss.organizer_slug::text, ss.organizer_name, ss.reason, ss.started_at, ss.expires_at,
+			ss.ended_at, ss.ended_how, ss.end_note,
+			coalesce((select jsonb_agg(jsonb_build_object('Method', l.method, 'Route', l.route, 'At', l.at) order by l.at, l.id)
+			            from staff_access_log l where l.staff_session_id = ss.id), '[]')
+		  from staff_sessions ss join `+names+`
+		 order by ss.started_at desc, ss.id desc limit 100`)
+	if err != nil {
+		return nil, err
+	}
+	out, err := pgx.CollectRows(rows, pgx.RowToStructByPos[SessionLog])
+	if out == nil {
+		out = []SessionLog{}
+	}
+	return out, err
+}
+
+// Log records one request of staffSession before it runs, in its own
+// committed transaction. It fails unless the session is live and user's.
+func (s *Service) Log(ctx context.Context, user, staffSession uuid.UUID, method, route string) error {
+	return db.WithUser(ctx, s.pool, user, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `select log_staff_access($1, $2, $3)`, staffSession, method, route)
+		return err
+	})
 }

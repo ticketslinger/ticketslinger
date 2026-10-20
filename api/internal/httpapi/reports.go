@@ -13,9 +13,12 @@ import (
 
 // reportsRead is ordersRead for the same reason: reports carry money and
 // buyers' details, so check-in staff don't read them (spec D22). Read keys
-// pass; inOrganizerAsKey ignores roles.
+// pass; inOrganizerAsKey ignores roles. exportsRead is the same, but staff
+// mode may not take the files away: bulk buyer details out of the building
+// is a decision, not a side effect.
 var (
 	reportsRead = Access{Roles: ownerAdmin}
+	exportsRead = Access{Roles: ownerAdmin, StaffDenied: true}
 
 	errUnknownExport = &apiError{400, "unknown_export", "Pick orders.csv, attendees.csv or checkins.csv."}
 )
@@ -53,7 +56,7 @@ func (s *server) GetEventReport(ctx context.Context, req GetEventReportRequestOb
 func (s *server) ExportEventCsv(ctx context.Context, req ExportEventCsvRequestObject) (ExportEventCsvResponseObject, error) {
 	var buf bytes.Buffer
 	var name string
-	err := s.inOrganizer(ctx, req.Organizer, reportsRead, func(_ organizers.Organizer, tx pgx.Tx) (err error) {
+	err := s.inOrganizer(ctx, req.Organizer, exportsRead, func(_ organizers.Organizer, tx pgx.Tx) (err error) {
 		name, err = reports.WriteCSV(ctx, tx, req.Event, string(req.Kind), &buf)
 		return err
 	})

@@ -7,9 +7,11 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/oapi-codegen/nullable"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/auth"
+	"github.com/ticketslinger/ticketslinger/api/internal/organizers"
 	"github.com/ticketslinger/ticketslinger/api/internal/staff"
 )
 
@@ -171,7 +173,11 @@ func (s *server) ListStaffSessions(ctx context.Context, _ ListStaffSessionsReque
 	if err != nil {
 		return nil, err
 	}
-	out := make(ListStaffSessions200JSONResponse, 0, len(list))
+	return ListStaffSessions200JSONResponse(toStaffSessionLogs(list)), nil
+}
+
+func toStaffSessionLogs(list []staff.SessionLog) []StaffSessionLog {
+	out := make([]StaffSessionLog, 0, len(list))
 	for _, l := range list {
 		e := StaffSessionLog{Id: l.ID, StaffName: l.StaffName, OrganizerSlug: l.OrganizerSlug, OrganizerName: l.OrganizerName, Reason: l.Reason,
 			StartedAt: l.StartedAt, ExpiresAt: l.ExpiresAt, EndedAt: nullOf(l.EndedAt), EndNote: nullOf(l.EndNote),
@@ -184,5 +190,19 @@ func (s *server) ListStaffSessions(ctx context.Context, _ ListStaffSessionsReque
 		}
 		out = append(out, e)
 	}
-	return out, nil
+	return out
+}
+
+// ListStaffAccess shows an organizer's owners and admins every staff
+// session on it, with names from app_staff_directory: never an email.
+func (s *server) ListStaffAccess(ctx context.Context, req ListStaffAccessRequestObject) (ListStaffAccessResponseObject, error) {
+	var list []staff.SessionLog
+	err := s.inOrganizer(ctx, req.Organizer, Access{Roles: ownerAdmin, SessionOnly: true}, func(_ organizers.Organizer, tx pgx.Tx) (err error) {
+		list, err = staff.ForOrganizer(ctx, tx)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ListStaffAccess200JSONResponse(toStaffSessionLogs(list)), nil
 }
