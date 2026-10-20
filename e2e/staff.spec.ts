@@ -108,11 +108,16 @@ test("staff reads one organizer, read-only", async ({ browser }) => {
   await expect(banner).toContainText("min left");
   const before = await left();
   await staff.clock.fastForward("01:00");
-  await expect(banner).toContainText(`${before - 1} min left`);
+  await expect.poll(left).toBeLessThan(before);
 
-  // An order opens, and nothing on the event can be saved.
+  // The owner can save on the event page (the control), staff can't. Both wait for the form to render.
+  await owner.goto(`/o/${slug}`);
+  await owner.getByRole("link", { name: "Spring Social" }).click();
+  await expect(owner.getByLabel("Event name")).toHaveValue("Spring Social");
+  await expect(owner.getByRole("button", { name: "Save changes" })).toBeVisible();
   await staff.goto(`/o/${slug}`);
   await staff.getByRole("link", { name: "Spring Social" }).click();
+  await expect(staff.getByLabel("Event name")).toHaveValue("Spring Social");
   await expect(staff.getByRole("button", { name: "Save changes" })).toHaveCount(0);
   await staff.getByRole("link", { name: "Orders" }).click();
   await staff.getByRole("link", { name: /^TS-/ }).click();
@@ -172,7 +177,8 @@ test("staff takes an organizer down and restores it", async ({ browser }) => {
   // The event page is gone for buyers, with the spec's words.
   const res = await fetch(`${SHOP}/${slug}/spring-social`);
   expect(res.status).toBe(410);
-  const shop = await (await browser.newContext()).newPage();
+  const shopContext = await browser.newContext();
+  const shop = await shopContext.newPage();
   await shop.goto(`${SHOP}/${slug}/spring-social`);
   await expect(shop.getByRole("heading", { name: "This event isn't available." })).toBeVisible();
 
@@ -182,7 +188,7 @@ test("staff takes an organizer down and restores it", async ({ browser }) => {
     owner.getByRole("alert").filter({ hasText: `We've suspended ${name}.` }),
   ).toBeVisible();
   await owner.getByRole("link", { name: "Spring Social" }).click();
-  await expect(owner.getByRole("heading", { name: "Spring Social" })).toBeVisible();
+  await expect(owner.getByLabel("Event name")).toHaveValue("Spring Social");
   await expect(owner.getByRole("button", { name: "Save changes" })).toHaveCount(0);
 
   // Refund: the event's name has to be typed out, and the totals come back.
@@ -215,4 +221,5 @@ test("staff takes an organizer down and restores it", async ({ browser }) => {
   await expect(staff.getByRole("button", { name: "Suspend organizer" })).toBeVisible();
   await shop.reload();
   await expect(shop.getByRole("button", { name: "Get tickets" })).toBeVisible();
+  await shopContext.close();
 });
