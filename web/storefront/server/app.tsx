@@ -214,7 +214,8 @@ export function createApp(opts: StorefrontOptions): Hono {
   const notFound = (c: Context, what: "event" | "page" | "checkout" = "page") =>
     page(c, 404, <NotFound what={what} />);
   // 410 from the storefront read, createCheckout, getCheckout or pay: the organizer is suspended.
-  const unavailable = (c: Context) => page(c, 410, <Unavailable />);
+  const unavailable = (c: Context, charged = false) =>
+    page(c, 410, <Unavailable charged={charged} />);
   const trouble = (c: Context, status: Status = 502, message = GENERIC) =>
     page(c, status, <ErrorPage message={message} />);
 
@@ -325,7 +326,11 @@ export function createApp(opts: StorefrontOptions): Hono {
     if (!TOKEN.test(token)) return notFound(c, "checkout");
     const r = await getCheckout(c, token);
     if (r.status === 404) return notFound(c, "checkout");
-    if (r.status === 410) return unavailable(c);
+    if (r.status === 410) {
+      // Back from 3-D Secure (Stripe's return_url is this page): a card may have been charged.
+      const q = c.req.query();
+      return unavailable(c, "payment_intent" in q || "redirect_status" in q);
+    }
     if (r.status === 429) return trouble(c, 429, SLOW_DOWN);
     if (r.status === 409 && r.error?.error.code === "event_cancelled") {
       return trouble(c, 409, EVENT_CANCELLED);

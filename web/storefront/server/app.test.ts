@@ -1538,3 +1538,23 @@ test("a suspended organizer's buyers can still ask for their link again", async 
   );
   expect(calls.some((c) => new URL(c.url).pathname.endsWith("/order-links"))).toBe(true);
 });
+
+test("back from the bank to a suspended organizer's checkout: the 410 page promises the refund", async () => {
+  for (const query of ["payment_intent=pi_1&redirect_status=succeeded", "redirect_status=failed"]) {
+    const { a } = app(unavailable);
+    const res = await a.request(`/checkout/${TOK}?${query}`);
+    const html = await res.text();
+    expect(res.status).toBe(410);
+    expect(html).toContain("This event isn't available.");
+    expect(html).toContain("If your card was charged, we'll refund all of it.");
+    expect(html).not.toContain("Already have an order?");
+  }
+});
+
+test("the plain 410 page has no refund line", async () => {
+  for (const path of [`/checkout/${TOK}`, "/acme/gala"]) {
+    const { a } = app(unavailable);
+    const html = await (await a.request(path)).text();
+    expect(html).not.toContain("refund");
+  }
+});

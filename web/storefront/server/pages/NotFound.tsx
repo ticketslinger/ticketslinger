@@ -1,5 +1,5 @@
 /** @jsxImportSource preact */
-import { UNAVAILABLE } from "../../islands/checkout";
+import { REFUND_IF_CHARGED, UNAVAILABLE } from "../../islands/checkout";
 import { Layout } from "./Layout";
 
 export function NotFound({ what }: { what: "event" | "page" | "checkout" }) {
@@ -12,11 +12,15 @@ export function NotFound({ what }: { what: "event" | "page" | "checkout" }) {
 }
 
 // A suspended organizer's event: the same page for every reason, so it says nothing about why.
-export function Unavailable() {
+// charged: the buyer is back from their bank, so a card may have been charged and there's no order.
+export function Unavailable({ charged = false }: { charged?: boolean }) {
   return (
     <Layout title="Not available">
       <h1>{UNAVAILABLE}</h1>
-      <p>You can't buy tickets for it here. Already have an order? Your order link still works.</p>
+      <p>
+        You can't buy tickets for it here.{" "}
+        {charged ? REFUND_IF_CHARGED : "Already have an order? Your order link still works."}
+      </p>
     </Layout>
   );
 }

@@ -143,6 +143,10 @@ func TestPaymentAfterSuspendIsRefunded(t *testing.T) {
 			c, pi := paying(t, s, f, fake, sales.Details{}, sales.Item{TicketTypeID: f.general, Quantity: 1})
 			f.suspend(t, f.org)
 			confirm(t, s, f, fake, c, pi)
+			if name == "webhook" { // redelivered: still one refund
+				f.must(t, s.HandleStripeEvent(ctx, succeeded(pi.ID, "acct_fake1", c.Quote.TotalCents, 1)))
+				f.must(t, s.HandleStripeEvent(ctx, succeeded(pi.ID, "acct_fake1", c.Quote.TotalCents, 2)))
+			}
 
 			order, _, status := f.orderOf(t, c.ID)
 			want := "cancelled"
@@ -168,5 +172,54 @@ func TestPaymentAfterSuspendIsRefunded(t *testing.T) {
 				t.Errorf("%d order.cancelled_late audits with reason organizer_suspended, want 1", n)
 			}
 		})
+	}
+}
+
+// The Task 7 carry: an order and intent made before the suspension go
+// through Pay's UPDATE path, which the INSERT trigger never sees.
+func TestPayAgainAfterSuspendIsRefused(t *testing.T) {
+	ctx := context.Background()
+	s, f, rec := payService(t, seedOpts{quota: 10, price: 2500})
+	c, _ := paying(t, s, f, rec.Fake, sales.Details{Email: "first@example.com"}, sales.Item{TicketTypeID: f.general, Quantity: 1})
+	f.suspend(t, f.org)
+	if _, err := s.Pay(ctx, c.Token, sales.Details{Email: "second@example.com"}); !errors.Is(err, sales.ErrUnavailable) {
+		t.Fatalf("Pay: %v, want ErrUnavailable", err)
+	}
+	if n := f.count(t, `select count(*) from orders where checkout_id = $1 and email = 'first@example.com' and status = 'pending'`, c.ID); n != 1 {
+		t.Error("the pending order changed")
+	}
+	if n := len(rec.calls()); n != 1 {
+		t.Errorf("%d intents asked for, want the first one only", n)
+	}
+}
+
+// suspendOnIntent suspends the organizer while Pay is out asking for the
+// intent, between its two transactions.
+type suspendOnIntent struct {
+	*payments.Fake
+	suspend func()
+}
+
+func (p suspendOnIntent) CreatePaymentIntent(ctx context.Context, in plugin.PaymentIntentInput) (plugin.PaymentIntent, error) {
+	p.suspend()
+	return p.Fake.CreatePaymentIntent(ctx, in)
+}
+
+// A suspension that lands while the intent is made: nobody gets to pay it.
+func TestSuspendWhileMakingTheIntentCancelsIt(t *testing.T) {
+	ctx := context.Background()
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	s.Payments = suspendOnIntent{fake, func() { f.suspend(t, f.org) }}
+	c := f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
+	if _, err := s.Pay(ctx, c.Token, sales.Details{Email: "buyer@example.com"}); !errors.Is(err, sales.ErrUnavailable) {
+		t.Fatalf("Pay: %v, want ErrUnavailable", err)
+	}
+	pi, ok := fake.Latest()
+	if !ok || !fake.Cancelled(pi.ID) {
+		t.Error("the intent made as the organizer was suspended wasn't cancelled")
+	}
+	if n := f.count(t, `select count(*) from payments`); n != 0 {
+		t.Errorf("%d payments stored", n)
 	}
 }

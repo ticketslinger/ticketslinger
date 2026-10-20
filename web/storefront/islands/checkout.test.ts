@@ -11,6 +11,7 @@ import {
   fieldErrors,
   firstPhase,
   MESSAGES,
+  overMessage,
   PENDING,
   Pending,
   payload,
@@ -216,4 +217,14 @@ test("a stopped payment says so, and never that it may still go through", () => 
 test("switched-off card payments are the organizer's doing, not a fault of ours", () => {
   expect(MESSAGES.payments_refused).toBeDefined();
   expect(MESSAGES.payments_refused).not.toContain("our side");
+});
+
+test("a suspended organizer ends the checkout; once the card went to Stripe it promises the refund", () => {
+  expect(overMessage("event_unavailable", false)).toBe("This event isn't available.");
+  expect(overMessage("event_unavailable", true)).toBe(
+    "This event isn't available. If your card was charged, we'll refund all of it.",
+  );
+  expect(overMessage("event_cancelled", true)).toBe(EVENT_CANCELLED);
+  expect(overMessage("checkout_expired", true)).toBeUndefined();
+  expect(overMessage(undefined, false)).toBeUndefined();
 });
