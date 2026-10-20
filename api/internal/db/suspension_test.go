@@ -416,6 +416,39 @@ func TestSuspendWaitsForOrganizerLock(t *testing.T) {
 	})
 }
 
+// Final review Minor 1: an operation that doesn't write runs READ ONLY and
+// takes no organizer lock, so it never waits on a suspension in flight.
+func TestReadsTakeNoOrganizerLock(t *testing.T) {
+	f := newStaffFixture(t)
+	ctx := context.Background()
+	key := seedKey(t, f.pool, f.oa, "write", false)
+	staffTx, err := f.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = staffTx.Rollback(ctx) }()
+	if _, err := staffTx.Exec(ctx, `select set_config('app.user_id', $1, true)`, f.staff.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := staffTx.Exec(ctx, `select staff_act($1, $2, 'suspend', null, $3)`, f.staffSessA, f.login, takedownReason); err != nil {
+		t.Fatal(err)
+	}
+	for name, p := range map[string]db.Principal{
+		"member":    {UserID: f.ua, ReadOnly: true},
+		"write key": {KeyID: key, KeyOrg: f.oa, KeyScope: "write", ReadOnly: true},
+	} {
+		rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		var ro, n string
+		err := db.WithPrincipal(rctx, f.pool, p, f.oa, func(tx pgx.Tx, _ string) error {
+			return tx.QueryRow(rctx, `select current_setting('transaction_read_only'), count(*)::text from events`).Scan(&ro, &n)
+		})
+		cancel()
+		if err != nil || ro != "on" || n == "0" {
+			t.Errorf("%s read while a suspend holds the organizer: read_only=%q events=%q %v, want on, rows, no wait", name, ro, n, err)
+		}
+	}
+}
+
 // Spec test 19: the trigger refuses new checkouts and orders whatever the Go
 // code does, and stops refusing once lifted.
 func TestNoNewSalesWhileSuspended(t *testing.T) {

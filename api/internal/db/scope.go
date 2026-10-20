@@ -36,6 +36,9 @@ type Principal struct {
 	KeyID    uuid.UUID // zero for users
 	KeyOrg   uuid.UUID
 	KeyScope string // "read" or "write"
+	// ReadOnly: the operation doesn't write. Its transaction is READ ONLY
+	// and takes no organizer lock, so a suspension never waits for it.
+	ReadOnly bool
 }
 
 // WithOrganizer runs fn in a transaction scoped to one organizer the user
@@ -49,8 +52,8 @@ func WithOrganizer(ctx context.Context, pool *pgxpool.Pool, user, org uuid.UUID,
 // WithPrincipal is WithOrganizer for either kind of principal. A key only
 // reaches its own organizer, with role "key:read" or "key:write"; the database
 // independently refuses a revoked key, another organizer, or a transaction
-// that names both a user and a key. A read key's transaction is READ ONLY, so
-// the database refuses its writes too. So is every transaction on a suspended
+// that names both a user and a key. A read key's or a ReadOnly principal's
+// transaction is READ ONLY, so the database refuses its writes too. So is every transaction on a suspended
 // organizer, for members and keys alike, SECURITY DEFINER functions included.
 func WithPrincipal(ctx context.Context, pool *pgxpool.Pool, p Principal, org uuid.UUID, fn func(tx pgx.Tx, role string) error) error {
 	if (p.UserID == uuid.Nil) == (p.KeyID == uuid.Nil) {
@@ -64,8 +67,9 @@ func WithPrincipal(ctx context.Context, pool *pgxpool.Pool, p Principal, org uui
 			return ErrNotMember
 		}
 	}
+	readOnly := p.ReadOnly || p.KeyScope == "read"
 	var opts pgx.TxOptions
-	if p.KeyScope == "read" {
+	if readOnly {
 		opts.AccessMode = pgx.ReadOnly
 	}
 	suspended := false
@@ -81,9 +85,10 @@ func WithPrincipal(ctx context.Context, pool *pgxpool.Pool, p Principal, org uui
 		// first, so it and staff_act's FOR UPDATE run one after the other:
 		// it either finishes before a suspension commits or starts after it
 		// and sees it. The check is its own statement for a fresh snapshot.
-		// Going read-only after a query is allowed; going back is not. A read
-		// key's transaction is read-only already and can't take row locks.
-		if p.KeyScope != "read" {
+		// Going read-only after a query is allowed; going back is not. A
+		// read-only transaction can't write whatever happens, so it skips
+		// both, and a suspension never waits for it.
+		if !readOnly {
 			if _, err := tx.Exec(ctx, `select 1 from organizers where id = $1 for key share`, org); err != nil {
 				return err
 			}

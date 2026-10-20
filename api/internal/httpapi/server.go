@@ -708,7 +708,7 @@ func (s *server) inOrganizer(ctx context.Context, slug string, access Access, fn
 	if err != nil {
 		return err
 	}
-	err = db.WithOrganizer(ctx, s.Pool, a.user.ID, org.ID, func(tx pgx.Tx, role string) error {
+	err = db.WithPrincipal(ctx, s.Pool, db.Principal{UserID: a.user.ID, ReadOnly: !access.Write}, org.ID, func(tx pgx.Tx, role string) error {
 		if len(access.Roles) > 0 && !slices.Contains(access.Roles, role) {
 			return &apiError{403, "forbidden_role", "Your role here doesn't allow that."}
 		}
@@ -791,6 +791,7 @@ func (s *server) inOrganizerAsKey(ctx context.Context, key db.Principal, slug st
 	if access.SessionOnly {
 		return errSessionRequired
 	}
+	key.ReadOnly = !access.Write
 	err := db.WithPrincipal(ctx, s.Pool, key, key.KeyOrg, func(tx pgx.Tx, role string) error {
 		org := organizers.Organizer{Role: role}
 		err := tx.QueryRow(ctx, `select id, name, slug::text, organizer_suspended(id) from organizers where slug = $1`, slug).Scan(&org.ID, &org.Name, &org.Slug, &org.Suspended)
