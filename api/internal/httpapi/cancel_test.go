@@ -16,7 +16,8 @@ func TestCancelOrderRoles(t *testing.T) {
 		{s.member("door@example.com", "checkin"), "forbidden_role", 403},
 		{s.member("nomfa@example.com", "admin-no-mfa"), "mfa_required", 403},
 	} {
-		order := s.buyPaid(1, "paid@example.com", "evt_cancel_roles_"+c.code)
+		// buyPaid finds the order by email, so each buyer needs their own.
+		order := s.buyPaid(1, c.code+"@example.com", "evt_cancel_roles_"+c.code)
 		res := s.do(c.who, "POST", s.orderPath(order)+"/cancel", `{}`)
 		if res.StatusCode != c.status || s.errorCode(res) != c.code {
 			t.Errorf("%s: got %d %q", c.code, res.StatusCode, s.errorCode(res))
@@ -26,7 +27,7 @@ func TestCancelOrderRoles(t *testing.T) {
 		}
 	}
 	for i, who := range []string{s.owner, admin} {
-		order := s.buyPaid(1, "paid@example.com", "evt_cancel_ok_"+string(rune('a'+i)))
+		order := s.buyPaid(1, "ok"+string(rune('a'+i))+"@example.com", "evt_cancel_ok_"+string(rune('a'+i)))
 		s.must(s.do(who, "POST", s.orderPath(order)+"/cancel", `{"notify":false}`), 200)
 	}
 }
