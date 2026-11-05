@@ -21,7 +21,9 @@ import (
 // characters, valid UTF-8, and free of control and format characters (which
 // take in the bidi overrides), private-use and surrogate code points, and
 // line and paragraph separators, so a name can't break a line on the scanner
-// or in a CSV. Empty is fine: no name. errAttendees otherwise; the caller
+// or in a CSV. The one exception is a zero-width joiner or non-joiner between
+// two other characters, which Persian and Indic names and emoji sequences
+// need. Empty is fine: no name. errAttendees otherwise; the caller
 // names the field. This is the rule; rename_ticket_by_link's check is only
 // a backstop, since Postgres has no class for Cf.
 func CleanName(s string) (string, error) {
@@ -29,13 +31,22 @@ func CleanName(s string) (string, error) {
 	if !utf8.ValidString(s) || utf8.RuneCountInString(s) > 120 {
 		return "", errAttendees
 	}
-	for _, r := range s {
-		if unicode.In(r, unicode.Cc, unicode.Cf, unicode.Co, unicode.Cs, unicode.Zl, unicode.Zp) {
+	prev := rune(-1)
+	for i, r := range s {
+		if joiner(r) {
+			if prev < 0 || joiner(prev) || i+utf8.RuneLen(r) == len(s) {
+				return "", errAttendees
+			}
+		} else if unicode.In(r, unicode.Cc, unicode.Cf, unicode.Co, unicode.Cs, unicode.Zl, unicode.Zp) {
 			return "", errAttendees
 		}
+		prev = r
 	}
 	return s, nil
 }
+
+// joiner is U+200C ZERO WIDTH NON-JOINER or U+200D ZERO WIDTH JOINER.
+func joiner(r rune) bool { return r == '\u200c' || r == '\u200d' }
 
 // RenameByLink is the buyer changing one ticket's name, with the token from
 // the order's link, under rename_ticket_by_link's rules. An unknown code, a
