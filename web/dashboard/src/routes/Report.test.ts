@@ -7,6 +7,8 @@ type EventReport = components["schemas"]["EventReport"];
 const fixture = {
   currency: "USD",
   gross_cents: 125000,
+  manual_takings_cents: 0,
+  comp_tickets: 0,
   refunded_cents: 2500,
   platform_fee_cents: 4850,
   tax_cents: 0,

@@ -19,10 +19,13 @@ import (
 // our fee on their succeeded payments less the fee that has actually gone
 // back: the same rules as the order list. NetCents is what's left: gross −
 // refunded − platform fee, before Stripe's own fees. Sold and CheckedIn count
-// valid tickets.
+// valid tickets. Gross, tax, fees, refunds, net and the sales by day count
+// online orders only: ManualCents is what was taken by hand (manual orders'
+// totals), CompTickets the valid comp tickets, and neither is Stripe money.
 type Report struct {
 	GrossCents, RefundedCents, PlatformFeeCents, TaxCents, NetCents int64
-	Orders, Sold, CheckedIn                                         int
+	ManualCents                                                     int64
+	Orders, Sold, CheckedIn, CompTickets                            int
 	TicketTypes                                                     []TypeLine
 	Quotas                                                          []QuotaLine
 	SalesByDay                                                      []DayLine
@@ -67,12 +70,12 @@ func Event(ctx context.Context, tx pgx.Tx, event uuid.UUID) (Report, error) {
 	}
 	var r Report
 	err = tx.QueryRow(ctx, `with o as (`+listed+`),
-		pay as (select p.id, p.application_fee_cents, p.status from payments p join o on o.id = p.order_id),
+		pay as (select p.id, p.application_fee_cents, p.status from payments p join o on o.id = p.order_id and o.source = 'online'),
 		ref as (select r.amount_cents, r.fee_cents, r.status, r.fee_refunded_at from refunds r join pay on pay.id = r.payment_id),
 		tk as (select ticket_type_id, order_id, status, checked_in_at from tickets where event_id = $1)
 		select
-			coalesce((select sum(total_cents) from o), 0)::bigint,
-			coalesce((select sum(tax_cents) from o), 0)::bigint,
+			coalesce((select sum(total_cents) from o where source = 'online'), 0)::bigint,
+			coalesce((select sum(tax_cents) from o where source = 'online'), 0)::bigint,
 			(select count(*) from o)::int,
 			coalesce((select sum(amount_cents) from ref where status <> 'failed'), 0)::bigint,
 			coalesce((select sum(application_fee_cents) from pay where status = 'succeeded'), 0)::bigint
@@ -92,14 +95,16 @@ func Event(ctx context.Context, tx pgx.Tx, event uuid.UUID) (Report, error) {
 					order by x.day), '[]')
 				from (select to_char(coalesce(o.paid_at, o.created_at) at time zone $2, 'YYYY-MM-DD') as day, count(*) as orders,
 						sum((select count(*) from tk where tk.order_id = o.id)) as tickets, sum(o.total_cents) as gross
-					from o group by day) x),
+					from o where o.source = 'online' group by day) x),
 			(select coalesce(json_agg(json_build_object('Code', x.code, 'UsedCount', x.used_count, 'MaxUses', x.max_uses,
 					'DiscountCents', x.discount) order by x.created_at, x.id), '[]')
 				from (select p.id, p.code, p.used_count, p.max_uses, p.created_at, coalesce(sum(o.discount_cents), 0) as discount
 					from promo_codes p left join o on o.promo_code_id = p.id
-					where p.event_id = $1 group by p.id) x)`, event, ev.Timezone).
+					where p.event_id = $1 group by p.id) x),
+			coalesce((select sum(total_cents) from o where source = 'manual'), 0)::bigint,
+			(select count(*) from tk join o on o.id = tk.order_id where tk.status = 'valid' and o.source = 'comp')::int`, event, ev.Timezone).
 		Scan(&r.GrossCents, &r.TaxCents, &r.Orders, &r.RefundedCents, &r.PlatformFeeCents, &r.Sold, &r.CheckedIn,
-			&r.TicketTypes, &r.Quotas, &r.SalesByDay, &r.PromoCodes)
+			&r.TicketTypes, &r.Quotas, &r.SalesByDay, &r.PromoCodes, &r.ManualCents, &r.CompTickets)
 	if err != nil {
 		return Report{}, err
 	}
@@ -111,5 +116,5 @@ func Event(ctx context.Context, tx pgx.Tx, event uuid.UUID) (Report, error) {
 // money or were confirmed free. Pending ones, and ones abandoned before
 // payment, are left out.
 const listed = `select o.id, o.code, o.status, o.email, o.subtotal_cents, o.discount_cents, o.tax_cents, o.fee_cents, o.fee_mode,
-	o.total_cents, o.promo_code_id, o.created_at, o.paid_at from orders o where o.event_id = $1 and o.status <> 'pending'
+	o.total_cents, o.promo_code_id, o.created_at, o.paid_at, o.source, o.manual_method from orders o where o.event_id = $1 and o.status <> 'pending'
 	and (o.paid_at is not null or exists (select 1 from payments p where p.order_id = o.id and p.status = 'succeeded'))`

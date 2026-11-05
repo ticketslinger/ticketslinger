@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -102,7 +103,7 @@ func TestCSVColumns(t *testing.T) {
 	f := seed(t)
 	_, ticketsA := f.sales(t)
 	cases := map[string]string{
-		"orders.csv":    "Order,Status,Email,Tickets bought,Subtotal,Discount,Tax,Service fee,Fee paid by,Total,Refunded,Promo code,Placed,Paid",
+		"orders.csv":    "Order,Status,Email,Tickets bought,Subtotal,Discount,Tax,Service fee,Fee paid by,Total,Refunded,Promo code,Placed,Paid,Source,Manual method",
 		"attendees.csv": "Order,Ticket,Ticket type,Attendee,Email,Status,Checked in,Dietary needs,T-shirt",
 		"checkins.csv":  "Time,Result,Method,Ticket,Ticket type,Attendee,Order,Gate,By",
 	}
@@ -122,7 +123,7 @@ func TestCSVColumns(t *testing.T) {
 	if len(orders) != 5 {
 		t.Fatalf("orders: %q", orders)
 	}
-	wantA := []string{"TS-AAAAA", "paid", "a@example.com", "2", "50.00", "5.00", "0.00", "1.00", "buyer", "46.00", "0.00", "EARLY", "2026-02-28T18:28:00-07:00", "2026-02-28T18:30:00-07:00"}
+	wantA := []string{"TS-AAAAA", "paid", "a@example.com", "2", "50.00", "5.00", "0.00", "1.00", "buyer", "46.00", "0.00", "EARLY", "2026-02-28T18:28:00-07:00", "2026-02-28T18:30:00-07:00", "online", ""}
 	if !reflect.DeepEqual(orders[4], wantA) {
 		t.Errorf("order A: %q", orders[4])
 	}
@@ -217,5 +218,43 @@ func TestCheckinsByForKeys(t *testing.T) {
 	got := rows(t, buf.Bytes())
 	if got[1][8] != "Team member" || got[2][8] != "API key abcd1234" || strings.Contains(buf.String(), "owner@example.com") {
 		t.Fatalf("by: %q", got)
+	}
+}
+
+// bySource adds one online order ($26, fee 1.00), a $40 cash order and a comp
+// order of two tickets, all paid.
+func (f fixture) bySource(t *testing.T) {
+	t.Helper()
+	day := time.Now().UTC().Format(time.RFC3339)
+	f.order(t, sale{code: "TS-0NE11", email: "o@example.com", placed: day, paid: true, subtotal: 2500, fee: 100, total: 2600, ticketType: f.general, names: []string{"Ann"}})
+	f.order(t, sale{code: "TS-MAN22", email: "m@example.com", placed: day, paid: true, source: "manual", method: "cash", subtotal: 4000, total: 4000, ticketType: f.vip, names: []string{"Max"}})
+	f.order(t, sale{code: "TS-CMP33", email: "c@example.com", placed: day, paid: true, source: "comp", ticketType: f.general, names: []string{"Cat", "Cy"}})
+}
+
+func TestReportSplitsBySource(t *testing.T) {
+	f := seed(t)
+	f.bySource(t)
+	r := f.report(t)
+	if r.GrossCents != 2600 || r.PlatformFeeCents != 100 || r.NetCents != 2500 || r.ManualCents != 4000 || r.CompTickets != 2 || r.Orders != 3 || r.Sold != 4 {
+		t.Fatalf("report: %+v", r)
+	}
+	if len(r.SalesByDay) != 1 || r.SalesByDay[0].Orders != 1 || r.SalesByDay[0].Tickets != 1 || r.SalesByDay[0].GrossCents != 2600 {
+		t.Fatalf("sales by day: %+v", r.SalesByDay)
+	}
+}
+
+func TestOrdersCSVHasSource(t *testing.T) {
+	f := seed(t)
+	f.bySource(t)
+	_, b := f.csv(t, "orders.csv")
+	rs := rows(t, b)
+	got := map[string][2]string{}
+	for _, r := range rs[1:] {
+		got[r[0]] = [2]string{r[len(r)-2], r[len(r)-1]}
+	}
+	h := rs[0]
+	want := map[string][2]string{"TS-0NE11": {"online", ""}, "TS-MAN22": {"manual", "cash"}, "TS-CMP33": {"comp", ""}}
+	if h[len(h)-2] != "Source" || h[len(h)-1] != "Manual method" || !reflect.DeepEqual(got, want) {
+		t.Fatalf("header %q rows %v", h, got)
 	}
 }

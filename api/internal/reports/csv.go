@@ -100,10 +100,11 @@ func str(s *string) string {
 // failed.
 func writeOrders(ctx context.Context, tx pgx.Tx, event uuid.UUID, zone *time.Location, cw *csv.Writer) error {
 	if err := row(cw, "Order", "Status", "Email", "Tickets bought", "Subtotal", "Discount", "Tax", "Service fee", "Fee paid by", "Total", "Refunded",
-		"Promo code", "Placed", "Paid"); err != nil {
+		"Promo code", "Placed", "Paid", "Source", "Manual method"); err != nil {
 		return err
 	}
-	var code, status, email, payer, promo string
+	var code, status, email, payer, promo, source string
+	var method *string
 	var tickets int
 	var subtotal, discount, tax, fee, total, refunded int64
 	var placed time.Time
@@ -111,12 +112,12 @@ func writeOrders(ctx context.Context, tx pgx.Tx, event uuid.UUID, zone *time.Loc
 	rows, _ := tx.Query(ctx, `select o.code, o.status, o.email::text, (select count(*) from tickets t where t.order_id = o.id),
 			o.subtotal_cents, o.discount_cents, o.tax_cents, o.fee_cents, case o.fee_mode when 'pass' then 'buyer' else 'you' end, o.total_cents,
 			coalesce((select sum(r.amount_cents) from refunds r join payments p on p.id = r.payment_id where p.order_id = o.id and r.status <> 'failed'), 0)::bigint,
-			coalesce(pc.code, ''), o.created_at, o.paid_at
+			coalesce(pc.code, ''), o.created_at, o.paid_at, o.source, o.manual_method
 		from (`+listed+`) o left join promo_codes pc on pc.id = o.promo_code_id
 		order by o.created_at desc, o.id desc`, event)
-	_, err := pgx.ForEachRow(rows, []any{&code, &status, &email, &tickets, &subtotal, &discount, &tax, &fee, &payer, &total, &refunded, &promo, &placed, &paid}, func() error {
+	_, err := pgx.ForEachRow(rows, []any{&code, &status, &email, &tickets, &subtotal, &discount, &tax, &fee, &payer, &total, &refunded, &promo, &placed, &paid, &source, &method}, func() error {
 		return row(cw, code, status, email, strconv.Itoa(tickets), money(subtotal), money(discount), money(tax), money(fee), payer, money(total),
-			money(refunded), promo, when(&placed, zone), when(paid, zone))
+			money(refunded), promo, when(&placed, zone), when(paid, zone), source, str(method))
 	})
 	return err
 }

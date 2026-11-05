@@ -1658,9 +1658,16 @@ export interface components {
             currency: "USD";
             /**
              * Format: int64
-             * @description Totals of the orders listOrders lists.
+             * @description Totals of the online orders listOrders lists.
              */
             gross_cents: number;
+            /**
+             * Format: int64
+             * @description What you took by hand: manual orders' totals. Not in gross_cents.
+             */
+            manual_takings_cents: number;
+            /** @description Valid comp tickets. They count in sold. */
+            comp_tickets: number;
             /**
              * Format: int64
              * @description Refunds that haven't failed: gone through or on their way.

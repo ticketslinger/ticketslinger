@@ -1622,10 +1622,12 @@ components:
         sold: { type: integer, description: "The event's valid tickets." }
     EventReport:
       type: object
-      required: [currency, gross_cents, refunded_cents, platform_fee_cents, tax_cents, net_cents, orders, sold, checked_in, ticket_types, quotas, sales_by_day, promo_codes]
+      required: [currency, gross_cents, manual_takings_cents, comp_tickets, refunded_cents, platform_fee_cents, tax_cents, net_cents, orders, sold, checked_in, ticket_types, quotas, sales_by_day, promo_codes]
       properties:
         currency: { type: string, enum: [USD] }
-        gross_cents: { type: integer, format: int64, description: "Totals of the orders listOrders lists." }
+        gross_cents: { type: integer, format: int64, description: "Totals of the online orders listOrders lists." }
+        manual_takings_cents: { type: integer, format: int64, description: "What you took by hand: manual orders' totals. Not in gross_cents." }
+        comp_tickets: { type: integer, description: "Valid comp tickets. They count in sold." }
         refunded_cents: { type: integer, format: int64, description: "Refunds that haven't failed: gone through or on their way." }
         platform_fee_cents: { type: integer, format: int64, description: "Our fee on succeeded payments, less the fee that has gone back." }
         tax_cents: { type: integer, format: int64, description: "Tax on the orders listOrders lists." }

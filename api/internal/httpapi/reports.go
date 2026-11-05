@@ -32,7 +32,7 @@ func (s *server) GetEventReport(ctx context.Context, req GetEventReportRequestOb
 	if err != nil {
 		return nil, catalogueError(err)
 	}
-	out := GetEventReport200JSONResponse{Currency: EventReportCurrencyUSD, GrossCents: r.GrossCents, RefundedCents: r.RefundedCents, PlatformFeeCents: r.PlatformFeeCents,
+	out := GetEventReport200JSONResponse{Currency: EventReportCurrencyUSD, GrossCents: r.GrossCents, ManualTakingsCents: r.ManualCents, CompTickets: r.CompTickets, RefundedCents: r.RefundedCents, PlatformFeeCents: r.PlatformFeeCents,
 		TaxCents: r.TaxCents, NetCents: r.NetCents, Orders: r.Orders, Sold: r.Sold, CheckedIn: r.CheckedIn,
 		TicketTypes: []ReportTicketType{}, Quotas: []ReportQuota{}, SalesByDay: []ReportDay{}, PromoCodes: []ReportPromoCode{}}
 	for _, t := range r.TicketTypes {
