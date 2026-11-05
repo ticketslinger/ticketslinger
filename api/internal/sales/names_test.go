@@ -18,11 +18,13 @@ import (
 
 func TestCleanName(t *testing.T) {
 	for in, want := range map[string]string{
-		"  Ada ":                 "Ada",
-		"":                       "",
-		"   ":                    "",
-		strings.Repeat("é", 120): strings.Repeat("é", 120),
-		"Zoë O'Brien-Núñez":      "Zoë O'Brien-Núñez",
+		"  Ada ":                     "Ada",
+		"":                           "",
+		"   ":                        "",
+		strings.Repeat("é", 120):     strings.Repeat("é", 120),
+		"Zoë O'Brien-Núñez":          "Zoë O'Brien-Núñez",
+		"می\u200cخواهم":              "می\u200cخواهم",
+		"\U0001f469\u200d\U0001f4bb": "\U0001f469\u200d\U0001f4bb",
 	} {
 		got, err := sales.CleanName(in)
 		if err != nil || got != want {
@@ -41,6 +43,10 @@ func TestCleanName(t *testing.T) {
 		"private use (Co)":     "A\ue000da",
 		"word joiner (Cf)":     "A\u2060da",
 		"soft hyphen (Cf)":     "A\u00adda",
+		"leading joiner":       "\u200dAda",
+		"trailing joiner":      "Ada\u200c",
+		"joiner alone":         "\u200d",
+		"two joiners":          "A\u200d\u200cda",
 		"invalid in the midst": "Ad\xc3a",
 	} {
 		if _, err := sales.CleanName(in); invalidCode(err) != "bad_attendee" {
