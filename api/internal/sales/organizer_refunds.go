@@ -124,10 +124,7 @@ func RefundTickets(ctx context.Context, tx pgx.Tx, org, event, order uuid.UUID, 
 	} else if _, err := tx.Exec(ctx, `update tickets set status = 'void', released_at = statement_timestamp() where id = any($1)`, res.TicketIDs); err != nil {
 		return RefundResult{}, err
 	}
-	if err := tx.QueryRow(ctx, `update orders set status = case
-			when exists (select 1 from tickets where order_id = $1 and status = 'valid') then 'partially_refunded'
-			when total_cents > 0 then 'refunded' else 'cancelled' end
-		where id = $1 returning status`, order).Scan(&res.OrderStatus); err != nil {
+	if res.OrderStatus, err = rollUpOrder(ctx, tx, order); err != nil {
 		return RefundResult{}, err
 	}
 	return res, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "order.refunded", EntityType: "order", EntityID: order,
@@ -451,4 +448,19 @@ func refundFinishedAlert(slug, event string, action uuid.UUID, r CancelResult) (
 		}
 	}
 	return subject, text
+}
+
+// rollUpOrder sets an order's status from its tickets: with none valid it is
+// refunded if a refund took any ticket, else cancelled; with some valid,
+// partially refunded if a refund took any, else still paid. A cancel never
+// reads as a refund, and a refund survives a later cancel.
+func rollUpOrder(ctx context.Context, tx pgx.Tx, order uuid.UUID) (string, error) {
+	var status string
+	err := tx.QueryRow(ctx, `update orders set status = case
+			when exists (select 1 from tickets where order_id = $1 and status = 'valid') then
+				case when exists (select 1 from tickets where order_id = $1 and refund_id is not null) then 'partially_refunded' else 'paid' end
+			when exists (select 1 from tickets where order_id = $1 and refund_id is not null) then 'refunded'
+			else 'cancelled' end
+		where id = $1 returning status`, order).Scan(&status)
+	return status, err
 }

@@ -37,3 +37,5 @@ func SetTicketsEmailForTest(s *Service, fn func(emails.TicketsData) (mailer.Mess
 var RefundEmailForTest = refundEmail
 
 var RenameErrorForTest = renameError
+
+var RollUpOrderForTest = rollUpOrder
