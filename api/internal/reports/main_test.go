@@ -93,6 +93,7 @@ type sale struct {
 	source, method                       string
 	paid, absorb                         bool
 	subtotal, discount, tax, fee, total  int64
+	charge                               int64 // each ticket's charge_cents
 	promo                                *uuid.UUID
 	ticketType                           uuid.UUID
 	names                                []string
@@ -124,7 +125,7 @@ func (f fixture) tickets(t *testing.T, o uuid.UUID, s sale) []uuid.UUID {
 		secret := make([]byte, 16)
 		_, _ = rand.Read(secret)
 		ids[i] = f.id(t, `insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, charge_cents, attendee_name, secret)
-			values ($1, $2, $3, $4, 0, 0, 0, 0, 0, $5, $6) returning id`, f.org, f.event, o, s.ticketType, name, secret)
+			values ($1, $2, $3, $4, 0, 0, 0, 0, $7, $5, $6) returning id`, f.org, f.event, o, s.ticketType, name, secret, s.charge)
 	}
 	return ids
 }

@@ -12,16 +12,17 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
 )
 
-// Report is an event's figures. Money counts the orders the Orders tab lists
-// (paid, confirmed free, or paid late after they were cancelled), so its
+// Report is an event's figures. Online money counts the orders the Orders tab
+// lists (paid, confirmed free, or paid late after they were cancelled), so its
 // totals equal that tab's. RefundedCents is every refund of theirs that
 // hasn't failed, gone through or still on its way, and PlatformFeeCents is
 // our fee on their succeeded payments less the fee that has actually gone
 // back: the same rules as the order list. NetCents is what's left: gross −
 // refunded − platform fee, before Stripe's own fees. Sold and CheckedIn count
 // valid tickets. Gross, tax, fees, refunds, net and the sales by day count
-// online orders only: ManualCents is what was taken by hand (manual orders'
-// totals), CompTickets the valid comp tickets, and neither is Stripe money.
+// online orders only. ManualCents is what was taken by hand: the charge on the
+// valid tickets of manual orders, so cancelled tickets drop out. CompTickets
+// is the valid comp tickets. Neither is Stripe money.
 type Report struct {
 	GrossCents, RefundedCents, PlatformFeeCents, TaxCents, NetCents int64
 	ManualCents                                                     int64
@@ -72,7 +73,7 @@ func Event(ctx context.Context, tx pgx.Tx, event uuid.UUID) (Report, error) {
 	err = tx.QueryRow(ctx, `with o as (`+listed+`),
 		pay as (select p.id, p.application_fee_cents, p.status from payments p join o on o.id = p.order_id and o.source = 'online'),
 		ref as (select r.amount_cents, r.fee_cents, r.status, r.fee_refunded_at from refunds r join pay on pay.id = r.payment_id),
-		tk as (select ticket_type_id, order_id, status, checked_in_at from tickets where event_id = $1)
+		tk as (select ticket_type_id, order_id, status, checked_in_at, charge_cents from tickets where event_id = $1)
 		select
 			coalesce((select sum(total_cents) from o where source = 'online'), 0)::bigint,
 			coalesce((select sum(tax_cents) from o where source = 'online'), 0)::bigint,
@@ -101,7 +102,7 @@ func Event(ctx context.Context, tx pgx.Tx, event uuid.UUID) (Report, error) {
 				from (select p.id, p.code, p.used_count, p.max_uses, p.created_at, coalesce(sum(o.discount_cents), 0) as discount
 					from promo_codes p left join o on o.promo_code_id = p.id
 					where p.event_id = $1 group by p.id) x),
-			coalesce((select sum(total_cents) from o where source = 'manual'), 0)::bigint,
+			coalesce((select sum(tk.charge_cents) from tk join o on o.id = tk.order_id where tk.status = 'valid' and o.source = 'manual'), 0)::bigint,
 			(select count(*) from tk join o on o.id = tk.order_id where tk.status = 'valid' and o.source = 'comp')::int`, event, ev.Timezone).
 		Scan(&r.GrossCents, &r.TaxCents, &r.Orders, &r.RefundedCents, &r.PlatformFeeCents, &r.Sold, &r.CheckedIn,
 			&r.TicketTypes, &r.Quotas, &r.SalesByDay, &r.PromoCodes, &r.ManualCents, &r.CompTickets)

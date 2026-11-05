@@ -227,7 +227,7 @@ func (f fixture) bySource(t *testing.T) {
 	t.Helper()
 	day := time.Now().UTC().Format(time.RFC3339)
 	f.order(t, sale{code: "TS-0NE11", email: "o@example.com", placed: day, paid: true, subtotal: 2500, fee: 100, total: 2600, ticketType: f.general, names: []string{"Ann"}})
-	f.order(t, sale{code: "TS-MAN22", email: "m@example.com", placed: day, paid: true, source: "manual", method: "cash", subtotal: 4000, total: 4000, ticketType: f.vip, names: []string{"Max"}})
+	f.order(t, sale{code: "TS-MAN22", email: "m@example.com", placed: day, paid: true, source: "manual", method: "cash", subtotal: 4000, total: 4000, charge: 4000, ticketType: f.vip, names: []string{"Max"}})
 	f.order(t, sale{code: "TS-CMP33", email: "c@example.com", placed: day, paid: true, source: "comp", ticketType: f.general, names: []string{"Cat", "Cy"}})
 }
 
@@ -256,5 +256,29 @@ func TestOrdersCSVHasSource(t *testing.T) {
 	want := map[string][2]string{"TS-0NE11": {"online", ""}, "TS-MAN22": {"manual", "cash"}, "TS-CMP33": {"comp", ""}}
 	if h[len(h)-2] != "Source" || h[len(h)-1] != "Manual method" || !reflect.DeepEqual(got, want) {
 		t.Fatalf("header %q rows %v", h, got)
+	}
+}
+
+// Cancelled tickets stop counting as takings and as comps, and nothing manual
+// or comp touches the online figures, refund included.
+func TestReportManualAndCompSkipCancelledTickets(t *testing.T) {
+	f := seed(t)
+	f.bySource(t) // online 26.00, manual cash 40.00 (1 ticket), comp x2
+	day := time.Now().UTC().Format(time.RFC3339)
+	f.order(t, sale{code: "TS-CAN44", email: "a@example.com", placed: day, paid: true, status: "cancelled", source: "manual", method: "cash",
+		subtotal: 3000, total: 3000, charge: 1500, ticketType: f.general, names: []string{"V1", "V2"}})
+	part, _ := f.order(t, sale{code: "TS-PAR55", email: "b@example.com", placed: day, paid: true, source: "manual", method: "cheque",
+		subtotal: 3000, total: 3000, charge: 1500, ticketType: f.general, names: []string{"K1", "K2"}})
+	f.order(t, sale{code: "TS-CNC66", email: "c@example.com", placed: day, paid: true, status: "cancelled", source: "comp", ticketType: f.general, names: []string{"G1"}})
+	f.exec(t, `update tickets set status = 'void' where order_id in (select id from orders where code in ('TS-CAN44', 'TS-CNC66'))`)
+	f.exec(t, `update tickets set status = 'void' where order_id = $1 and attendee_name = 'K2'`, part)
+	f.refund(t, f.id(t, `select id from orders where code = 'TS-0NE11'`), 600, 0, "succeeded")
+	r := f.report(t)
+	// Manual: 4000 + the one kept ticket's 1500. Comp: the two valid ones.
+	if r.ManualCents != 5500 || r.CompTickets != 2 {
+		t.Fatalf("manual %d comp %d, want 5500 and 2", r.ManualCents, r.CompTickets)
+	}
+	if r.GrossCents != 2600 || r.RefundedCents != 600 || r.PlatformFeeCents != 100 || r.NetCents != 1900 {
+		t.Fatalf("online: %+v", r)
 	}
 }
