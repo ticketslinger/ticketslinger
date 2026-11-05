@@ -563,72 +563,75 @@ export function Tickets({ org, event }: { org: Org; event: Event }) {
                 </tr>
               </thead>
               <tbody>
-                {tickets.map((t, i) => (
-                  <tr key={t.id}>
-                    <td>
-                      {t.name} {t.hidden && <span className="pill">Hidden</span>}
-                    </td>
-                    <td>
-                      {price(t.price_cents)}
-                      {buyersSee(t) && <span className="hint">{buyersSee(t)}</span>}
-                    </td>
-                    <td>
-                      {t.sales_start ? formatWhen(t.sales_start, tz) : "Right away"}
-                      {" to "}
-                      {t.sales_end ? formatWhen(t.sales_end, tz) : "the event"}
-                    </td>
-                    <td>
-                      {t.min_per_order} to {t.max_per_order}
-                    </td>
-                    {editor && (
-                      <td className="actions-cell">
-                        <div className="row">
-                          <button
-                            type="button"
-                            id={`tt-${t.id}-up`}
-                            className="inline secondary"
-                            aria-label={`Move ${t.name} up`}
-                            disabled={i === 0 || move.busy}
-                            onClick={() => step(i, -1)}
-                          >
-                            Up
-                          </button>
-                          <button
-                            type="button"
-                            id={`tt-${t.id}-down`}
-                            className="inline secondary"
-                            aria-label={`Move ${t.name} down`}
-                            disabled={i === tickets.length - 1 || move.busy}
-                            onClick={() => step(i, 1)}
-                          >
-                            Down
-                          </button>
-                          <button
-                            type="button"
-                            className="inline secondary"
-                            aria-label={`Edit ${t.name}`}
-                            onClick={() => setTicket(t)}
-                          >
-                            Edit
-                          </button>
-                          <Remove
-                            label={t.name}
-                            noun="ticket"
-                            run={async () => {
-                              must(
-                                await api.DELETE(
-                                  "/organizers/{organizer}/events/{event}/ticket-types/{ticketType}",
-                                  { params: { path: { ...path, ticketType: t.id } } },
-                                ),
-                              );
-                              await reload();
-                            }}
-                          />
-                        </div>
+                {tickets.map((t, i) => {
+                  const sees = buyersSee(t);
+                  return (
+                    <tr key={t.id}>
+                      <td>
+                        {t.name} {t.hidden && <span className="pill">Hidden</span>}
                       </td>
-                    )}
-                  </tr>
-                ))}
+                      <td>
+                        {price(t.price_cents)}
+                        {sees && <span className="hint">{sees}</span>}
+                      </td>
+                      <td>
+                        {t.sales_start ? formatWhen(t.sales_start, tz) : "Right away"}
+                        {" to "}
+                        {t.sales_end ? formatWhen(t.sales_end, tz) : "the event"}
+                      </td>
+                      <td>
+                        {t.min_per_order} to {t.max_per_order}
+                      </td>
+                      {editor && (
+                        <td className="actions-cell">
+                          <div className="row">
+                            <button
+                              type="button"
+                              id={`tt-${t.id}-up`}
+                              className="inline secondary"
+                              aria-label={`Move ${t.name} up`}
+                              disabled={i === 0 || move.busy}
+                              onClick={() => step(i, -1)}
+                            >
+                              Up
+                            </button>
+                            <button
+                              type="button"
+                              id={`tt-${t.id}-down`}
+                              className="inline secondary"
+                              aria-label={`Move ${t.name} down`}
+                              disabled={i === tickets.length - 1 || move.busy}
+                              onClick={() => step(i, 1)}
+                            >
+                              Down
+                            </button>
+                            <button
+                              type="button"
+                              className="inline secondary"
+                              aria-label={`Edit ${t.name}`}
+                              onClick={() => setTicket(t)}
+                            >
+                              Edit
+                            </button>
+                            <Remove
+                              label={t.name}
+                              noun="ticket"
+                              run={async () => {
+                                must(
+                                  await api.DELETE(
+                                    "/organizers/{organizer}/events/{event}/ticket-types/{ticketType}",
+                                    { params: { path: { ...path, ticketType: t.id } } },
+                                  ),
+                                );
+                                await reload();
+                              }}
+                            />
+                          </div>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
