@@ -13,9 +13,9 @@ test("the result counts the orders we're refunding", () => {
   expect(cancelledText(0, 0)).toBe("Cancelled. There was nothing left to refund.");
 });
 
-test("the warning says what happens to refunds made already", () => {
-  expect(CANCEL_WARNING).toContain(
-    "Everyone holding a ticket that still works gets their money back, our service fee included. Refunds you've already made stay as they are, and any that failed still need a Try again from the order.",
+test("the warning says who we refund and who the organizer pays back", () => {
+  expect(CANCEL_WARNING).toBe(
+    "Everyone who paid by card gets their money back, our service fee included. Orders you took by hand (cash, cheque, invoice) aren't refunded by us: we'll list them so you can pay those buyers back yourself. Refunds you've already made stay as they are, and any that failed still need a Try again from the order. Every ticket stops working and nobody can buy from now on. This can't be undone.",
   );
 });
 

@@ -14,7 +14,7 @@ export const canCancel = (typed: string, name: string) =>
 
 /** What the confirm dialog warns of. */
 export const CANCEL_WARNING =
-  "Everyone holding a ticket that still works gets their money back, our service fee included. Refunds you've already made stay as they are, and any that failed still need a Try again from the order. Every ticket stops working and nobody can buy from now on. This can't be undone.";
+  "Everyone who paid by card gets their money back, our service fee included. Orders you took by hand (cash, cheque, invoice) aren't refunded by us: we'll list them so you can pay those buyers back yourself. Refunds you've already made stay as they are, and any that failed still need a Try again from the order. Every ticket stops working and nobody can buy from now on. This can't be undone.";
 
 /** The result: `orders` counts only the orders a refund was made for (free ones get nothing back). */
 export const cancelledText = (orders: number, amountCents: number) =>

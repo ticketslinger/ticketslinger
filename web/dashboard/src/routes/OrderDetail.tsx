@@ -68,6 +68,10 @@ export const reasonText = (r: Refund, eventCancelled: boolean) =>
 export const RENAME_HINT =
   "Their QR code doesn't change. The email they already have shows the old name until you resend it.";
 
+/** What the buyer paid for the tickets a cancel names, a passed-on fee included: the refund preview's rule. */
+export const cancelCharge = (order: Detail, ids: string[]) =>
+  refundPreview(order, ids, true).amountCents;
+
 /** The cancel dialog's warning: what happens to the money, then whether the buyer hears. */
 export function cancelWarning(source: string, chargeCents: number, notify: boolean): string {
   const money =
@@ -260,10 +264,7 @@ function CancelDialog({
   const [reason, setReason] = useState("");
   const action = useAction();
   const key = useRef<string | null>(null);
-  const chosen = order.tickets.filter(
-    (t) => t.status === "valid" && (ids.length === 0 || ids.includes(t.id)),
-  );
-  const charge = chosen.reduce((n, t) => n + t.charge_cents, 0);
+  const charge = cancelCharge(order, ids);
   const change = (fn: () => void) => {
     key.current = null; // a different choice is a different press
     fn();

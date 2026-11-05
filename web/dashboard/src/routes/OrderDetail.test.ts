@@ -3,6 +3,7 @@ import type { components } from "@ticketslinger/api-client";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
+  cancelCharge,
   cancelWarning,
   canRenameTicket,
   canResend,
@@ -231,4 +232,10 @@ test("NoteItem renders text", () => {
   expect(html).not.toContain("<img src=x");
   expect(html).toContain("Sam");
   expect(html).toContain("Delete");
+});
+
+test("the cancel warning's amount counts a fee the buyer paid on top, and only then", () => {
+  expect(cancelCharge(order("pass"), [])).toBe(3670);
+  expect(cancelCharge(order("pass"), ["b"])).toBe(1070);
+  expect(cancelCharge(order("absorb"), [])).toBe(3500);
 });
