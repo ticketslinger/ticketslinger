@@ -111,7 +111,11 @@ func (s *Service) confirmOrder(ctx context.Context, tx pgx.Tx, org, orderID uuid
 	if err := s.settle(ctx, tx, orderID, "paid"); err != nil {
 		return false, err
 	}
-	return true, queueTicketEmail(ctx, tx, orderID)
+	if err := queueTicketEmail(ctx, tx, orderID); err != nil {
+		return false, err
+	}
+	// Free orders alert too (P7-D16); comp and manual orders never reach here.
+	return true, enqueueOrderAlerts(ctx, tx, org, orderID)
 }
 
 // unsellable is why a pending order can't become tickets: reason for the

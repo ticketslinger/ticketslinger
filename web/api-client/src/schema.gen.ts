@@ -474,6 +474,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Owners and admins, signed in (403 session_required for an API key, 403 forbidden_role for check-in members). Your own email setting for this organizer: order_alerts is true when you get an email for each new online order. It is off until you turn it on. In staff mode it answers false. */
+        get: operations["getNotifications"];
+        /** @description Owners and admins, signed in (403 session_required for an API key, 403 forbidden_role for check-in members). Turns your own order emails on or off for this organizer. Paid and free online orders alert; comp and manual orders don't. The email names the order's code, event, tickets and total, never the buyer. At most 50 a day, UTC; the 50th says it is the last today. */
+        put: operations["updateNotifications"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/payments": {
         parameters: {
             query?: never;
@@ -1849,6 +1867,10 @@ export interface components {
             notify?: boolean;
             /** @description Plain text the buyer sees in the email. */
             reason?: string;
+        };
+        Notifications: {
+            /** @description True to get an email for each new online order. */
+            order_alerts: boolean;
         };
         OrderNote: {
             /** Format: uuid */
@@ -3528,6 +3550,67 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    getNotifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Notifications"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    updateNotifications: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Notifications"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Notifications"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
             422: components["responses"]["Error"];
             503: components["responses"]["Error"];
         };

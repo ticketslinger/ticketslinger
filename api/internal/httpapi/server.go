@@ -75,7 +75,7 @@ func New(d Deps) http.Handler {
 	}
 	if d.Sales == nil {
 		d.Sales = &sales.Service{Pool: d.Pool, Fee: pricing.Fee{BP: d.Config.PlatformFeeBP, Cents: d.Config.PlatformFeeCents},
-			Payments: d.Payments, Direct: d.Config.PaymentsMode == "direct", StorefrontURL: d.Config.StorefrontURL, SecretKey: d.Config.SecretKey}
+			Payments: d.Payments, Direct: d.Config.PaymentsMode == "direct", StorefrontURL: d.Config.StorefrontURL, DashboardURL: d.Config.DashboardOrigin, SecretKey: d.Config.SecretKey}
 	}
 	if d.Staff == nil {
 		sv, alertTo := d.Sales, d.Config.MailAlertTo

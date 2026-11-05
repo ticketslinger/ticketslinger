@@ -37,6 +37,7 @@ type Service struct {
 	// (TS_PAYMENTS=direct), so organizers connect nothing and no fee is taken.
 	Direct        bool
 	StorefrontURL string // TS_STOREFRONT_URL: base for order links
+	DashboardURL  string // TS_DASHBOARD_ORIGIN: base for the links in order alerts
 	SecretKey     []byte // TS_SECRET_KEY: order links are signed with a key derived from it
 	// ticketsEmail builds the ticket email; nil means emails.Tickets. Tests
 	// set it to make the step before the send fail.

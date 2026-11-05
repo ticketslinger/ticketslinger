@@ -417,6 +417,30 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/notifications:
+    get:
+      operationId: getNotifications
+      description: "Owners and admins, signed in (403 session_required for an API key, 403 forbidden_role for check-in members). Your own email setting for this organizer: order_alerts is true when you get an email for each new online order. It is off until you turn it on. In staff mode it answers false."
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Notifications" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    put:
+      operationId: updateNotifications
+      description: "Owners and admins, signed in (403 session_required for an API key, 403 forbidden_role for check-in members). Turns your own order emails on or off for this organizer. Paid and free online orders alert; comp and manual orders don't. The email names the order's code, event, tickets and total, never the buyer. At most 50 a day, UTC; the 50th says it is the last today."
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }, { $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Notifications" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Notifications" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/payments:
     get:
       operationId: getPayments
@@ -1781,6 +1805,11 @@ components:
         ticket_ids: { type: array, minItems: 1, maxItems: 100, items: { type: string, format: uuid }, x-go-type: "nullable.Nullable[[]openapi_types.UUID]", x-go-type-skip-optional-pointer: true, description: "The tickets to cancel, 1 to 100 of them. Leave it out to cancel every ticket still valid; an empty list or null is refused (422 bad_tickets), so a slip can't cancel the whole order." }
         notify: { type: boolean, x-go-type: "*bool", x-go-type-skip-optional-pointer: true, description: "Email the buyer. true if left out." }
         reason: { type: string, maxLength: 500, description: "Plain text the buyer sees in the email." }
+    Notifications:
+      type: object
+      required: [order_alerts]
+      properties:
+        order_alerts: { type: boolean, description: "True to get an email for each new online order." }
     OrderNote:
       type: object
       required: [id, author_name, body, created_at, can_delete]

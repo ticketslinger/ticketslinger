@@ -154,3 +154,39 @@ func (s *server) RemoveMember(ctx context.Context, req RemoveMemberRequestObject
 	}
 	return RemoveMember204Response{}, nil
 }
+
+// An inbox setting belongs to the person, so keys never touch it.
+var (
+	notificationsRead  = Access{Roles: ownerAdmin, SessionOnly: true}
+	notificationsWrite = Access{Roles: ownerAdmin, Write: true, SessionOnly: true}
+)
+
+func (s *server) GetNotifications(ctx context.Context, req GetNotificationsRequestObject) (GetNotificationsResponseObject, error) {
+	var out GetNotifications200JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, notificationsRead, func(_ organizers.Organizer, tx pgx.Tx) error {
+		// Staff mode has no membership row of its own: false.
+		return tx.QueryRow(ctx, `select coalesce((select order_alerts from memberships where organizer_id = app_organizer() and user_id = app_user()), false)`).
+			Scan(&out.OrderAlerts)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *server) UpdateNotifications(ctx context.Context, req UpdateNotificationsRequestObject) (UpdateNotificationsResponseObject, error) {
+	err := s.inOrganizer(ctx, req.Organizer, notificationsWrite, func(_ organizers.Organizer, tx pgx.Tx) error {
+		var ok bool
+		if err := tx.QueryRow(ctx, `select set_order_alerts($1)`, req.Body.OrderAlerts).Scan(&ok); err != nil {
+			return err
+		}
+		if !ok {
+			return errForbiddenRole
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return UpdateNotifications200JSONResponse(*req.Body), nil
+}

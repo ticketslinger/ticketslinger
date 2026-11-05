@@ -45,3 +45,7 @@ var CleanTextForTest = cleanText
 var CancelEmailForTest = cancelEmail
 
 var ManualCancelEmail = manualCancelEmail
+
+type AlertMail = alertMail
+
+var OrderAlertEmail = orderAlertEmail

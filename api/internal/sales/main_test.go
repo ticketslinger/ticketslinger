@@ -19,7 +19,7 @@ import (
 func newService(t *testing.T) *sales.Service {
 	t.Helper()
 	return &sales.Service{Pool: testdb.New(t), Fee: pricing.Fee{BP: 200, Cents: 50}, Payments: payments.NewFake(),
-		StorefrontURL: "https://tickets.example", SecretKey: []byte("0123456789abcdef0123456789abcdef")}
+		StorefrontURL: "https://tickets.example", DashboardURL: "https://app.example", SecretKey: []byte("0123456789abcdef0123456789abcdef")}
 }
 
 type seedOpts struct {
