@@ -82,7 +82,7 @@ func TestStaffModeWalk(t *testing.T) {
 		}
 		wantStatus, wantCode := http.StatusForbidden, "staff_read_only"
 		switch {
-		case id == "exportEventCsv":
+		case id == "exportEventCsv" || id == "listOrderNotes":
 			wantCode = "staff_not_allowed"
 		case method == "GET":
 			wantStatus, wantCode = w.do(w.ownerA, method, "/v1"+url, "").StatusCode, ""

@@ -96,6 +96,9 @@ var (
 	errBadNote    = invalid("bad_note", "note", "Keep a note to 2,000 characters of plain text.")
 )
 
+// errBadNoteBody is bad_note for the notes endpoint, whose field is body.
+var errBadNoteBody = invalid("bad_note", "body", "Keep a note to 2,000 characters of plain text.")
+
 func errNoQuota(name string) error {
 	return invalid("no_quota", "lines", name+" isn't in any quota yet, so we can't count it. Add it to one on the Tickets tab first.")
 }

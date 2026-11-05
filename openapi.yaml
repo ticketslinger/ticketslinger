@@ -862,6 +862,52 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/orders/{order}/notes:
+    get:
+      operationId: listOrderNotes
+      description: "Owners and admins, signed in (403 session_required for an API key, 403 forbidden_role for other members, 403 staff_not_allowed in staff mode). Your team's private notes on this order, newest first. They are for your team only: never on the buyer's page, in their email or in any export. A note is plain text, so anything that looks like markup comes back as the same characters. can_delete is true when you wrote the note or you are an owner. 404 for an order that isn't this event's."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/OrderNote" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: addOrderNote
+      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Adds a private note to this order for your team. It is plain text, up to 2,000 characters, trimmed; it never reaches the buyer's page, their email or an export, and it can't be edited, only deleted. 422 bad_note (field body) when it is empty, too long or has control characters. 404 for an order that isn't this event's."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AddOrderNote" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/OrderNote" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/orders/{order}/notes/{note}:
+    delete:
+      operationId: deleteOrderNote
+      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Deletes a note: its text is wiped, not hidden. The person who wrote it can, and so can an owner; any other admin gets 403 not_your_note. 404 for a note that is gone already or isn't this order's."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+        - { $ref: "#/components/parameters/NotePath" }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/orders/{order}/tickets/{ticket}:
     patch:
       operationId: renameTicket
@@ -1302,6 +1348,7 @@ components:
     OrderPath: { name: order, in: path, required: true, schema: { type: string, format: uuid } }
     RefundPath: { name: refund, in: path, required: true, schema: { type: string, format: uuid } }
     TicketPath: { name: ticket, in: path, required: true, schema: { type: string, format: uuid } }
+    NotePath: { name: note, in: path, required: true, schema: { type: string, format: uuid } }
     CheckoutTokenPath: { name: token, in: path, required: true, schema: { type: string }, description: "The token createCheckout returned." }
   responses:
     Error: { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -1734,6 +1781,20 @@ components:
         ticket_ids: { type: array, minItems: 1, maxItems: 100, items: { type: string, format: uuid }, x-go-type: "nullable.Nullable[[]openapi_types.UUID]", x-go-type-skip-optional-pointer: true, description: "The tickets to cancel, 1 to 100 of them. Leave it out to cancel every ticket still valid; an empty list or null is refused (422 bad_tickets), so a slip can't cancel the whole order." }
         notify: { type: boolean, x-go-type: "*bool", x-go-type-skip-optional-pointer: true, description: "Email the buyer. true if left out." }
         reason: { type: string, maxLength: 500, description: "Plain text the buyer sees in the email." }
+    OrderNote:
+      type: object
+      required: [id, author_name, body, created_at, can_delete]
+      properties:
+        id: { type: string, format: uuid }
+        author_name: { type: string, description: "Who wrote it: their name, else their email, else Former member." }
+        body: { type: string, description: "Plain text, exactly as written. Never shown to the buyer." }
+        created_at: { type: string, format: date-time }
+        can_delete: { type: boolean, description: "True when you wrote it or you are an owner." }
+    AddOrderNote:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string, minLength: 1, maxLength: 2000, description: "Plain text for your team. Never shown to the buyer." }
     CancelOrderResult:
       type: object
       required: [ticket_ids, charge_cents, order_status]

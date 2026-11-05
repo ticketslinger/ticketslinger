@@ -948,6 +948,61 @@ func (s *server) CancelOrder(ctx context.Context, req CancelOrderRequestObject) 
 	return out, nil
 }
 
+// notesRead: a team's notes about a buyer are for people, not integrations,
+// and for the team, not TicketSlinger staff looking in.
+var notesRead = Access{Roles: ownerAdmin, SessionOnly: true, StaffDenied: true}
+
+var errNotYourNote = &apiError{403, "not_your_note", "Only the person who wrote a note, or an owner, can delete it."}
+
+func orderNote(n sales.Note, me uuid.UUID, role string) OrderNote {
+	return OrderNote{Id: n.ID, AuthorName: n.AuthorName, Body: n.Body, CreatedAt: n.CreatedAt,
+		CanDelete: role == "owner" || (n.AuthorID != nil && *n.AuthorID == me)}
+}
+
+// ListOrderNotes lists the team's notes on an order, newest first.
+func (s *server) ListOrderNotes(ctx context.Context, req ListOrderNotesRequestObject) (ListOrderNotesResponseObject, error) {
+	out := ListOrderNotes200JSONResponse{}
+	err := s.inOrganizer(ctx, req.Organizer, notesRead, func(org organizers.Organizer, tx pgx.Tx) error {
+		notes, err := sales.ListNotes(ctx, tx, req.Event, req.Order)
+		for _, n := range notes {
+			out = append(out, orderNote(n, actorFrom(ctx).User, org.Role))
+		}
+		return err
+	})
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return out, nil
+}
+
+// AddOrderNote writes a private note on an order.
+func (s *server) AddOrderNote(ctx context.Context, req AddOrderNoteRequestObject) (AddOrderNoteResponseObject, error) {
+	var out AddOrderNote201JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, ordersWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		n, err := sales.AddNote(ctx, tx, org.ID, req.Event, req.Order, req.Body.Body, actorFrom(ctx))
+		out = AddOrderNote201JSONResponse(orderNote(n, actorFrom(ctx).User, org.Role))
+		return err
+	})
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return out, nil
+}
+
+// DeleteOrderNote wipes a note: its author or an owner only.
+func (s *server) DeleteOrderNote(ctx context.Context, req DeleteOrderNoteRequestObject) (DeleteOrderNoteResponseObject, error) {
+	err := s.inOrganizer(ctx, req.Organizer, ordersWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		return sales.DeleteNote(ctx, tx, org.ID, req.Event, req.Order, req.Note, org.Role, actorFrom(ctx))
+	})
+	if errors.Is(err, sales.ErrNotYourNote) {
+		return nil, errNotYourNote
+	}
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return DeleteOrderNote204Response{}, nil
+}
+
 // CreateManualOrder issues comp or manual tickets. inOrganizer only checks
 // the caller; the order is written as ts_system, which checks the member's
 // role again in its own transaction.

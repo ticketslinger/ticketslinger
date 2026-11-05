@@ -807,6 +807,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/events/{event}/orders/{order}/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Owners and admins, signed in (403 session_required for an API key, 403 forbidden_role for other members, 403 staff_not_allowed in staff mode). Your team's private notes on this order, newest first. They are for your team only: never on the buyer's page, in their email or in any export. A note is plain text, so anything that looks like markup comes back as the same characters. can_delete is true when you wrote the note or you are an owner. 404 for an order that isn't this event's. */
+        get: operations["listOrderNotes"];
+        put?: never;
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Adds a private note to this order for your team. It is plain text, up to 2,000 characters, trimmed; it never reaches the buyer's page, their email or an export, and it can't be edited, only deleted. 422 bad_note (field body) when it is empty, too long or has control characters. 404 for an order that isn't this event's. */
+        post: operations["addOrderNote"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/orders/{order}/notes/{note}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Deletes a note: its text is wiped, not hidden. The person who wrote it can, and so can an owner; any other admin gets 403 not_your_note. 404 for a note that is gone already or isn't this order's. */
+        delete: operations["deleteOrderNote"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/events/{event}/orders/{order}/tickets/{ticket}": {
         parameters: {
             query?: never;
@@ -1815,6 +1850,22 @@ export interface components {
             /** @description Plain text the buyer sees in the email. */
             reason?: string;
         };
+        OrderNote: {
+            /** Format: uuid */
+            id: string;
+            /** @description Who wrote it: their name, else their email, else Former member. */
+            author_name: string;
+            /** @description Plain text, exactly as written. Never shown to the buyer. */
+            body: string;
+            /** Format: date-time */
+            created_at: string;
+            /** @description True when you wrote it or you are an owner. */
+            can_delete: boolean;
+        };
+        AddOrderNote: {
+            /** @description Plain text for your team. Never shown to the buyer. */
+            body: string;
+        };
         CancelOrderResult: {
             ticket_ids: string[];
             /**
@@ -2506,6 +2557,7 @@ export interface components {
         OrderPath: string;
         RefundPath: string;
         TicketPath: string;
+        NotePath: string;
         /** @description The token createCheckout returned. */
         CheckoutTokenPath: string;
     };
@@ -4415,6 +4467,98 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    listOrderNotes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderNote"][];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    addOrderNote: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddOrderNote"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderNote"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    deleteOrderNote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+                note: components["parameters"]["NotePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
             503: components["responses"]["Error"];
         };
     };
