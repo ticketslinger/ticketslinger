@@ -59,7 +59,7 @@ func toEvent(e catalogue.Event) Event {
 	return Event{
 		Id: e.ID, Slug: e.Slug, Name: e.Name, Description: e.Description, VenueName: e.VenueName, VenueAddress: e.VenueAddress,
 		Timezone: e.Timezone, StartsAt: e.StartsAt, EndsAt: e.EndsAt, Status: EventStatus(e.Status), FeeMode: EventFeeMode(e.FeeMode),
-		Currency: EventCurrency(e.Currency), TaxRateBp: e.TaxRateBP, PricesIncludeTax: e.PricesIncludeTax,
+		Currency: EventCurrency(e.Currency), TaxRateBp: e.TaxRateBP, PricesIncludeTax: e.PricesIncludeTax, NamesLockedAt: nullOf(e.NamesLockedAt),
 		CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt,
 	}
 }
@@ -81,7 +81,7 @@ func (s *server) ListEvents(ctx context.Context, req ListEventsRequestObject) (L
 
 func (s *server) CreateEvent(ctx context.Context, req CreateEventRequestObject) (CreateEventResponseObject, error) {
 	b := req.Body
-	in := catalogue.EventInput{Slug: b.Slug, Name: b.Name, Timezone: b.Timezone, StartsAt: b.StartsAt, EndsAt: b.EndsAt}
+	in := catalogue.EventInput{Slug: b.Slug, Name: b.Name, Timezone: b.Timezone, StartsAt: b.StartsAt, EndsAt: b.EndsAt, NamesLockedAt: orNil(b.NamesLockedAt)}
 	if b.Description != nil {
 		in.Description = *b.Description
 	}
@@ -137,7 +137,7 @@ func (s *server) UpdateEvent(ctx context.Context, req UpdateEventRequestObject) 
 	b := req.Body
 	p := catalogue.EventPatch{
 		Slug: b.Slug, Name: b.Name, Description: b.Description, VenueName: b.VenueName, VenueAddress: b.VenueAddress, Timezone: b.Timezone,
-		StartsAt: b.StartsAt, EndsAt: b.EndsAt, TaxRateBP: b.TaxRateBp, PricesIncludeTax: b.PricesIncludeTax,
+		StartsAt: b.StartsAt, EndsAt: b.EndsAt, TaxRateBP: b.TaxRateBp, PricesIncludeTax: b.PricesIncludeTax, NamesLockedAt: b.NamesLockedAt,
 	}
 	if b.FeeMode != nil {
 		v := string(*b.FeeMode)

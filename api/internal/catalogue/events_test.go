@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/oapi-codegen/nullable"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 	"github.com/ticketslinger/ticketslinger/api/internal/catalogue"
@@ -400,5 +401,87 @@ func TestGoLiveNeedsPaymentsForPaidTickets(t *testing.T) {
 	stripe(true)
 	if err := status(&live); err != nil {
 		t.Fatalf("paid ticket with Stripe: %v", err)
+	}
+}
+
+func TestNamesLockedAt(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	user, orgs := seed(t, pool)
+	a := orgs[0]
+	actor := audit.Actor{User: user}
+	create := func(e catalogue.EventInput) (ev catalogue.Event, err error) {
+		err = as(t, pool, user, a, func(tx pgx.Tx) (err error) {
+			ev, err = catalogue.CreateEvent(ctx, tx, a, actor, e)
+			return
+		})
+		return ev, err
+	}
+	update := func(id uuid.UUID, p catalogue.EventPatch) (ev catalogue.Event, err error) {
+		err = as(t, pool, user, a, func(tx pgx.Tx) (err error) {
+			ev, err = catalogue.UpdateEvent(ctx, tx, a, id, actor, p, catalogue.PaymentsConnect)
+			return
+		})
+		return ev, err
+	}
+	afterStart := func(err error) bool {
+		var i catalogue.ErrInvalid
+		return errors.As(err, &i) && i.Code == "names_lock_after_start" && i.Field == "names_locked_at" && i.Message == "Pick a time before the event starts."
+	}
+	updates := func(id uuid.UUID) (n int) {
+		if err := testdb.Owner(t, pool).QueryRow(ctx, `select count(*) from audit_log where action = 'event.updated' and entity_id = $1`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	at := func(v time.Time) (n nullable.Nullable[time.Time]) { n.Set(v); return }
+
+	// Set before the start: stored, in any zone.
+	e := in("locked")
+	lock := t0.Add(-24 * time.Hour).In(time.FixedZone("EST", -5*3600))
+	e.NamesLockedAt = &lock
+	ev, err := create(e)
+	if err != nil || ev.NamesLockedAt == nil || !ev.NamesLockedAt.Equal(lock) {
+		t.Fatalf("created: %v %v", ev.NamesLockedAt, err)
+	}
+	for _, bad := range []time.Time{t0, t0.Add(time.Minute)} {
+		e := in("too-late")
+		e.NamesLockedAt = &bad
+		if _, err := create(e); !afterStart(err) {
+			t.Errorf("create with the lock at %v: %v, want names_lock_after_start", bad.Sub(t0), err)
+		}
+		if _, err := update(ev.ID, catalogue.EventPatch{NamesLockedAt: at(bad)}); !afterStart(err) {
+			t.Errorf("patch the lock to %v: %v, want names_lock_after_start", bad.Sub(t0), err)
+		}
+	}
+	// Moving the start to before the lock, while sending the lock, is refused too.
+	early := lock.Add(-time.Hour)
+	if _, err := update(ev.ID, catalogue.EventPatch{StartsAt: &early, NamesLockedAt: at(lock)}); !afterStart(err) {
+		t.Errorf("start moved before the lock sent with it: %v, want names_lock_after_start", err)
+	}
+
+	// An unrelated no-op patch is no change: no event.updated row.
+	n := updates(ev.ID)
+	name := ev.Name
+	same, err := update(ev.ID, catalogue.EventPatch{Name: &name})
+	if err != nil || updates(ev.ID) != n || same.NamesLockedAt == nil || !same.NamesLockedAt.Equal(lock) {
+		t.Fatalf("no-op patch: %v, %d rows (was %d), lock %v", err, updates(ev.ID), n, same.NamesLockedAt)
+	}
+	// The same instant in another zone is no change either.
+	if _, err := update(ev.ID, catalogue.EventPatch{NamesLockedAt: at(lock.UTC())}); err != nil || updates(ev.ID) != n {
+		t.Fatalf("same lock, other zone: %v, %d rows (was %d)", err, updates(ev.ID), n)
+	}
+	// A patch without it leaves it.
+	other := "Other Gala"
+	up, err := update(ev.ID, catalogue.EventPatch{Name: &other})
+	if err != nil || up.NamesLockedAt == nil || !up.NamesLockedAt.Equal(lock) || updates(ev.ID) != n+1 {
+		t.Fatalf("patch without it: %v %v", up.NamesLockedAt, err)
+	}
+	// Explicit null clears it.
+	var clear nullable.Nullable[time.Time]
+	clear.SetNull()
+	up, err = update(ev.ID, catalogue.EventPatch{NamesLockedAt: clear})
+	if err != nil || up.NamesLockedAt != nil || updates(ev.ID) != n+2 {
+		t.Fatalf("cleared: %v %v", up.NamesLockedAt, err)
 	}
 }

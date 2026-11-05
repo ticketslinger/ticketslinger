@@ -689,6 +689,7 @@ func (s *server) GetOrder(ctx context.Context, req GetOrderRequestObject) (GetOr
 	out.Totals.FeeCents, out.Totals.TotalCents = o.FeeCents, o.TotalCents
 	out.Event.Status = OrderEventStatus(e.Status)
 	out.RefundedCents, out.ReturnedCents = o.RefundedCents, o.ReturnedCents
+	out.NamesUntil = nullOf(o.NamesUntil)
 	for _, t := range o.Tickets {
 		qr, qrPNG := nullable.NewNullNullable[string](), nullable.NewNullNullable[string]()
 		if t.QR != "" {
@@ -700,7 +701,7 @@ func (s *server) GetOrder(ctx context.Context, req GetOrderRequestObject) (GetOr
 			qrPNG.Set(base64.StdEncoding.EncodeToString(png))
 		}
 		out.Tickets = append(out.Tickets, OrderTicket{Id: t.ID, TicketTypeName: t.TicketTypeName, AttendeeName: t.AttendeeName,
-			Status: OrderTicketStatus(t.Status), Refunded: t.Refunded, Qr: qr, QrPng: qrPNG})
+			Status: OrderTicketStatus(t.Status), Refunded: t.Refunded, Qr: qr, QrPng: qrPNG, NameChangesLeft: t.NameChangesLeft})
 	}
 	return GetOrder200JSONResponse(out), nil
 }
@@ -728,13 +729,50 @@ func (s *server) RequestTicketEmail(ctx context.Context, req RequestTicketEmailR
 	if err := allow(ctx, s.orderLimit); err != nil {
 		return nil, err
 	}
-	if len(req.Body.Token) > 200 {
-		return nil, fieldError{&apiError{422, "bad_token", "That isn't the link from your email. Open your order from the email and try again."}, "token"}
+	if len(req.Body.Token) > maxOrderToken {
+		return nil, errBadOrderToken
 	}
 	if err := s.Sales.RequestTicketEmail(ctx, req.Code, req.Body.Token); err != nil {
 		return nil, salesError(err)
 	}
 	return RequestTicketEmail202Response{}, nil
+}
+
+var errBadOrderToken = fieldError{&apiError{422, "bad_token", "That isn't the link from your email. Open your order from the email and try again."}, "token"}
+
+// RenameTicketByLink is the buyer fixing a ticket's name, counted as an
+// order read. Both 422s come before the lookup, so neither says whether the
+// order exists.
+func (s *server) RenameTicketByLink(ctx context.Context, req RenameTicketByLinkRequestObject) (RenameTicketByLinkResponseObject, error) {
+	if err := allow(ctx, s.orderLimit); err != nil {
+		return nil, err
+	}
+	if len(req.Body.Token) > maxOrderToken {
+		return nil, errBadOrderToken
+	}
+	if req.Body.AttendeeName == nil {
+		return nil, missingField("attendee_name", "the name to put on the ticket, or \u201c\u201d for none")
+	}
+	if err := s.Sales.RenameByLink(ctx, req.Code, req.Body.Token, req.Ticket, *req.Body.AttendeeName); err != nil {
+		return nil, salesError(err)
+	}
+	return RenameTicketByLink204Response{}, nil
+}
+
+// RenameTicket is the organizer fixing a ticket's name. A write key may: it
+// moves no money.
+func (s *server) RenameTicket(ctx context.Context, req RenameTicketRequestObject) (RenameTicketResponseObject, error) {
+	err := s.inOrganizer(ctx, req.Organizer, catalogueWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		// After membership, so a stranger still gets 404.
+		if req.Body.AttendeeName == nil {
+			return missingField("attendee_name", "the name to put on the ticket, or \u201c\u201d for none")
+		}
+		return sales.RenameTicket(ctx, tx, org.ID, req.Event, req.Order, req.Ticket, *req.Body.AttendeeName, actorFrom(ctx))
+	})
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return RenameTicket204Response{}, nil
 }
 
 // ordersRead keeps check-in staff out of orders: they carry what people paid

@@ -928,7 +928,9 @@ func (s *server) ListAudit(ctx context.Context, req ListAuditRequestObject) (Lis
 				case when a.actor_staff_session_id is not null then sd.name else coalesce(d.name, k.name) end,
 				case when a.actor_staff_session_id is null then d.email end,
 				case when a.actor_system then 'system' when a.actor_api_key_id is not null then 'api_key'
-				     when a.actor_staff_session_id is not null then 'staff' else 'user' end
+				     when a.actor_staff_session_id is not null then 'staff' else 'user' end,
+				a.action = 'ticket.renamed', coalesce(a.before->>'attendee_name', ''), coalesce(a.after->>'attendee_name', ''),
+				coalesce(a.after->>'via' = 'order_link', false)
 			from audit_log a
 			left join app_member_directory() d on d.user_id = a.actor_user_id
 			left join app_staff_directory() sd on sd.user_id = a.actor_user_id
@@ -941,10 +943,22 @@ func (s *server) ListAudit(ctx context.Context, req ListAuditRequestObject) (Lis
 		for rows.Next() {
 			var e AuditEntry
 			var name, email *string
-			if err := rows.Scan(&e.Id, &e.Action, &e.EntityType, &e.EntityId, &e.ActorUserId, &e.ActorApiKeyId, &e.At, &name, &email, &e.ActorType); err != nil {
+			var from, to string
+			var renamed, byBuyer bool
+			if err := rows.Scan(&e.Id, &e.Action, &e.EntityType, &e.EntityId, &e.ActorUserId, &e.ActorApiKeyId, &e.At, &name, &email, &e.ActorType,
+				&renamed, &from, &to, &byBuyer); err != nil {
 				return err
 			}
 			e.ActorName, e.ActorEmail = nullOf(name), nullOf(email)
+			// Only a rename shows what changed: other rows' before and
+			// after carry more than this page needs.
+			if renamed {
+				e.NameChange = &struct {
+					From string `json:"from"`
+					To   string `json:"to"`
+				}{from, to}
+				e.ByBuyer = &byBuyer
+			}
 			out = append(out, e)
 		}
 		return rows.Err()

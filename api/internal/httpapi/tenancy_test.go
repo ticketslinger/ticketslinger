@@ -122,6 +122,21 @@ func seedCatalogue(h *harness, owner, slug, apiKey string) map[string]string {
 		select o.id::text, r.id::text from o, r`, event, slug).Scan(&order, &refund); err != nil {
 		h.t.Fatal(err)
 	}
+	// A ticket for the {ticket} routes, in an order of its own so the one
+	// above keeps no tickets. Its order was cancelled before it was paid and
+	// the ticket is void and released, so it takes no seat, money or listing.
+	var ticket string
+	if err := testdb.Owner(h.t, h.pool).QueryRow(context.Background(), `with o as (
+			insert into orders (organizer_id, event_id, code, email, status, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents,
+				fee_mode, quote, details)
+			select organizer_id, id, 'TS-' || upper(substr(md5($2 || '-ticket'), 1, 5)), 'seed@example.com', 'cancelled', 2500, 0, 0, 100, 2600,
+				'pass', '{}', '{}' from events where id = $1 returning id, organizer_id, event_id)
+		insert into tickets (organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, charge_cents,
+				secret, status, released_at)
+			select organizer_id, event_id, id, $3, 2500, 0, 0, 100, 2500, decode(md5($2 || '-ticket'), 'hex'), 'void', now() from o
+		returning id::text`, event, slug, ticketType).Scan(&ticket); err != nil {
+		h.t.Fatal(err)
+	}
 	// The owner's own user id: removing it is refused anyway, so a walk that
 	// got through would still change nothing.
 	var member string
@@ -130,7 +145,7 @@ func seedCatalogue(h *harness, owner, slug, apiKey string) map[string]string {
 		h.t.Fatal(err)
 	}
 	return map[string]string{"organizer": slug, "member": member, "apiKey": apiKey, "event": event, "ticketType": ticketType, "quota": quota, "promoCode": promoCode, "question": question, "challengeId": "0190a0a0-0000-7000-8000-000000000000",
-		"eventSlug": "gala", "token": "no-such-checkout-token-0000000000000000000", "order": order, "refund": refund, "code": "TS-00000", "q": "ab", "kind": "orders.csv"}
+		"eventSlug": "gala", "token": "no-such-checkout-token-0000000000000000000", "order": order, "refund": refund, "ticket": ticket, "code": "TS-00000", "q": "ab", "kind": "orders.csv"}
 }
 
 // walk calls every secured operation with token and checks the status (and

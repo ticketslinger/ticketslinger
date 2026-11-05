@@ -789,6 +789,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/events/{event}/orders/{order}/tickets/{ticket}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description Owners and admins, or a write API key. Changes the name on one valid ticket of this order, as often as you like and at any time, even after the event starts; the buyer's five changes aren't touched. The QR code stays the same, so the ticket the buyer saved or printed still works, but the email they already have shows the old name until you resend it. attendee_name is trimmed, and an empty one takes the name off. 422 bad_attendee (field attendee_name) over 120 characters or with control or format characters; 422 missing_field without attendee_name. 409 ticket_void for a refunded or cancelled ticket. 404 for a ticket that isn't this order's. The same name again answers 204 and changes nothing. */
+        patch: operations["renameTicket"];
+        trace?: never;
+    };
     "/organizers/{organizer}/events/{event}/cancel": {
         parameters: {
             query?: never;
@@ -1118,6 +1135,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/orders/{code}/tickets/{ticket}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description The buyer changing the name on one valid ticket, with the token from the order's link, while the order's names_until is set: the order is paid, the event is on sale, and neither its start nor the organizer's names_locked_at has passed. Five changes per ticket (name_changes_left counts down). The QR code stays the same. attendee_name is trimmed, and an empty one takes the name off. An unknown code, a wrong token and a ticket that isn't this order's all get the same 404 as getOrder. 409 names_locked once names can't change; 409 name_change_limit after five changes. 422 bad_attendee (field attendee_name) over 120 characters or with control or format characters; 422 missing_field without attendee_name; 422 bad_token (field token) over 200 characters. The same name again answers 204 and uses no change. Counts against the same 60 requests a minute per client address as getOrder, then 429 rate_limited. */
+        patch: operations["renameTicketByLink"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1365,6 +1399,11 @@ export interface components {
         };
         Order: {
             code: string;
+            /**
+             * Format: date-time
+             * @description Until when the buyer can change the names on these tickets (renameTicketByLink): the event's start, or the organizer's names_locked_at when that's earlier. null when they can't now: the order isn't paid, the event isn't on sale, the organizer is suspended, or that time has passed.
+             */
+            names_until: string | null;
             /** @enum {string} */
             status: "paid" | "cancelled" | "refunded" | "partially_refunded";
             email: string;
@@ -1422,6 +1461,18 @@ export interface components {
             qr: string | null;
             /** @description The same QR code drawn as a PNG, standard base64, ready for a data: URL. Whoever has it can get in. null for a void ticket. */
             qr_png: string | null;
+            /** @description How many more times the buyer can change this ticket's name. The organizer's changes don't count. */
+            name_changes_left: number;
+        };
+        RenameTicketByLink: {
+            /** @description The t= value from the order's link. */
+            token: string;
+            /** @description The name to put on the ticket. Empty takes the name off. */
+            attendee_name: string;
+        };
+        RenameTicket: {
+            /** @description The name to put on the ticket. Empty takes the name off. */
+            attendee_name: string;
         };
         OrderEmailRequest: {
             /** @description The t= value from the order's link. */
@@ -2000,6 +2051,13 @@ export interface components {
             actor_email?: string | null;
             /** Format: date-time */
             at: string;
+            /** @description Only on ticket.renamed: the name before and after. Empty means no name. */
+            name_change?: {
+                from: string;
+                to: string;
+            };
+            /** @description Only on ticket.renamed: true when the buyer changed it from their order link (actor_type is system then). */
+            by_buyer?: boolean;
         };
         AddMember: {
             /**
@@ -2074,6 +2132,11 @@ export interface components {
             /** @description Tax in basis points: 825 is 8.25%. */
             tax_rate_bp?: number;
             prices_include_tax?: boolean;
+            /**
+             * Format: date-time
+             * @description When buyers stop being able to change the names on their tickets. Leave it out or null and they can change them until the event starts. 422 names_lock_after_start (field names_locked_at) unless it's before starts_at.
+             */
+            names_locked_at?: string | null;
         };
         CreateEvent: components["schemas"]["EventFields"] & {
             /** @description Part of the event's web address. It can change while the event is a draft. */
@@ -2106,6 +2169,11 @@ export interface components {
             currency: "USD";
             tax_rate_bp: number;
             prices_include_tax: boolean;
+            /**
+             * Format: date-time
+             * @description When buyers stop being able to change ticket names; null means when the event starts.
+             */
+            names_locked_at: string | null;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -2330,6 +2398,7 @@ export interface components {
         EventPath: string;
         OrderPath: string;
         RefundPath: string;
+        TicketPath: string;
         /** @description The token createCheckout returned. */
         CheckoutTokenPath: string;
     };
@@ -4165,6 +4234,40 @@ export interface operations {
             503: components["responses"]["Error"];
         };
     };
+    renameTicket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+                ticket: components["parameters"]["TicketPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameTicket"];
+            };
+        };
+        responses: {
+            /** @description Renamed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
     cancelEvent: {
         parameters: {
             query?: never;
@@ -4948,6 +5051,37 @@ export interface operations {
         responses: {
             /** @description Queued */
             202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    renameTicketByLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The order code, like TS-7K2QF. */
+                code: string;
+                ticket: components["parameters"]["TicketPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameTicketByLink"];
+            };
+        };
+        responses: {
+            /** @description Renamed */
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };

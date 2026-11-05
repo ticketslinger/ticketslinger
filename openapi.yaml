@@ -824,6 +824,25 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/orders/{order}/tickets/{ticket}:
+    patch:
+      operationId: renameTicket
+      description: "Owners and admins, or a write API key. Changes the name on one valid ticket of this order, as often as you like and at any time, even after the event starts; the buyer's five changes aren't touched. The QR code stays the same, so the ticket the buyer saved or printed still works, but the email they already have shows the old name until you resend it. attendee_name is trimmed, and an empty one takes the name off. 422 bad_attendee (field attendee_name) over 120 characters or with control or format characters; 422 missing_field without attendee_name. 409 ticket_void for a refunded or cancelled ticket. 404 for a ticket that isn't this order's. The same name again answers 204 and changes nothing."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+        - { $ref: "#/components/parameters/TicketPath" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RenameTicket" } } } }
+      responses:
+        "204": { description: Renamed }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/cancel:
     post:
       operationId: cancelEvent
@@ -1215,6 +1234,22 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
+  /orders/{code}/tickets/{ticket}:
+    patch:
+      operationId: renameTicketByLink
+      security: []
+      description: "The buyer changing the name on one valid ticket, with the token from the order's link, while the order's names_until is set: the order is paid, the event is on sale, and neither its start nor the organizer's names_locked_at has passed. Five changes per ticket (name_changes_left counts down). The QR code stays the same. attendee_name is trimmed, and an empty one takes the name off. An unknown code, a wrong token and a ticket that isn't this order's all get the same 404 as getOrder. 409 names_locked once names can't change; 409 name_change_limit after five changes. 422 bad_attendee (field attendee_name) over 120 characters or with control or format characters; 422 missing_field without attendee_name; 422 bad_token (field token) over 200 characters. The same name again answers 204 and uses no change. Counts against the same 60 requests a minute per client address as getOrder, then 429 rate_limited."
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string }, description: "The order code, like TS-7K2QF." }
+        - { $ref: "#/components/parameters/TicketPath" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RenameTicketByLink" } } } }
+      responses:
+        "204": { description: Renamed }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     session: { type: http, scheme: bearer, description: "A session token, or an organizer API key (tsk_...). A key acts only within its own organizer, and gets 403 session_required on anything that needs a person: your account, your organizer list, the audit log and key management. A read key gets 403 scope_read_only on writes." }
@@ -1228,6 +1263,7 @@ components:
     EventPath: { name: event, in: path, required: true, schema: { type: string, format: uuid } }
     OrderPath: { name: order, in: path, required: true, schema: { type: string, format: uuid } }
     RefundPath: { name: refund, in: path, required: true, schema: { type: string, format: uuid } }
+    TicketPath: { name: ticket, in: path, required: true, schema: { type: string, format: uuid } }
     CheckoutTokenPath: { name: token, in: path, required: true, schema: { type: string }, description: "The token createCheckout returned." }
   responses:
     Error: { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -1402,9 +1438,10 @@ components:
         expected_total_cents: { type: integer, format: int64, minimum: 0, description: "The total you showed the buyer. When it doesn't match, 409 price_changed and nothing is charged. Send it." }
     Order:
       type: object
-      required: [code, status, email, event, totals, tickets, refunded_cents, returned_cents]
+      required: [code, status, email, event, totals, tickets, refunded_cents, returned_cents, names_until]
       properties:
         code: { type: string }
+        names_until: { type: [string, "null"], format: date-time, description: "Until when the buyer can change the names on these tickets (renameTicketByLink): the event's start, or the organizer's names_locked_at when that's earlier. null when they can't now: the order isn't paid, the event isn't on sale, the organizer is suspended, or that time has passed." }
         status: { type: string, enum: [paid, cancelled, refunded, partially_refunded] }
         email: { type: string }
         refunded_cents: { type: integer, format: int64, description: "What has gone back, or is on its way back, to the buyer's card: every refund that hasn't failed." }
@@ -1433,7 +1470,7 @@ components:
         tickets: { type: array, items: { $ref: "#/components/schemas/OrderTicket" } }
     OrderTicket:
       type: object
-      required: [id, ticket_type_name, attendee_name, status, refunded, qr, qr_png]
+      required: [id, ticket_type_name, attendee_name, status, refunded, qr, qr_png, name_changes_left]
       properties:
         id: { type: string, format: uuid }
         ticket_type_name: { type: string }
@@ -1442,6 +1479,18 @@ components:
         refunded: { type: boolean, description: "true when it's void because it was refunded." }
         qr: { type: [string, "null"], description: "What the ticket's QR code holds: 22 base64url characters. Whoever has it can get in, so show it only to the ticket's holder. null for a void ticket." }
         qr_png: { type: [string, "null"], description: "The same QR code drawn as a PNG, standard base64, ready for a data: URL. Whoever has it can get in. null for a void ticket." }
+        name_changes_left: { type: integer, minimum: 0, maximum: 5, description: "How many more times the buyer can change this ticket's name. The organizer's changes don't count." }
+    RenameTicketByLink:
+      type: object
+      required: [token, attendee_name]
+      properties:
+        token: { type: string, maxLength: 200, description: "The t= value from the order's link." }
+        attendee_name: { type: string, maxLength: 120, x-go-type: "*string", description: "The name to put on the ticket. Empty takes the name off." }
+    RenameTicket:
+      type: object
+      required: [attendee_name]
+      properties:
+        attendee_name: { type: string, maxLength: 120, x-go-type: "*string", description: "The name to put on the ticket. Empty takes the name off." }
     OrderEmailRequest:
       type: object
       required: [token]
@@ -1860,6 +1909,14 @@ components:
         actor_name: { type: [string, "null"], description: "The person's name if they are still a member of this organizer, the support person's name, or the API key's name. Null for former members." }
         actor_email: { type: [string, "null"], description: "The person's email if they are still a member of this organizer. Null for support, API keys and former members." }
         at: { type: string, format: date-time }
+        name_change:
+          type: object
+          required: [from, to]
+          description: "Only on ticket.renamed: the name before and after. Empty means no name."
+          properties:
+            from: { type: string }
+            to: { type: string }
+        by_buyer: { type: boolean, description: "Only on ticket.renamed: true when the buyer changed it from their order link (actor_type is system then)." }
     AddMember:
       type: object
       required: [email, role]
@@ -1910,6 +1967,7 @@ components:
         fee_mode: { type: string, enum: [absorb, pass], description: "pass (the default): buyers see one price with our fee in it. absorb: our fee comes out of your price." }
         tax_rate_bp: { type: integer, minimum: 0, maximum: 10000, description: "Tax in basis points: 825 is 8.25%." }
         prices_include_tax: { type: boolean }
+        names_locked_at: { type: [string, "null"], format: date-time, description: "When buyers stop being able to change the names on their tickets. Leave it out or null and they can change them until the event starts. 422 names_lock_after_start (field names_locked_at) unless it's before starts_at." }
     CreateEvent:
       allOf:
         - { $ref: "#/components/schemas/EventFields" }
@@ -1926,7 +1984,7 @@ components:
             status: { type: string, enum: [draft, live, ended, cancelled] }
     Event:
       type: object
-      required: [id, slug, name, description, venue_name, venue_address, timezone, starts_at, ends_at, status, fee_mode, currency, tax_rate_bp, prices_include_tax, created_at, updated_at]
+      required: [id, slug, name, description, venue_name, venue_address, timezone, starts_at, ends_at, status, fee_mode, currency, tax_rate_bp, prices_include_tax, names_locked_at, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         slug: { type: string }
@@ -1942,6 +2000,7 @@ components:
         currency: { type: string, enum: [USD] }
         tax_rate_bp: { type: integer }
         prices_include_tax: { type: boolean }
+        names_locked_at: { type: [string, "null"], format: date-time, description: "When buyers stop being able to change ticket names; null means when the event starts." }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     QuotaFields:
