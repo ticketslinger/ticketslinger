@@ -147,6 +147,10 @@ export const needsCapacity = (status: Event["status"]) => status === "live";
 
 const price = (c: number) => (c === 0 ? "Free" : formatCents(c));
 
+/** What buyers pay when that differs from the organizer's price; free tickets stay free. */
+export const buyersSee = (t: TicketType) =>
+  t.all_in_cents !== t.price_cents ? `Buyers see ${formatCents(t.all_in_cents)}` : "";
+
 function TicketDialog({
   org,
   event,
@@ -564,7 +568,10 @@ export function Tickets({ org, event }: { org: Org; event: Event }) {
                     <td>
                       {t.name} {t.hidden && <span className="pill">Hidden</span>}
                     </td>
-                    <td>{price(t.price_cents)}</td>
+                    <td>
+                      {price(t.price_cents)}
+                      {buyersSee(t) && <span className="hint">{buyersSee(t)}</span>}
+                    </td>
                     <td>
                       {t.sales_start ? formatWhen(t.sales_start, tz) : "Right away"}
                       {" to "}

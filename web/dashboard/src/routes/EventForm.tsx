@@ -10,6 +10,11 @@ import { canEdit, type Org } from "./Organizer";
 export type Event = components["schemas"]["Event"];
 
 /** 825 → "8.25". Integer maths, so no float ever touches the rate. */
+export const FEE_HINTS = {
+  pass: "Buyers see one price with the fee already in it. You get your full ticket price.",
+  absorb: "It comes out of your ticket price, so buyers pay no fee.",
+} as const;
+
 export function bpToPercent(bp: number): string {
   const frac = String(bp % 100)
     .padStart(2, "0")
@@ -273,7 +278,7 @@ export function EventForm({
             />
             <span>
               Buyers pay the service fee
-              <span className="hint">It goes on top of your ticket price.</span>
+              <span className="hint">{FEE_HINTS.pass}</span>
             </span>
           </label>
           <label className="check">
@@ -285,7 +290,7 @@ export function EventForm({
             />
             <span>
               We absorb the service fee
-              <span className="hint">It comes out of your ticket price instead.</span>
+              <span className="hint">{FEE_HINTS.absorb}</span>
             </span>
           </label>
         </fieldset>
