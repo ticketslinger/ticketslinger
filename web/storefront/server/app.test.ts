@@ -1688,6 +1688,15 @@ test("the order page offers a name form per valid ticket while names can change"
   expect(some).not.toContain("Name on ticket 1");
 });
 
+test("the order page says nothing about fixing names once every valid ticket is out of changes", async () => {
+  const o = named();
+  for (const tk of o.tickets) tk.name_changes_left = 0;
+  const html = await (await app(() => Response.json(o)).a.request(OWN)).text();
+  expect(html).not.toContain("Need to fix a name?");
+  expect(html).not.toContain("Save name");
+  expect(html).not.toContain('<form method="post" action="/orders/TS-7K2QF/tickets/');
+});
+
 test("saving a name redirects with the ticket id, and the page says what it saved", async () => {
   const { a, calls } = app(() => new Response(null, { status: 204 }));
   const res = await a.request(

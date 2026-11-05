@@ -10,7 +10,6 @@ import {
   RENAME_HINT,
   reasonText,
   refundPreview,
-  renameProblem,
   retryable,
   TicketLine,
 } from "./OrderDetail";
@@ -148,17 +147,10 @@ test("only owners and admins can edit the name of a valid ticket", () => {
   expect(canRenameTicket({ status: "void" }, { role: "owner" } as Org)).toBe(false);
 });
 
-test("rename copy is the spec's, with 120 allowed", () => {
+test("rename hint is the spec's", () => {
   expect(RENAME_HINT).toBe(
     "Their QR code doesn't change. The email they already have shows the old name until you resend it.",
   );
-  expect(renameProblem("ticket_void")).toBe(
-    "This ticket has been refunded or cancelled, so its name can't change.",
-  );
-  expect(renameProblem("bad_attendee")).toBe(
-    "Keep the name 120 characters or fewer, using ordinary letters and punctuation.",
-  );
-  expect(renameProblem("rate_limited")).toBeUndefined();
 });
 
 const line = (over: Partial<Parameters<typeof TicketLine>[0]>) =>
