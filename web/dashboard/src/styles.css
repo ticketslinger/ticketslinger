@@ -436,6 +436,11 @@ label.check input {
   margin: 0.3rem 0 0;
 }
 
+td > .hint {
+  display: block;
+  margin: 0;
+}
+
 label.check .hint {
   display: block;
   margin: 0;
