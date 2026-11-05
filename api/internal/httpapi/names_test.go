@@ -174,7 +174,8 @@ func TestRenameTicketRoles(t *testing.T) {
 		}
 		return n
 	}
-	for who, tok := range map[string]string{"owner": w.ownerA, "admin": admin, "write key": writeKey} {
+	for _, c := range []struct{ who, tok string }{{"owner", w.ownerA}, {"admin", admin}, {"write key", writeKey}} {
+		who, tok := c.who, c.tok
 		if res := w.do(tok, "PATCH", path, `{"attendee_name":"`+who+`"}`); res.StatusCode != 204 || name() != who {
 			t.Errorf("%s: %d %v, name %q", who, res.StatusCode, w.json(res), name())
 		}
