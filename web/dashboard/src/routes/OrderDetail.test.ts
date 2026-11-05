@@ -1,13 +1,17 @@
 import { expect, test } from "bun:test";
 import type { components } from "@ticketslinger/api-client";
 import {
+  canRenameTicket,
   canResend,
   emailLine,
   failureText,
+  RENAME_HINT,
   reasonText,
   refundPreview,
+  renameProblem,
   retryable,
 } from "./OrderDetail";
+import type { Org } from "./Organizer";
 
 type Detail = components["schemas"]["OrderDetail"];
 type Refund = components["schemas"]["Refund"];
@@ -132,4 +136,24 @@ test("the tickets can be sent again only once the last email has settled", () =>
   for (const s of ["queued", "failing", null] as const) {
     expect(canResend(e(s))).toBe(false);
   }
+});
+
+test("only owners and admins can edit the name of a valid ticket", () => {
+  expect(canRenameTicket({ status: "valid" }, { role: "owner" } as Org)).toBe(true);
+  expect(canRenameTicket({ status: "valid" }, { role: "admin" } as Org)).toBe(true);
+  expect(canRenameTicket({ status: "valid" }, { role: "checkin" } as Org)).toBe(false);
+  expect(canRenameTicket({ status: "void" }, { role: "owner" } as Org)).toBe(false);
+});
+
+test("rename copy is the spec's, with 120 allowed", () => {
+  expect(RENAME_HINT).toBe(
+    "Their QR code doesn't change. The email they already have shows the old name until you resend it.",
+  );
+  expect(renameProblem("ticket_void")).toBe(
+    "This ticket has been refunded or cancelled, so its name can't change.",
+  );
+  expect(renameProblem("bad_attendee")).toBe(
+    "Keep the name 120 characters or fewer, using ordinary letters and punctuation.",
+  );
+  expect(renameProblem("rate_limited")).toBeUndefined();
 });

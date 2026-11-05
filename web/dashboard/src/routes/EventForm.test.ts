@@ -1,7 +1,17 @@
 import { expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { bpToPercent, EventForm, FEE_HINTS, percentToBp } from "./EventForm";
+import { ApiFailure } from "../api";
+import {
+  bpToPercent,
+  EventForm,
+  FEE_HINTS,
+  NAMES_LOCK_ERROR,
+  NAMES_LOCK_HINT,
+  namesLockFailure,
+  namesLockValue,
+  percentToBp,
+} from "./EventForm";
 
 test("basis points show as a percent with up to two decimals", () => {
   expect(bpToPercent(0)).toBe("0");
@@ -42,4 +52,24 @@ test("the fee-mode radios render their hints", () => {
   const html = renderToString(createElement(EventForm, { org }));
   expect(html).toContain(FEE_HINTS.pass);
   expect(html).toContain(FEE_HINTS.absorb);
+});
+
+test("clearing the names lock sends null; a time is read in the event's zone", () => {
+  expect(namesLockValue("", "Europe/London")).toBeNull();
+  expect(namesLockValue("2026-07-01T12:00", "Europe/London")).toBe("2026-07-01T11:00:00.000Z");
+});
+
+test("the server's names_lock_after_start shows the spec sentence on that field", () => {
+  expect(NAMES_LOCK_ERROR).toBe("Pick a time before the event starts.");
+  const e = new ApiFailure("names_lock_after_start", "server words", 422, "names_locked_at");
+  expect(namesLockFailure(e).message).toBe(NAMES_LOCK_ERROR);
+  const other = new ApiFailure("rate_limited", "slow down", 429);
+  expect(namesLockFailure(other)).toBe(other);
+});
+
+test("the names lock field renders with its hint", () => {
+  const org = { slug: "x", role: "owner" } as Parameters<typeof EventForm>[0]["org"];
+  const html = renderToString(createElement(EventForm, { org }));
+  expect(html).toContain("Buyers can change names until");
+  expect(html).toContain(NAMES_LOCK_HINT);
 });

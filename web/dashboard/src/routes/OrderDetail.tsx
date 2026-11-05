@@ -1,6 +1,6 @@
 import type { components } from "@ticketslinger/api-client";
 import { useRef, useState } from "react";
-import { api, must } from "../api";
+import { ApiFailure, api, must } from "../api";
 import { toggle } from "../forms";
 import { withKey } from "../idempotency";
 import { formatCents } from "../money";
@@ -61,6 +61,81 @@ export const retryable = (r: Refund) => r.status === "failed" && !r.returned_by_
 /** A payment that landed after the event was cancelled was refunded because of the cancellation. */
 export const reasonText = (r: Refund, eventCancelled: boolean) =>
   r.reason === "late_payment" && eventCancelled ? REASON.event_cancelled : REASON[r.reason];
+
+export const RENAME_HINT =
+  "Their QR code doesn't change. The email they already have shows the old name until you resend it.";
+
+/** Our words for the rename errors the spec writes out; undefined means use the server's. */
+export function renameProblem(code: string): string | undefined {
+  if (code === "ticket_void")
+    return "This ticket has been refunded or cancelled, so its name can't change.";
+  if (code === "bad_attendee")
+    return "Keep the name 120 characters or fewer, using ordinary letters and punctuation.";
+}
+
+export const canRenameTicket = (t: { status: string }, org: Org) =>
+  t.status === "valid" && canEdit(org);
+
+function RenameTicket({
+  path,
+  ticket,
+  onSaved,
+  onCancel,
+}: {
+  path: { organizer: string; event: string; order: string };
+  ticket: Detail["tickets"][number];
+  onSaved: () => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(ticket.attendee_name);
+  const action = useAction();
+  const id = `rename-${ticket.id}`;
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        action.run(async () => {
+          try {
+            must(
+              await api.PATCH(
+                "/organizers/{organizer}/events/{event}/orders/{order}/tickets/{ticket}",
+                {
+                  params: { path: { ...path, ticket: ticket.id } },
+                  body: { attendee_name: name },
+                },
+              ),
+            );
+          } catch (err) {
+            const mine = err instanceof ApiFailure && renameProblem(err.code);
+            throw mine ? new ApiFailure(err.code, mine, err.status, err.field) : err;
+          }
+          await onSaved();
+          onCancel();
+        });
+      }}
+    >
+      <label htmlFor={id}>{ticket.ticket_type_name}, name on ticket</label>{" "}
+      <input
+        id={id}
+        value={name}
+        maxLength={120}
+        ref={focusOnMount}
+        aria-describedby={`${id}-hint`}
+        onChange={(e) => setName(e.target.value)}
+      />{" "}
+      <button type="submit" className="inline" disabled={action.busy}>
+        Save
+      </button>{" "}
+      <button type="button" className="inline secondary" onClick={onCancel}>
+        Cancel
+      </button>
+      <p className="hint" id={`${id}-hint`}>
+        {RENAME_HINT}
+      </p>
+      <ErrorText>{action.error}</ErrorText>
+    </form>
+  );
+}
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
@@ -231,6 +306,7 @@ export function OrderDetail({
   const [feeBack, setFeeBack] = useState(false);
   const [asking, setAsking] = useState<boolean | null>(null);
   const [resentTo, setResentTo] = useState("");
+  const [renaming, setRenaming] = useState<string | null>(null);
   const refund = useAction();
   const key = useRef<string | null>(null);
 
@@ -324,7 +400,14 @@ export function OrderDetail({
           <ul className="plain">
             {order.tickets.map((t) => (
               <li key={t.id}>
-                {t.status === "valid" && canEdit(org) ? (
+                {renaming === t.id ? (
+                  <RenameTicket
+                    path={path}
+                    ticket={t}
+                    onSaved={reload}
+                    onCancel={() => setRenaming(null)}
+                  />
+                ) : t.status === "valid" && canEdit(org) ? (
                   <label>
                     <input
                       type="checkbox"
@@ -332,11 +415,23 @@ export function OrderDetail({
                       disabled={refund.busy}
                       onChange={() => change(() => setPicked(toggle(picked, t.id)))}
                     />{" "}
-                    {t.ticket_type_name}, {t.attendee_name}
+                    {t.ticket_type_name}, {t.attendee_name || "no name"}
                   </label>
                 ) : (
                   <>
-                    {t.ticket_type_name}, {t.attendee_name}
+                    {t.ticket_type_name}, {t.attendee_name || "no name"}
+                  </>
+                )}
+                {renaming !== t.id && canRenameTicket(t, org) && (
+                  <>
+                    {" "}
+                    <button
+                      type="button"
+                      className="inline secondary"
+                      onClick={() => setRenaming(t.id)}
+                    >
+                      Edit name
+                    </button>
                   </>
                 )}
                 {t.status === "void" && (
