@@ -1418,6 +1418,16 @@ export interface components {
         Order: {
             code: string;
             /**
+             * @description How the order was paid: online by card, comp for free tickets an organizer gave away, manual for money the organizer took outside the site.
+             * @enum {string}
+             */
+            source: "online" | "comp" | "manual";
+            /**
+             * @description How a manual order was paid; null for the others. invoice means the organizer will invoice the buyer, so nothing has been paid yet.
+             * @enum {string|null}
+             */
+            manual_method: "cash" | "cheque" | "invoice" | "other" | null;
+            /**
              * Format: date-time
              * @description Until when the buyer can change the names on these tickets (renameTicketByLink): the event's start, or the organizer's names_locked_at when that's earlier. null when they can't now: the order isn't paid, the event isn't on sale, the organizer is suspended, or that time has passed.
              */
@@ -1438,10 +1448,10 @@ export interface components {
             event: {
                 name: string;
                 /**
-                 * @description cancelled once the organizer has cancelled the event.
+                 * @description cancelled once the organizer has cancelled the event. draft only for an order issued by hand before the event went live.
                  * @enum {string}
                  */
-                status: "live" | "ended" | "cancelled";
+                status: "draft" | "live" | "ended" | "cancelled";
                 /** Format: date-time */
                 starts_at: string;
                 /** Format: date-time */

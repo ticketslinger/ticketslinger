@@ -24,7 +24,8 @@ import (
 // buyer's bank then sent back. NamesUntil is when the buyer's chance to
 // change names ends, or nil when they can't now.
 type OrderView struct {
-	Code, Status, Email                                          string
+	Code, Status, Email, Source                                  string
+	ManualMethod                                                 *string
 	Event                                                        OrderEvent
 	SubtotalCents, DiscountCents, TaxCents, FeeCents, TotalCents int64
 	RefundedCents, ReturnedCents                                 int64
@@ -61,10 +62,10 @@ func (s *Service) Order(ctx context.Context, code, token string) (OrderView, err
 	e := &out.Event
 	err := s.Pool.QueryRow(ctx, `select code, status, email, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents,
 		event_name, timezone, venue_name, venue_address, starts_at, ends_at, organizer_name, event_status,
-		refunded_cents, returned_cents, names_until, tickets from order_by_link($1, $2)`, code, hash).Scan(&out.Code, &out.Status, &out.Email,
+		refunded_cents, returned_cents, names_until, source, manual_method, tickets from order_by_link($1, $2)`, code, hash).Scan(&out.Code, &out.Status, &out.Email,
 		&out.SubtotalCents, &out.DiscountCents, &out.TaxCents, &out.FeeCents, &out.TotalCents,
 		&e.Name, &e.Timezone, &e.VenueName, &e.VenueAddress, &e.StartsAt, &e.EndsAt, &e.Organizer, &e.Status,
-		&out.RefundedCents, &out.ReturnedCents, &out.NamesUntil, &tickets)
+		&out.RefundedCents, &out.ReturnedCents, &out.NamesUntil, &out.Source, &out.ManualMethod, &tickets)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return OrderView{}, catalogue.ErrNotFound
 	}

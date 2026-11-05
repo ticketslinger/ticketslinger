@@ -1,6 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import { createApp } from "./app";
 import { priceNote } from "./pages/EventPage";
+import { paymentLine } from "./pages/OrderPage";
 
 const event = {
   organizer: { name: "Acme", slug: "acme" },
@@ -883,6 +884,8 @@ test("the island reads the checkout through the same origin", async () => {
 const order = {
   code: "TS-7K2QF",
   status: "paid",
+  source: "online",
+  manual_method: null as string | null,
   email: "ada@example.com",
   refunded_cents: 0,
   returned_cents: 0,
@@ -1772,4 +1775,62 @@ test("a rename with a bad code, token or ticket id is a 404 and never reaches th
     expect(await res.text()).toContain("That link doesn't open an order.");
   }
   expect(calls).toHaveLength(0);
+});
+
+test("the order page says how it was paid, by source", async () => {
+  const show = async (o: unknown) => {
+    const res = await app(() => Response.json(o)).a.request(`/orders/TS-7K2QF?t=${TOK}`);
+    return res.text();
+  };
+  const as = (source: string, manual_method: string | null, total = 4000) => ({
+    ...structuredClone(order),
+    source,
+    manual_method,
+    totals: { ...order.totals, total_cents: total },
+  });
+  type O = Parameters<typeof paymentLine>[0];
+  expect(paymentLine(as("online", null, 2600) as O)).toBe("$26.00");
+  expect(paymentLine(as("comp", null, 0) as O)).toBe("Complimentary");
+  expect(paymentLine(as("manual", "cash") as O)).toBe("Paid to the organizer ($40.00)");
+  expect(paymentLine(as("manual", "invoice") as O)).toBe("The organizer will invoice you ($40.00)");
+  expect(await show(as("comp", null, 0))).toContain(
+    "Order TS-7K2QF · Complimentary · sent to ada@example.com",
+  );
+});
+
+test("a cancelled order with nothing refunded doesn't say it's refunding", async () => {
+  const show = async (o: unknown) => {
+    const res = await app(() => Response.json(o)).a.request(`/orders/TS-7K2QF?t=${TOK}`);
+    return res.text();
+  };
+  const voided = (extra: Record<string, unknown> = {}) => {
+    const o = structuredClone(order) as Record<string, any>;
+    o.status = "cancelled";
+    o.tickets = o.tickets.map((t: object) => ({
+      ...t,
+      status: "void",
+      refunded: false,
+      qr: null,
+      qr_png: null,
+    }));
+    return Object.assign(o, extra);
+  };
+  let html = await show(voided());
+  expect(html).toContain(
+    "Acme cancelled these tickets, so they won't get you in. Nothing was refunded. Questions? Contact the organizer.",
+  );
+  expect(html).not.toContain("refunding");
+
+  const gala = voided({ source: "manual", manual_method: "cash" });
+  gala.event.name = "Gala";
+  gala.event.status = "cancelled";
+  gala.totals.total_cents = 4000;
+  html = await show(gala);
+  expect(html).toContain(
+    "Gala was cancelled, so these tickets won't get you in. Acme will be in touch about your $40.00.",
+  );
+
+  // A late payment has no tickets: unchanged.
+  html = await show(voided({ tickets: [] }));
+  expect(html).toContain("We're refunding you in full.");
 });

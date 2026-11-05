@@ -690,6 +690,7 @@ func (s *server) GetOrder(ctx context.Context, req GetOrderRequestObject) (GetOr
 	out.Event.Status = OrderEventStatus(e.Status)
 	out.RefundedCents, out.ReturnedCents = o.RefundedCents, o.ReturnedCents
 	out.NamesUntil = nullOf(o.NamesUntil)
+	out.Source, out.ManualMethod = OrderSource(o.Source), nullableOf[OrderManualMethod](o.ManualMethod)
 	for _, t := range o.Tickets {
 		qr, qrPNG := nullable.NewNullNullable[string](), nullable.NewNullNullable[string]()
 		if t.QR != "" {

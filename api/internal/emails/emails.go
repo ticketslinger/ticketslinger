@@ -43,6 +43,7 @@ type Ticket struct{ Type, Attendee, QR string }
 // TicketsData is everything the order confirmation shows.
 type TicketsData struct {
 	To, Event, When, Venue, Organizer, Code, OrderURL, LostLinkURL string
+	Payment                                                        string // how it was paid, when not online: "" shows nothing
 	OrderID, OrganizerID                                           uuid.UUID
 	Tickets                                                        []Ticket
 }

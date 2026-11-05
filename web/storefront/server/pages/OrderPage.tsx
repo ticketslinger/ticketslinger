@@ -12,6 +12,12 @@ export function orderStatus(order: Order): string {
   const e = order.event;
   const cancelled = e.status === "cancelled";
   const total = order.totals.total_cents;
+  if (order.status === "cancelled" && order.tickets.length > 0 && total > 0) {
+    // Tickets were issued and then cancelled with nothing refunded: not the late-payment case below.
+    return cancelled && order.source === "manual"
+      ? `${e.name} was cancelled, so these tickets won't get you in. ${e.organizer_name} will be in touch about your ${formatCents(total)}.`
+      : `${e.organizer_name} cancelled these tickets, so they won't get you in. Nothing was refunded. Questions? Contact the organizer.`;
+  }
   if (order.status === "cancelled") {
     // A free order voided: there was never a payment to give back.
     if (total === 0) {
@@ -42,6 +48,18 @@ export function orderStatus(order: Order): string {
   return cancelled
     ? `${e.name} was cancelled, so these tickets won't get you in any more.`
     : "This order was refunded in full.";
+}
+
+// What the buyer paid, by where the order came from.
+export function paymentLine(order: Order): string {
+  const total = formatCents(order.totals.total_cents);
+  if (order.source === "comp") return "Complimentary";
+  if (order.source === "manual") {
+    return order.manual_method === "invoice"
+      ? `The organizer will invoice you (${total})`
+      : `Paid to the organizer (${total})`;
+  }
+  return total;
 }
 
 // What "Email me my tickets again" answered, by the sent= the form's redirect carries.
@@ -114,7 +132,7 @@ export function OrderPage({
         </p>
       )}
       <p>
-        Order {order.code} · {formatCents(order.totals.total_cents)} · sent to {order.email}
+        Order {order.code} · {paymentLine(order)} · sent to {order.email}
       </p>
       {sent && valid.length > 0 && (
         <p class="sent" role="status">

@@ -309,14 +309,16 @@ func (s *Service) OrderConfirmation(m mailer.Mailer) jobs.Handler {
 			return err
 		}
 		d := emails.TicketsData{OrderID: c.Order, OrganizerID: c.Organizer}
-		var zone, orgSlug, eventSlug string
+		var zone, orgSlug, eventSlug, source string
+		var method *string
+		var total int64
 		var starts time.Time
 		var version int
 		err := system.Run(ctx, s.Pool, c.Organizer, func(tx pgx.Tx) error {
-			err := tx.QueryRow(ctx, `select o.email::text, o.code, e.name, e.timezone, e.starts_at, e.venue_name, g.name, g.slug, e.slug, o.link_version
+			err := tx.QueryRow(ctx, `select o.email::text, o.code, e.name, e.timezone, e.starts_at, e.venue_name, g.name, g.slug, e.slug, o.link_version, o.source, o.manual_method, o.total_cents
 				from orders o join events e on e.id = o.event_id join organizers g on g.id = o.organizer_id
 				where o.id = $1 and o.status in ('paid', 'partially_refunded')`, c.Order).
-				Scan(&d.To, &d.Code, &d.Event, &zone, &starts, &d.Venue, &d.Organizer, &orgSlug, &eventSlug, &version)
+				Scan(&d.To, &d.Code, &d.Event, &zone, &starts, &d.Venue, &d.Organizer, &orgSlug, &eventSlug, &version, &source, &method, &total)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nothingToSend(ctx, tx, c.Order)
 			}
@@ -346,6 +348,7 @@ func (s *Service) OrderConfirmation(m mailer.Mailer) jobs.Handler {
 		if err == nil {
 			base := strings.TrimRight(s.StorefrontURL, "/")
 			d.When = when(starts, zone)
+			d.Payment = paymentLine(source, method, total)
 			d.OrderURL = s.orderURL(d.Code, c.Order, version)
 			d.LostLinkURL = base + "/" + orgSlug + "/" + eventSlug + "/order-link"
 			build := s.ticketsEmail
@@ -367,4 +370,18 @@ func (s *Service) OrderConfirmation(m mailer.Mailer) jobs.Handler {
 		}
 		return sendErr
 	}
+}
+
+// paymentLine is how a comp or manual buyer is told they paid; "" for an
+// online order, whose email says nothing more. An invoice is never "Paid".
+func paymentLine(source string, method *string, total int64) string {
+	switch {
+	case source == "comp":
+		return "Complimentary"
+	case source == "manual" && method != nil && *method == "invoice":
+		return "The organizer will invoice you (" + dollars(total) + ")"
+	case source == "manual":
+		return "Paid to the organizer (" + dollars(total) + ")"
+	}
+	return ""
 }

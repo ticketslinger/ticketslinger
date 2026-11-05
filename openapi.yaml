@@ -1476,9 +1476,11 @@ components:
         expected_total_cents: { type: integer, format: int64, minimum: 0, description: "The total you showed the buyer. When it doesn't match, 409 price_changed and nothing is charged. Send it." }
     Order:
       type: object
-      required: [code, status, email, event, totals, tickets, refunded_cents, returned_cents, names_until]
+      required: [code, status, email, event, totals, tickets, refunded_cents, returned_cents, names_until, source, manual_method]
       properties:
         code: { type: string }
+        source: { type: string, enum: [online, comp, manual], description: "How the order was paid: online by card, comp for free tickets an organizer gave away, manual for money the organizer took outside the site." }
+        manual_method: { type: [string, "null"], enum: [cash, cheque, invoice, other, null], description: "How a manual order was paid; null for the others. invoice means the organizer will invoice the buyer, so nothing has been paid yet." }
         names_until: { type: [string, "null"], format: date-time, description: "Until when the buyer can change the names on these tickets (renameTicketByLink): the event's start, or the organizer's names_locked_at when that's earlier. null when they can't now: the order isn't paid, the event isn't on sale, the organizer is suspended, or that time has passed." }
         status: { type: string, enum: [paid, cancelled, refunded, partially_refunded] }
         email: { type: string }
@@ -1489,7 +1491,7 @@ components:
           required: [name, status, starts_at, ends_at, timezone, venue_name, venue_address, organizer_name]
           properties:
             name: { type: string }
-            status: { type: string, enum: [live, ended, cancelled], description: "cancelled once the organizer has cancelled the event." }
+            status: { type: string, enum: [draft, live, ended, cancelled], description: "cancelled once the organizer has cancelled the event. draft only for an order issued by hand before the event went live." }
             starts_at: { type: string, format: date-time }
             ends_at: { type: string, format: date-time }
             timezone: { type: string }
