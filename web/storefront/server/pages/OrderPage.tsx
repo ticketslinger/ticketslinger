@@ -121,7 +121,7 @@ export function OrderPage({
           {sentNotice(sent, order.email)}
         </p>
       )}
-      {order.names_until && (
+      {order.names_until && valid.some((tk) => tk.name_changes_left > 0) && (
         <p class="names">
           Need to fix a name? You can change them until {when(order.names_until, e.timezone)}. The
           QR codes stay the same, so tickets you've already saved or printed still work.
