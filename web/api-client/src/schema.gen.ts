@@ -789,6 +789,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/events/{event}/orders/{order}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Cancels tickets of an order with no refund: the buyer's payment stands and none of it moves. Name the tickets in ticket_ids, or leave it out to cancel every ticket still valid. Those tickets stop scanning at once, even if someone has checked in with one, and their seats go back on sale. The order becomes cancelled when none of its tickets is valid and none was refunded. notify (true if left out) emails the buyer which tickets were cancelled, with your reason if you give one. 409 not_cancellable when nothing is left to cancel. 422 bad_tickets (field ticket_ids) when a ticket isn't in this order or is refunded or cancelled already, or the list is empty or null; 422 too_many over 100 tickets; 422 bad_reason (field reason) over 500 characters or with control characters. 404 for an order that isn't this event's. */
+        post: operations["cancelOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/events/{event}/orders/{order}/tickets/{ticket}": {
         parameters: {
             query?: never;
@@ -1757,6 +1774,24 @@ export interface components {
             amount_cents: number;
             /** Format: int64 */
             fee_cents: number;
+            /** @enum {string} */
+            order_status: "paid" | "cancelled" | "refunded" | "partially_refunded";
+        };
+        CancelOrderRequest: {
+            /** @description The tickets to cancel, 1 to 100 of them. Leave it out to cancel every ticket still valid; an empty list or null is refused (422 bad_tickets), so a slip can't cancel the whole order. */
+            ticket_ids?: string[];
+            /** @description Email the buyer. true if left out. */
+            notify?: boolean;
+            /** @description Plain text the buyer sees in the email. */
+            reason?: string;
+        };
+        CancelOrderResult: {
+            ticket_ids: string[];
+            /**
+             * Format: int64
+             * @description What the buyer paid for these tickets. None of it moves.
+             */
+            charge_cents: number;
             /** @enum {string} */
             order_status: "paid" | "cancelled" | "refunded" | "partially_refunded";
         };
@@ -4223,6 +4258,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OrderEmail"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    cancelOrder: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelOrderRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelOrderResult"];
                 };
             };
             400: components["responses"]["Error"];

@@ -914,6 +914,37 @@ func (s *server) RetryRefund(ctx context.Context, req RetryRefundRequestObject) 
 	return out, nil
 }
 
+// ordersWrite: cancelling a buyer's tickets is a person's call, never an
+// integration's.
+var ordersWrite = Access{Roles: ownerAdmin, Write: true, SessionOnly: true}
+
+// CancelOrder cancels tickets of an order with no refund and frees their seats.
+func (s *server) CancelOrder(ctx context.Context, req CancelOrderRequestObject) (CancelOrderResponseObject, error) {
+	var out CancelOrder200JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, ordersWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		in := sales.CancelTicketsRequest{Notify: req.Body.Notify == nil || *req.Body.Notify}
+		if req.Body.Reason != nil {
+			in.Reason = *req.Body.Reason
+		}
+		// Absent: the whole order. Present, a list of at least one; null or
+		// [] names no tickets (bad_tickets), never "all of them".
+		if req.Body.TicketIds.IsSpecified() {
+			ids, _ := req.Body.TicketIds.Get()
+			in.TicketIDs = append([]uuid.UUID{}, ids...)
+		}
+		res, err := sales.CancelTickets(ctx, tx, org.ID, req.Event, req.Order, in, actorFrom(ctx))
+		if err != nil {
+			return err
+		}
+		out = CancelOrder200JSONResponse{TicketIds: res.TicketIDs, ChargeCents: res.ChargeCents, OrderStatus: CancelOrderResultOrderStatus(res.OrderStatus)}
+		return nil
+	})
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return out, nil
+}
+
 // CancelEvent takes a live event off sale and refunds every paid order, our
 // fee included. Stripe is asked by the jobs this queues, after it commits.
 func (s *server) CancelEvent(ctx context.Context, req CancelEventRequestObject) (CancelEventResponseObject, error) {

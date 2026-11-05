@@ -39,3 +39,7 @@ var RefundEmailForTest = refundEmail
 var RenameErrorForTest = renameError
 
 var RollUpOrderForTest = rollUpOrder
+
+var CleanTextForTest = cleanText
+
+var CancelEmailForTest = cancelEmail

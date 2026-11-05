@@ -51,6 +51,7 @@ var sessionOnly = map[string]string{
 	"refundOrder":        "a refund moves the organizer's money; a person decides",
 	"retryRefund":        "sending a refund again is a person's call too",
 	"cancelEvent":        "cancelling an event refunds everyone; a person decides",
+	"cancelOrder":        "cancelling a buyer's tickets is a person's call",
 	"listMembers":        "who is on the team is for people, not integrations",
 	"addMember":          "giving someone access to the organizer is a person's call",
 	"removeMember":       "taking someone's access away is a person's call",
