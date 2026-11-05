@@ -21,12 +21,14 @@ import (
 
 // OrderView is the buyer's order page. RefundedCents adds up the refunds
 // that haven't failed; ReturnedCents the ones that went through and that the
-// buyer's bank then sent back.
+// buyer's bank then sent back. NamesUntil is when the buyer's chance to
+// change names ends, or nil when they can't now.
 type OrderView struct {
 	Code, Status, Email                                          string
 	Event                                                        OrderEvent
 	SubtotalCents, DiscountCents, TaxCents, FeeCents, TotalCents int64
 	RefundedCents, ReturnedCents                                 int64
+	NamesUntil                                                   *time.Time
 	Tickets                                                      []OrderTicket
 }
 
@@ -40,6 +42,7 @@ type OrderTicket struct {
 	TicketTypeName, AttendeeName, Status string
 	Refunded                             bool   // void because it was refunded
 	QR                                   string // base64url of the ticket's secret, 22 characters; "" for a void ticket
+	NameChangesLeft                      int    // of the buyer's five
 }
 
 var orderCode = regexp.MustCompile(`^TS-[0-9A-HJKMNP-TV-Z]{5}$`)
@@ -58,10 +61,10 @@ func (s *Service) Order(ctx context.Context, code, token string) (OrderView, err
 	e := &out.Event
 	err := s.Pool.QueryRow(ctx, `select code, status, email, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents,
 		event_name, timezone, venue_name, venue_address, starts_at, ends_at, organizer_name, event_status,
-		refunded_cents, returned_cents, tickets from order_by_link($1, $2)`, code, hash).Scan(&out.Code, &out.Status, &out.Email,
+		refunded_cents, returned_cents, names_until, tickets from order_by_link($1, $2)`, code, hash).Scan(&out.Code, &out.Status, &out.Email,
 		&out.SubtotalCents, &out.DiscountCents, &out.TaxCents, &out.FeeCents, &out.TotalCents,
 		&e.Name, &e.Timezone, &e.VenueName, &e.VenueAddress, &e.StartsAt, &e.EndsAt, &e.Organizer, &e.Status,
-		&out.RefundedCents, &out.ReturnedCents, &tickets)
+		&out.RefundedCents, &out.ReturnedCents, &out.NamesUntil, &tickets)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return OrderView{}, catalogue.ErrNotFound
 	}
@@ -75,6 +78,7 @@ func (s *Service) Order(ctx context.Context, code, token string) (OrderView, err
 		Status         string    `json:"status"`
 		Refunded       bool      `json:"refunded"`
 		Secret         *string   `json:"secret"` // hex; null for a void ticket
+		NameChanges    int       `json:"name_changes"`
 	}
 	if err := json.Unmarshal(tickets, &rows); err != nil {
 		return OrderView{}, err
@@ -82,7 +86,7 @@ func (s *Service) Order(ctx context.Context, code, token string) (OrderView, err
 	out.Tickets = make([]OrderTicket, len(rows))
 	for i, r := range rows {
 		out.Tickets[i] = OrderTicket{ID: r.ID, TicketTypeName: r.TicketTypeName, AttendeeName: r.AttendeeName, Status: r.Status,
-			Refunded: r.Refunded}
+			Refunded: r.Refunded, NameChangesLeft: 5 - r.NameChanges}
 		if r.Secret != nil {
 			secret, err := hex.DecodeString(*r.Secret)
 			if err != nil {

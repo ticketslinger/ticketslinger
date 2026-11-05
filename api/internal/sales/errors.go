@@ -77,7 +77,20 @@ var (
 	errBadEmail     = invalid("bad_email", "email", "That email address doesn't look right. Your tickets go there, so check it.")
 	errBadTotal     = invalid("bad_total", "expected_total_cents", "expected_total_cents can't be negative. Send the total you showed the buyer, in cents.")
 	errBelowMinimum = invalid("below_minimum_charge", "", "Card payments start at $0.50, and this order comes to less. Add a ticket or drop the code.")
-	errAttendees    = invalid("bad_attendee", "attendees", "Give at most one name per ticket, each up to 120 characters.")
+	errAttendees    = invalid("bad_attendee", "attendees", badName)
+	errTooManyNames = invalid("bad_attendee", "attendees", "Give at most one name per ticket.")
+	errAttendeeName = invalid("bad_attendee", "attendee_name", badName)
+)
+
+const badName = "Keep the name under 120 characters, using ordinary letters and punctuation."
+
+// A ticket's name: the buyer can't change it any more (the event started,
+// the organizer locked names, or the order or ticket can't be used), has
+// changed it as often as allowed, or the ticket is void.
+var (
+	ErrNamesLocked error = catalogue.ErrConflict{Code: "names_locked", Message: "Names on these tickets can't be changed any more."}
+	ErrNameLimit   error = catalogue.ErrConflict{Code: "name_change_limit", Message: "That name has been changed 5 times, which is as many as we allow."}
+	ErrTicketVoid  error = catalogue.ErrConflict{Code: "ticket_void", Message: "This ticket has been refunded or cancelled, so its name can't change."}
 )
 
 // answerField names the answer an error is about: answers.<question id>.<ticket index>,

@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/oapi-codegen/nullable"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 )
@@ -31,8 +32,11 @@ type Event struct {
 	Currency         string    `json:"currency"`
 	TaxRateBP        int       `json:"tax_rate_bp"`
 	PricesIncludeTax bool      `json:"prices_include_tax"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	// NamesLockedAt ends the buyer's chance to change ticket names before
+	// the event starts; nil leaves it open until the start.
+	NamesLockedAt *time.Time `json:"names_locked_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 // EventInput is a new event. FeeMode "" means pass.
@@ -41,24 +45,27 @@ type EventInput struct {
 	StartsAt, EndsAt                                                    time.Time
 	TaxRateBP                                                           int
 	PricesIncludeTax                                                    bool
+	NamesLockedAt                                                       *time.Time
 }
 
 // EventPatch changes only the fields that are set. The slug can change only
-// while the event is a draft.
+// while the event is a draft. For NamesLockedAt, absent leaves it alone and
+// an explicit null clears it.
 type EventPatch struct {
 	Slug, Name, Description, VenueName, VenueAddress, Timezone, FeeMode, Status *string
 	StartsAt, EndsAt                                                            *time.Time
 	TaxRateBP                                                                   *int
 	PricesIncludeTax                                                            *bool
+	NamesLockedAt                                                               nullable.Nullable[time.Time]
 }
 
 const cols = `id, slug, name, description, venue_name, venue_address, timezone, starts_at, ends_at,
-	status, fee_mode, currency, tax_rate_bp, prices_include_tax, created_at, updated_at`
+	status, fee_mode, currency, tax_rate_bp, prices_include_tax, names_locked_at, created_at, updated_at`
 
 func scan(row pgx.Row) (Event, error) {
 	var e Event
 	err := row.Scan(&e.ID, &e.Slug, &e.Name, &e.Description, &e.VenueName, &e.VenueAddress, &e.Timezone, &e.StartsAt, &e.EndsAt,
-		&e.Status, &e.FeeMode, &e.Currency, &e.TaxRateBP, &e.PricesIncludeTax, &e.CreatedAt, &e.UpdatedAt)
+		&e.Status, &e.FeeMode, &e.Currency, &e.TaxRateBP, &e.PricesIncludeTax, &e.NamesLockedAt, &e.CreatedAt, &e.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Event{}, ErrNotFound
 	}
@@ -96,6 +103,16 @@ func validate(e *Event) error {
 	return nil
 }
 
+// namesLock checks a names_locked_at the request sent against the event's
+// start. One already stored isn't checked again when the start moves: the
+// lock is the earlier of the two anyway.
+func namesLock(at *time.Time, e Event) error {
+	if at != nil && !at.Before(e.StartsAt) {
+		return invalid("names_lock_after_start", "names_locked_at", "Pick a time before the event starts.")
+	}
+	return nil
+}
+
 // knownZone: LoadLocation quietly accepts "" and "Local" as UTC and the
 // server's zone; neither is a place.
 func knownZone(name string) bool {
@@ -110,17 +127,22 @@ func knownZone(name string) bool {
 // tx must be scoped to org.
 func CreateEvent(ctx context.Context, tx pgx.Tx, org uuid.UUID, actor audit.Actor, in EventInput) (Event, error) {
 	e := Event{Slug: in.Slug, Name: in.Name, Description: in.Description, VenueName: in.VenueName, VenueAddress: in.VenueAddress,
-		Timezone: in.Timezone, StartsAt: in.StartsAt, EndsAt: in.EndsAt, FeeMode: in.FeeMode, TaxRateBP: in.TaxRateBP, PricesIncludeTax: in.PricesIncludeTax}
+		Timezone: in.Timezone, StartsAt: in.StartsAt, EndsAt: in.EndsAt, FeeMode: in.FeeMode, TaxRateBP: in.TaxRateBP, PricesIncludeTax: in.PricesIncludeTax,
+		NamesLockedAt: in.NamesLockedAt}
 	if e.FeeMode == "" {
 		e.FeeMode = "pass"
 	}
 	if err := validate(&e); err != nil {
 		return Event{}, err
 	}
+	if err := namesLock(e.NamesLockedAt, e); err != nil {
+		return Event{}, err
+	}
 	e, err := scan(tx.QueryRow(ctx, `insert into events(organizer_id, slug, name, description, venue_name, venue_address, timezone,
-			starts_at, ends_at, fee_mode, tax_rate_bp, prices_include_tax)
-		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning `+cols,
-		org, e.Slug, e.Name, e.Description, e.VenueName, e.VenueAddress, e.Timezone, e.StartsAt, e.EndsAt, e.FeeMode, e.TaxRateBP, e.PricesIncludeTax))
+			starts_at, ends_at, fee_mode, tax_rate_bp, prices_include_tax, names_locked_at)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning `+cols,
+		org, e.Slug, e.Name, e.Description, e.VenueName, e.VenueAddress, e.Timezone, e.StartsAt, e.EndsAt, e.FeeMode, e.TaxRateBP, e.PricesIncludeTax,
+		e.NamesLockedAt))
 	if err != nil {
 		return Event{}, dbError(err)
 	}
@@ -186,8 +208,14 @@ func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 	if patch.PricesIncludeTax != nil {
 		e.PricesIncludeTax = *patch.PricesIncludeTax
 	}
+	setNull(&e.NamesLockedAt, patch.NamesLockedAt)
 	if err := validate(&e); err != nil {
 		return Event{}, err
+	}
+	if patch.NamesLockedAt.IsSpecified() {
+		if err := namesLock(e.NamesLockedAt, e); err != nil {
+			return Event{}, err
+		}
 	}
 	if e.Slug != before.Slug && before.Status != "draft" {
 		return Event{}, ErrConflict{"slug_locked", "slug", "The web address can only change while the event is a draft."}
@@ -217,9 +245,11 @@ func UpdateEvent(ctx context.Context, tx pgx.Tx, org, id uuid.UUID, actor audit.
 		}
 	}
 	e, err = scan(tx.QueryRow(ctx, `update events set slug = $13, name = $2, description = $3, venue_name = $4, venue_address = $5, timezone = $6,
-			starts_at = $7, ends_at = $8, status = $9, fee_mode = $10, tax_rate_bp = $11, prices_include_tax = $12, updated_at = clock_timestamp()
+			starts_at = $7, ends_at = $8, status = $9, fee_mode = $10, tax_rate_bp = $11, prices_include_tax = $12, names_locked_at = $14,
+			updated_at = clock_timestamp()
 		where id = $1 returning `+cols,
-		id, e.Name, e.Description, e.VenueName, e.VenueAddress, e.Timezone, e.StartsAt, e.EndsAt, e.Status, e.FeeMode, e.TaxRateBP, e.PricesIncludeTax, e.Slug))
+		id, e.Name, e.Description, e.VenueName, e.VenueAddress, e.Timezone, e.StartsAt, e.EndsAt, e.Status, e.FeeMode, e.TaxRateBP, e.PricesIncludeTax, e.Slug,
+		e.NamesLockedAt))
 	if err != nil {
 		return Event{}, dbError(err)
 	}
@@ -246,11 +276,17 @@ func saleTermsChange(a, b Event) string {
 }
 
 // sameEvent: a patch that changed nothing. Instants compare by Equal, since
-// the same moment can arrive in another zone.
+// the same moment can arrive in another zone; NamesLockedAt by value, since
+// == on the struct would compare its pointers.
 func sameEvent(a, b Event) bool {
 	if a.StartsAt.Equal(b.StartsAt) && a.EndsAt.Equal(b.EndsAt) {
 		a.StartsAt, a.EndsAt = b.StartsAt, b.EndsAt
 	}
+	x, y := a.NamesLockedAt, b.NamesLockedAt
+	if (x == nil) != (y == nil) || x != nil && !x.Equal(*y) {
+		return false
+	}
+	a.NamesLockedAt, b.NamesLockedAt = nil, nil
 	return a == b
 }
 

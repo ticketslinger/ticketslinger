@@ -344,12 +344,12 @@ func checkDetails(ctx context.Context, tx pgx.Tx, event uuid.UUID, items []Item,
 	}
 	out := Details{Email: d.Email, Attendees: []string{}, Answers: []Answer{}}
 	if len(d.Attendees) > len(tickets) {
-		return out, errAttendees
+		return out, errTooManyNames
 	}
 	for _, a := range d.Attendees {
-		a = strings.TrimSpace(a)
-		if utf8.RuneCountInString(a) > 120 {
-			return out, errAttendees
+		a, err := CleanName(a)
+		if err != nil {
+			return out, err
 		}
 		out.Attendees = append(out.Attendees, a)
 	}
