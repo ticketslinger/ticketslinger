@@ -133,6 +133,15 @@ func TestCatalogHardening(t *testing.T) {
 		}
 	}
 
+	// The buyer's rename runs as the storefront role only.
+	var definer, app, public, system bool
+	if err := owner.QueryRow(ctx, `select p.prosecdef, has_function_privilege('ts_app', p.oid, 'EXECUTE'),
+			has_function_privilege('ts_public', p.oid, 'EXECUTE'), has_function_privilege('ts_system', p.oid, 'EXECUTE')
+		from pg_proc p where p.oid = to_regprocedure('rename_ticket_by_link(text,bytea,uuid,text)')`).Scan(&definer, &app, &public, &system); err != nil ||
+		!definer || app || !public || system {
+		t.Errorf("rename_ticket_by_link: definer %v, ts_app %v, ts_public %v, ts_system %v, %v", definer, app, public, system, err)
+	}
+
 	// Staff mode's functions are all definers (so the loop above covers
 	// them), ts_app runs all but the scope function, which only
 	// app_organizer() calls, and neither sale role runs any.
@@ -202,8 +211,9 @@ func TestSaleRolesStayNarrow(t *testing.T) {
 	// it reads exactly those columns, plus memberships for org_reads below,
 	// has its two policies, and runs two SECURITY DEFINER functions:
 	// app_organizer(), which the TO PUBLIC tenant policies call (NULL here),
-	// and queue_order_email_by_link, the buyer's "email me again", which
-	// needs the order's code and link token.
+	// queue_order_email_by_link, the buyer's "email me again", and
+	// rename_ticket_by_link, the buyer's rename; both need the order's code
+	// and link token.
 	var cols, pols, funcs []string
 	if err := owner.QueryRow(ctx, `select
 		array(select c.relname || '.' || a.attname from pg_class c join pg_attribute a on a.attrelid = c.oid
@@ -223,7 +233,7 @@ func TestSaleRolesStayNarrow(t *testing.T) {
 	if want := []string{"events.events_public", "organizers.organizers_public"}; !slices.Equal(pols, want) {
 		t.Errorf("ts_public policies %v, want only %v", pols, want)
 	}
-	if want := []string{"app_organizer()", "queue_order_email_by_link(text,bytea)"}; !slices.Equal(funcs, want) {
+	if want := []string{"app_organizer()", "queue_order_email_by_link(text,bytea)", "rename_ticket_by_link(text,bytea,uuid,text)"}; !slices.Equal(funcs, want) {
 		t.Errorf("ts_public runs SECURITY DEFINER functions %v, want only %v", funcs, want)
 	}
 	for _, priv := range []string{"INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"} {
