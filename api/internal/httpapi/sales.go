@@ -958,7 +958,11 @@ func (s *server) CancelEvent(ctx context.Context, req CancelEventRequestObject) 
 		if err != nil {
 			return err
 		}
-		out = CancelEvent200JSONResponse{Event: toEvent(e), Orders: res.Orders, AmountCents: res.AmountCents, FeeCents: res.FeeCents}
+		manual := make([]ManualOrderTotal, len(res.ManualOrders))
+		for i, m := range res.ManualOrders {
+			manual[i] = ManualOrderTotal{Id: m.ID, Code: m.Code, TotalCents: m.TotalCents}
+		}
+		out = CancelEvent200JSONResponse{Event: toEvent(e), Orders: res.Orders, AmountCents: res.AmountCents, FeeCents: res.FeeCents, ManualOrders: manual}
 		return nil
 	})
 	if err != nil {

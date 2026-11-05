@@ -43,3 +43,5 @@ var RollUpOrderForTest = rollUpOrder
 var CleanTextForTest = cleanText
 
 var CancelEmailForTest = cancelEmail
+
+var ManualCancelEmail = manualCancelEmail

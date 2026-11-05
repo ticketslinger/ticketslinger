@@ -43,6 +43,8 @@ var (
 		Message: "Some of those tickets aren't in this order, or they're refunded already. Reload the order and pick again."}
 	errTooManyTickets = catalogue.ErrInvalid{Code: "too_many", Field: "ticket_ids",
 		Message: "Pick up to 100 tickets at a time, or leave the list out to refund the whole order."}
+	errNoPayment = catalogue.ErrConflict{Code: "no_payment",
+		Message: "This order wasn't paid through TicketSlinger, so there's nothing to refund here. Cancel its tickets instead."}
 	errNotFailed = catalogue.ErrConflict{Code: "not_failed", Message: "Only a refund that failed can be sent again."}
 	errNoRoom    = catalogue.ErrConflict{Code: "no_room",
 		Message: "Other refunds on this order have taken what this one needed since it failed, so there isn't enough left to send it again."}
@@ -60,13 +62,16 @@ func RefundTickets(ctx context.Context, tx pgx.Tx, org, event, order uuid.UUID, 
 	case in.TicketIDs != nil && len(in.TicketIDs) == 0:
 		return RefundResult{}, errBadTickets
 	}
-	var status, feeMode string
-	err := tx.QueryRow(ctx, `select status, fee_mode from orders where id = $1 and event_id = $2 for update`, order, event).Scan(&status, &feeMode)
+	var status, feeMode, source string
+	err := tx.QueryRow(ctx, `select status, fee_mode, source from orders where id = $1 and event_id = $2 for update`, order, event).Scan(&status, &feeMode, &source)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RefundResult{}, catalogue.ErrNotFound
 	}
 	if err != nil {
 		return RefundResult{}, err
+	}
+	if source != "online" {
+		return RefundResult{}, errNoPayment
 	}
 	if status != "paid" && status != "partially_refunded" {
 		return RefundResult{}, errNotRefundable
@@ -248,6 +253,15 @@ type CancelResult struct {
 	AmountCents, FeeCents int64 // asked back from Stripe in all
 	PendingOrders         int   // payments not yet made, stopped
 	Failed                []RefundFailure
+	ManualOrders          []ManualOrderTotal // cancelled, with no money to send back: the organizer repays them
+}
+
+// ManualOrderTotal is a manual order an event cancel voided. The organizer
+// took its money, so they pay it back.
+type ManualOrderTotal struct {
+	ID         uuid.UUID `json:"order_id"`
+	Code       string    `json:"code"`
+	TotalCents int64     `json:"total_cents"`
 }
 
 // RefundFailure is an order an event refund left out because the database
@@ -305,7 +319,8 @@ func CancelEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, confirmNa
 	}
 	return res, audit.Write(ctx, tx, audit.Entry{Organizer: org, Actor: actor, Action: "event.cancelled", EntityType: "event", EntityID: event,
 		Before: map[string]string{"status": status}, After: map[string]any{"status": "cancelled", "orders": res.Orders,
-			"amount_cents": res.AmountCents, "fee_cents": res.FeeCents, "pending_orders": res.PendingOrders}})
+			"amount_cents": res.AmountCents, "fee_cents": res.FeeCents, "pending_orders": res.PendingOrders,
+			"manual_orders": len(res.ManualOrders)}})
 }
 
 // refundEvent refunds every paid order of event in full, our fee included,
@@ -314,20 +329,25 @@ func CancelEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, confirmNa
 // database refuses (say, its payment has nothing left) is rolled back on
 // its own and listed in res.Failed, and the rest go ahead.
 func refundEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, reason string, actor audit.Actor) (CancelResult, error) {
-	res := CancelResult{Failed: []RefundFailure{}}
+	res := CancelResult{Failed: []RefundFailure{}, ManualOrders: []ManualOrderTotal{}}
 	// Pending orders are locked too, so a confirmation waits and then sees
 	// the event cancelled (or its organizer suspended) and refunds itself;
 	// only paid ones are refunded here.
-	rows, _ := tx.Query(ctx, `select id, status from orders where event_id = $1
+	rows, _ := tx.Query(ctx, `select id, status, source, code, total_cents from orders where event_id = $1
 		and status in ('pending', 'paid', 'partially_refunded') order by id for update`, event)
-	var paid, pending []uuid.UUID
-	var id uuid.UUID
+	type paidOrder struct {
+		ManualOrderTotal
+		source string
+	}
+	var paid []paidOrder
+	var pending []uuid.UUID
+	var p paidOrder
 	var st string
-	if _, err := pgx.ForEachRow(rows, []any{&id, &st}, func() error {
+	if _, err := pgx.ForEachRow(rows, []any{&p.ID, &st, &p.source, &p.Code, &p.TotalCents}, func() error {
 		if st == "pending" {
-			pending = append(pending, id)
+			pending = append(pending, p.ID)
 		} else {
-			paid = append(paid, id)
+			paid = append(paid, p)
 		}
 		return nil
 	}); err != nil {
@@ -338,12 +358,18 @@ func refundEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, reason st
 			return res, err
 		}
 	}
-	for _, o := range paid {
+	for _, po := range paid {
+		o := po.ID
 		sp, err := tx.Begin(ctx)
 		if err != nil {
 			return res, err
 		}
-		r, err := RefundTickets(ctx, sp, org, event, o, RefundRequest{FeeBack: true}, reason, actor)
+		var r RefundResult
+		if po.source == "online" {
+			r, err = RefundTickets(ctx, sp, org, event, o, RefundRequest{FeeBack: true}, reason, actor)
+		} else {
+			err = cancelOffline(ctx, sp, org, event, po.ManualOrderTotal, po.source == "manual", reason, actor)
+		}
 		if err != nil {
 			if rbErr := sp.Rollback(ctx); rbErr != nil {
 				return res, rbErr
@@ -359,6 +385,9 @@ func refundEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, reason st
 		}
 		if err := sp.Commit(ctx); err != nil {
 			return res, err
+		}
+		if po.source == "manual" {
+			res.ManualOrders = append(res.ManualOrders, po.ManualOrderTotal)
 		}
 		if r.RefundID != nil { // a free order is voided, with nothing to send back
 			res.Orders++
@@ -379,7 +408,7 @@ func refusedOrder(err error) (why string, ok bool) {
 	switch {
 	case errors.Is(err, errPaymentUsedUp):
 		return "payment_used_up", true
-	case errors.Is(err, errNotRefundable):
+	case errors.Is(err, errNotRefundable), errors.Is(err, errNotCancellable):
 		return "", true
 	case errors.As(err, &pg) && (strings.HasPrefix(pg.Code, "23") || pg.Code == "P0001"):
 		return "database refused it (" + pg.Code + "): " + pg.Message, true
@@ -463,4 +492,40 @@ func rollUpOrder(ctx context.Context, tx pgx.Tx, order uuid.UUID) (string, error
 			else 'cancelled' end
 		where id = $1 returning status`, order).Scan(&status)
 	return status, err
+}
+
+// cancelOffline voids a comp or manual order's tickets inside the event
+// cancel's savepoint. A comp buyer paid nothing and isn't mailed, as with a
+// free online order; a manual buyer is told their money comes from the organizer.
+func cancelOffline(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, o ManualOrderTotal, manual bool, reason string, actor audit.Actor) error {
+	if _, err := cancelTickets(ctx, tx, org, event, o.ID, CancelTicketsRequest{}, reason, actor); err != nil || !manual {
+		return err
+	}
+	var email *string
+	var eventName, organizer string
+	if err := tx.QueryRow(ctx, `select o.email::text, e.name, g.name from orders o join events e on e.id = o.event_id
+		join organizers g on g.id = o.organizer_id where o.id = $1`, o.ID).Scan(&email, &eventName, &organizer); err != nil {
+		return err
+	}
+	if email == nil || *email == "" {
+		return nil
+	}
+	subject, text := manualCancelEmail(reason, eventName, organizer, o.TotalCents)
+	return jobs.Enqueue(ctx, tx, "send_email", map[string]string{"to": *email, "subject": subject, "text": text})
+}
+
+// manualCancelEmail tells a manual order's buyer the event is off and that
+// the organizer, who has their money, will be in touch.
+func manualCancelEmail(reason, event, organizer string, total int64) (subject, text string) {
+	if reason == "platform" {
+		subject = "Your tickets for " + event
+		text = event + " isn't being sold through TicketSlinger any more, so your tickets won't get you in."
+	} else {
+		subject = event + " has been cancelled"
+		text = event + " has been cancelled, so your tickets won't get you in."
+	}
+	if total > 0 {
+		text += " " + organizer + " will be in touch about your " + dollars(total) + "."
+	}
+	return subject, text
 }
