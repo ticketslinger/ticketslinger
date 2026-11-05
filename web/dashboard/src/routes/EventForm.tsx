@@ -1,6 +1,6 @@
 import type { components } from "@ticketslinger/api-client";
 import { useState } from "react";
-import { api, must } from "../api";
+import { ApiFailure, api, must } from "../api";
 import { LOCAL } from "../forms";
 import { browserZone, fromLocalInput, timeZones, toLocalInput } from "../time";
 import { ErrorText, Field, navigate, useAction, useUnsavedChanges } from "../ui";
@@ -13,6 +13,19 @@ export const FEE_HINTS = {
   pass: "Buyers see one price with the fee already in it. You get your full ticket price.",
   absorb: "It comes out of your ticket price, so buyers pay no fee.",
 } as const;
+
+export const NAMES_LOCK_HINT = "Leave it empty and buyers can change names right up to the start.";
+export const NAMES_LOCK_ERROR = "Pick a time before the event starts.";
+
+/** The names lock as the API wants it: null when cleared, else an instant read in the event's zone. */
+export const namesLockValue = (local: string, tz: string) =>
+  local ? fromLocalInput(local, tz) : null;
+
+/** Swaps the server's words for ours on the names lock. */
+export const namesLockFailure = (e: Error): Error =>
+  e instanceof ApiFailure && e.code === "names_lock_after_start"
+    ? new ApiFailure(e.code, NAMES_LOCK_ERROR, e.status, e.field)
+    : e;
 
 /** 825 → "8.25". Integer maths, so no float ever touches the rate. */
 export function bpToPercent(bp: number): string {
@@ -44,6 +57,7 @@ type Draft = {
   fee_mode: Event["fee_mode"];
   tax: string;
   prices_include_tax: boolean;
+  names: string;
 };
 
 const draftOf = (e?: Event): Draft =>
@@ -60,6 +74,7 @@ const draftOf = (e?: Event): Draft =>
         starts: toLocalInput(e.starts_at, e.timezone),
         ends: toLocalInput(e.ends_at, e.timezone),
         tax: bpToPercent(e.tax_rate_bp),
+        names: e.names_locked_at ? toLocalInput(e.names_locked_at, e.timezone) : "",
       }
     : {
         name: "",
@@ -73,6 +88,7 @@ const draftOf = (e?: Event): Draft =>
         fee_mode: "pass",
         tax: "0",
         prices_include_tax: false,
+        names: "",
       };
 
 /** Creates an event, or edits one when `event` is given. Check-in staff see it read-only. */
@@ -88,11 +104,11 @@ export function EventForm({
   const [d, setD] = useState(() => draftOf(event));
   // The last state the server confirmed, so we know when there's something unsaved.
   const [base, setBase] = useState(d);
-  const [bad, setBad] = useState<"starts" | "ends" | "tax" | null>(null);
+  const [bad, setBad] = useState<"starts" | "ends" | "tax" | "names" | null>(null);
   const leaveDialog = useUnsavedChanges(canEdit(org) && JSON.stringify(d) !== JSON.stringify(base));
   const [slugEdited, setSlugEdited] = useState(Boolean(event));
   const [saved, setSaved] = useState(false);
-  const { busy, error, setError, run } = useAction();
+  const { busy, error, field, setError, run } = useAction();
   const set = (patch: Partial<Draft>) => {
     setSaved(false);
     setBad(null);
@@ -110,7 +126,9 @@ export function EventForm({
         ? ["ends", "Enter when the event ends, as a date and a time."]
         : tax_rate_bp === null
           ? ["tax", "Use a tax rate from 0 to 100, with up to two decimals, like 8.25."]
-          : null;
+          : d.names && !LOCAL.test(d.names)
+            ? ["names", "Enter when buyers stop changing names, as a date and a time."]
+            : null;
     if (problem || tax_rate_bp === null) {
       setBad(problem?.[0] ?? "tax");
       setError(problem?.[1] ?? "");
@@ -128,24 +146,30 @@ export function EventForm({
         fee_mode: d.fee_mode,
         tax_rate_bp,
         prices_include_tax: d.prices_include_tax,
+        names_locked_at: namesLockValue(d.names, d.timezone),
       };
       const path = { organizer: org.slug };
-      if (!event) {
-        const e = must(
-          await api.POST("/organizers/{organizer}/events", {
-            params: { path },
-            body: { ...body, slug: d.slug },
+      let e: Event;
+      try {
+        if (!event) {
+          const made = must(
+            await api.POST("/organizers/{organizer}/events", {
+              params: { path },
+              body: { ...body, slug: d.slug },
+            }),
+          );
+          navigate(`/o/${org.slug}/events/${made.id}`, false, true);
+          return;
+        }
+        e = must(
+          await api.PATCH("/organizers/{organizer}/events/{event}", {
+            params: { path: { ...path, event: event.id } },
+            body: slugLocked ? body : { ...body, slug: d.slug },
           }),
         );
-        navigate(`/o/${org.slug}/events/${e.id}`, false, true);
-        return;
+      } catch (err) {
+        throw namesLockFailure(err as Error);
       }
-      const e = must(
-        await api.PATCH("/organizers/{organizer}/events/{event}", {
-          params: { path: { ...path, event: event.id } },
-          body: slugLocked ? body : { ...body, slug: d.slug },
-        }),
-      );
       // Show what was stored, e.g. a time that fell in a clock change.
       const fresh = draftOf(e);
       setD(fresh);
@@ -316,7 +340,22 @@ export function EventForm({
           <span>Ticket prices already include tax</span>
         </label>
 
-        <ErrorText>{error}</ErrorText>
+        <fieldset className="choices">
+          <legend>Ticket names</legend>
+          <Field
+            id="event-names"
+            aria-invalid={bad === "names" || field === "names_locked_at" || undefined}
+            label="Buyers can change names until"
+            hint={NAMES_LOCK_HINT}
+            aria-describedby="event-names-hint event-names-error"
+            type="datetime-local"
+            value={d.names}
+            onChange={(e) => set({ names: e.target.value })}
+          />
+          <ErrorText id="event-names-error">{field === "names_locked_at" ? error : ""}</ErrorText>
+        </fieldset>
+
+        <ErrorText>{field === "names_locked_at" ? "" : error}</ErrorText>
         <p className="success" role="status">
           {saved ? "Saved." : ""}
         </p>

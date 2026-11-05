@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { describeAction as say, staffRow, who } from "./Audit";
+import { renameLine, describeAction as say, staffRow, who } from "./Audit";
 
 test("audit actions read as plain words", () => {
   expect(say("event.created")).toBe("Event created");
@@ -19,6 +19,7 @@ test("audit actions read as plain words", () => {
   expect(say("order.cancelled")).toBe("Order cancelled");
   expect(say("member.added")).toBe("Team member added");
   expect(say("member.removed")).toBe("Team member removed");
+  expect(say("ticket.renamed")).toBe("Ticket name changed");
   expect(say("seat.teleported")).toBe("seat.teleported");
 });
 
@@ -57,4 +58,26 @@ test("support's rows say what support did, and the Who cell says it was support"
   expect(
     who({ actor_type: "system", actor_name: null, action: "event.refunded_by_support" }, me),
   ).toBe("TicketSlinger support");
+});
+
+test("a rename reads as a sentence, and an empty name reads as no name", () => {
+  expect(renameLine({ from: "Alex Smyth", to: "Alex Smith" })).toBe(
+    `Changed a ticket's name from "Alex Smyth" to "Alex Smith"`,
+  );
+  expect(renameLine({ from: "", to: "Alex" })).toBe(
+    `Changed a ticket's name from no name to "Alex"`,
+  );
+  expect(renameLine({ from: "Alex", to: "" })).toBe(
+    `Changed a ticket's name from "Alex" to no name`,
+  );
+  expect(renameLine({ from: "Alex", to: "Al" }, true)).toBe(
+    `The buyer changed a ticket's name from "Alex" to "Al"`,
+  );
+});
+
+test("the buyer's rename is credited to the buyer, not to Automatic", () => {
+  expect(who({ actor_type: "system", action: "ticket.renamed", by_buyer: true }, "u1")).toBe(
+    "The buyer",
+  );
+  expect(who({ actor_type: "system", action: "ticket.renamed" }, "u1")).toBe("Automatic");
 });

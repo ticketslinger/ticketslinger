@@ -14,6 +14,7 @@ const THING: Record<string, string> = {
   api_key: "API key",
   order: "Order",
   refund: "Refund",
+  ticket: "Ticket",
   member: "Team member",
 };
 const DONE: Record<string, string> = {
@@ -27,6 +28,7 @@ const DONE: Record<string, string> = {
   refunded: "refunded",
   retried: "sent again",
   email_resent: "ticket email sent again",
+  renamed: "name changed",
   failed: "failed",
   cancelled: "cancelled",
   succeeded_late: "went through after all",
@@ -49,6 +51,13 @@ export function describeAction(action: string): string {
   return THING[thing] && DONE[done] ? `${THING[thing]} ${DONE[done]}` : action;
 }
 
+const nameOf = (n: string) => (n === "" ? "no name" : `"${n}"`);
+
+/** The sentence for a ticket rename; an empty name reads as "no name". */
+export function renameLine(change: { from: string; to: string }, byBuyer = false) {
+  return `${byBuyer ? "The buyer changed" : "Changed"} a ticket's name from ${nameOf(change.from)} to ${nameOf(change.to)}`;
+}
+
 const when = (iso: string) =>
   new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
     new Date(iso),
@@ -56,7 +65,7 @@ const when = (iso: string) =>
 
 type Actor = Pick<
   components["schemas"]["AuditEntry"],
-  "actor_type" | "actor_user_id" | "actor_api_key_id" | "actor_name" | "actor_email"
+  "actor_type" | "actor_user_id" | "actor_api_key_id" | "actor_name" | "actor_email" | "by_buyer"
 > & { action?: string };
 
 /**
@@ -67,6 +76,7 @@ type Actor = Pick<
 export function who(e: Actor, meId: string) {
   if (e.actor_type === "staff")
     return e.actor_name ? `TicketSlinger support (${e.actor_name})` : "TicketSlinger support";
+  if (e.actor_type === "system" && e.by_buyer) return "The buyer";
   if (e.actor_type === "system")
     return e.action === "event.refunded_by_support" ? "TicketSlinger support" : "Automatic";
   if (e.actor_api_key_id) return e.actor_name ? `API key: ${e.actor_name}` : "An API key";
@@ -129,6 +139,7 @@ export function Audit({ org, me }: { org: Org; me: Me }) {
                   <td>{when(e.at)}</td>
                   <td>
                     {(e.actor_type === "staff" && staffRow(e, reasons.get(e.entity_id))) ||
+                      (e.name_change && renameLine(e.name_change, e.by_buyer)) ||
                       describeAction(e.action)}
                   </td>
                   <td>

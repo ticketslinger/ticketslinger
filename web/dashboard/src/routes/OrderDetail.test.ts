@@ -1,13 +1,19 @@
 import { expect, test } from "bun:test";
 import type { components } from "@ticketslinger/api-client";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
 import {
+  canRenameTicket,
   canResend,
   emailLine,
   failureText,
+  RENAME_HINT,
   reasonText,
   refundPreview,
   retryable,
+  TicketLine,
 } from "./OrderDetail";
+import type { Org } from "./Organizer";
 
 type Detail = components["schemas"]["OrderDetail"];
 type Refund = components["schemas"]["Refund"];
@@ -132,4 +138,50 @@ test("the tickets can be sent again only once the last email has settled", () =>
   for (const s of ["queued", "failing", null] as const) {
     expect(canResend(e(s))).toBe(false);
   }
+});
+
+test("only owners and admins can edit the name of a valid ticket", () => {
+  expect(canRenameTicket({ status: "valid" }, { role: "owner" } as Org)).toBe(true);
+  expect(canRenameTicket({ status: "valid" }, { role: "admin" } as Org)).toBe(true);
+  expect(canRenameTicket({ status: "valid" }, { role: "checkin" } as Org)).toBe(false);
+  expect(canRenameTicket({ status: "void" }, { role: "owner" } as Org)).toBe(false);
+});
+
+test("rename hint is the spec's", () => {
+  expect(RENAME_HINT).toBe(
+    "Their QR code doesn't change. The email they already have shows the old name until you resend it.",
+  );
+});
+
+const line = (over: Partial<Parameters<typeof TicketLine>[0]>) =>
+  renderToString(
+    createElement(TicketLine, {
+      t: ticket("a", 2500, 100, "valid"),
+      org: { role: "owner" } as Org,
+      path: { organizer: "o", event: "e", order: "x" },
+      picked: true,
+      busy: false,
+      renaming: false,
+      refocus: false,
+      voidLabel: "",
+      onPick: () => {},
+      onEdit: () => {},
+      onClose: () => {},
+      onSaved: async () => {},
+      ...over,
+    }),
+  );
+
+test("a ticket picked for refund keeps its checked checkbox on screen while its name is edited", () => {
+  for (const renaming of [false, true]) {
+    const html = line({ renaming });
+    expect(html).toMatch(/<input type="checkbox"[^>]*checked/);
+  }
+  expect(line({ renaming: true })).toContain('maxLength="120"');
+});
+
+test("Edit name is off while a refund is going through, and absent while editing", () => {
+  expect(line({ busy: true })).toMatch(/<button[^>]*disabled[^>]*>Edit name/);
+  expect(line({ busy: false })).not.toMatch(/<button[^>]*disabled[^>]*>Edit name/);
+  expect(line({ renaming: true })).not.toContain("Edit name");
 });
