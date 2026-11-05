@@ -2,6 +2,7 @@ package sales_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -81,6 +82,10 @@ func TestNotes(t *testing.T) {
 	if err := f.deleteNote(s, admin, order, mine.ID); !errors.Is(err, sales.ErrNotYourNote) {
 		t.Fatalf("admin deleting owner's note: %v", err)
 	}
+	// An admin deletes their own note; the owner can delete the rest.
+	own, err := f.addNote(s, admin, order, "Mine to remove")
+	f.must(t, err)
+	f.must(t, f.deleteNote(s, admin, order, own.ID))
 	f.must(t, f.deleteNote(s, f.user, order, theirs.ID))
 	if err := f.deleteNote(s, f.user, order, theirs.ID); !errors.Is(err, catalogue.ErrNotFound) {
 		t.Fatalf("second delete: %v", err)
@@ -124,6 +129,18 @@ func TestNoteIsPlainText(t *testing.T) {
 	f.must(t, err)
 	if len(got) != 1 || got[0].Body != body {
 		t.Fatalf("notes %+v, want the body back as written", got)
+	}
+	// The buyer's order page, read with their link, never has it.
+	s2, fake := newPaidService(t)
+	f2 := seed(t, s2.Pool, seedOpts{quota: 10, price: 2500})
+	paid, code, token, _ := f2.linkedOrder(t, s2, fake, 1, 1)
+	_, err = f2.addNote(s2, f2.user, paid, body)
+	f2.must(t, err)
+	view, err := s2.Order(context.Background(), code, token)
+	f2.must(t, err)
+	j, _ := json.Marshal(view)
+	if strings.Contains(string(j), "onerror") || strings.Contains(string(j), "bold") {
+		t.Fatalf("a note reached the buyer's order page: %s", j)
 	}
 	msg := f.ticketEmail(t, s, order)
 	if strings.Contains(msg.Text+msg.HTML, "onerror") || strings.Contains(msg.Text+msg.HTML, "**bold**") {

@@ -1,11 +1,14 @@
 package httpapi_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
 )
 
 func (s shop) notesOf(who, order string) []map[string]any {
@@ -72,6 +75,10 @@ func TestNoteRoles(t *testing.T) {
 	if res := s.do(door, "DELETE", notePath(adm), ""); res.StatusCode != 403 || s.errorCode(res) != "forbidden_role" {
 		t.Fatalf("door delete: %d %q", res.StatusCode, s.errorCode(res))
 	}
+	mine := s.must(s.addNote(admin, order, "Mine to remove"), 201)
+	if res := s.do(admin, "DELETE", notePath(mine), ""); res.StatusCode != 204 {
+		t.Fatalf("admin deleting their own note: %d, want 204", res.StatusCode)
+	}
 	if res := s.do(s.owner, "DELETE", notePath(adm), ""); res.StatusCode != 204 {
 		t.Fatalf("owner delete: %d", res.StatusCode)
 	}
@@ -128,6 +135,16 @@ func TestNoteIsPlainText(t *testing.T) {
 	b, _ := io.ReadAll(res.Body)
 	if res.StatusCode != 200 || strings.Contains(string(b), "onerror") || strings.Contains(string(b), "**bold**") {
 		t.Fatalf("order detail %d carries the note: %s", res.StatusCode, b)
+	}
+	_, code, token := s.buyLinked(1, "buyer@example.com", "evt_note_buyer")
+	var buyerOrder string
+	if err := testdb.Owner(t, s.pool).QueryRow(context.Background(), `select id::text from orders where code = $1`, code).Scan(&buyerOrder); err != nil {
+		t.Fatal(err)
+	}
+	s.must(s.addNote(s.owner, buyerOrder, body), 201)
+	page, _ := json.Marshal(func() map[string]any { o, _ := s.ticketsOf(code, token); return o }())
+	if strings.Contains(string(page), "onerror") || strings.Contains(string(page), "bold") {
+		t.Fatalf("a note reached the buyer's order page: %s", page)
 	}
 	for _, kind := range []string{"orders.csv", "attendees.csv", "checkins.csv"} {
 		res := s.do(s.owner, "GET", "/v1/organizers/acme/events/"+s.f["event"]+"/exports/"+kind, "")
