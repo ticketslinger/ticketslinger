@@ -14,7 +14,7 @@ import { CheckoutPage } from "./pages/CheckoutPage";
 import { EventPage, type EventPageProps, type StorefrontEvent } from "./pages/EventPage";
 import { ErrorPage, NotFound, Unavailable } from "./pages/NotFound";
 import { OrderLinkPage, type OrderLinkPageProps } from "./pages/OrderLinkPage";
-import { NoOrder, OrderPage, type Sent } from "./pages/OrderPage";
+import { type NameError, NoOrder, OrderPage, type Sent } from "./pages/OrderPage";
 import { Recent } from "./recent";
 
 export type StorefrontOptions = {
@@ -62,6 +62,8 @@ const BUSY = "Busy for a moment. Try again.";
 const SLOW_DOWN = "That's a lot of tries. Wait a minute and try again.";
 // The order page's notices after "Email me my tickets again", and the API's 409s that lead to
 // them. no_tickets says nothing: the page it goes back to no longer offers the button.
+const NAME_ERRORS: readonly NameError[] = ["names_locked", "name_change_limit", "bad_attendee"];
+const TICKET = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SENT: readonly Sent[] = ["1", "soon", "pending"];
 const SENT_FOR: Record<string, Sent | ""> = {
   email_on_its_way: "pending",
@@ -416,7 +418,16 @@ export function createApp(opts: StorefrontOptions): Hono {
       order = r.data;
     } catch {}
     const sent = SENT.find((s) => s === c.req.query("sent"));
-    if (order) return page(c, 200, <OrderPage order={order} token={t} sent={sent} />, "order");
+    const nameError = NAME_ERRORS.find((e) => e === c.req.query("name_error"));
+    if (order) {
+      const named = c.req.query("named");
+      return page(
+        c,
+        200,
+        <OrderPage order={order} token={t} sent={sent} named={named} nameError={nameError} />,
+        "order",
+      );
+    }
     if (status === 404 || status === 400) return page(c, 404, <NoOrder />);
     if (status === 429) return trouble(c, 429, SLOW_DOWN);
     return trouble(c);
@@ -483,6 +494,40 @@ export function createApp(opts: StorefrontOptions): Hono {
     const answer = Object.hasOwn(SENT_FOR, reason) ? SENT_FOR[reason] : undefined;
     if (status === 409 && answer !== undefined) {
       return c.redirect(answer ? `${back}&sent=${answer}` : back, 303);
+    }
+    if (status === 429) return trouble(c, 429, SLOW_DOWN);
+    if (status >= 500) return trouble(c);
+    return page(c, 404, <NoOrder />);
+  });
+
+  // Fix a name: back to the order page, which says how it went. The ticket's number is worked out
+  // there from the order it loads anyway, so a save costs no extra read.
+  app.post("/orders/:code/tickets/:ticket/name", async (c) => {
+    const { code, ticket } = c.req.param();
+    let t = "";
+    let name = "";
+    try {
+      const body = await c.req.parseBody();
+      t = typeof body.t === "string" ? body.t : "";
+      name = typeof body.name === "string" ? body.name : "";
+    } catch {}
+    if (!ORDER.test(code) || !TOKEN.test(t) || !TICKET.test(ticket)) {
+      return page(c, 404, <NoOrder />);
+    }
+    const r = await api
+      .PATCH("/orders/{code}/tickets/{ticket}", {
+        params: { path: { code, ticket } },
+        body: { token: t, attendee_name: name },
+        headers: apiHeaders(c),
+      })
+      .catch(() => null);
+    if (!r) return trouble(c);
+    const status = r.response.status;
+    const back = `/orders/${code}?t=${encodeURIComponent(t)}`;
+    if (status === 204) return c.redirect(`${back}&named=${ticket}`, 303);
+    const reason = r.error?.error.code ?? "";
+    if ((status === 409 || status === 422) && NAME_ERRORS.some((e) => e === reason)) {
+      return c.redirect(`${back}&name_error=${reason}`, 303);
     }
     if (status === 429) return trouble(c, 429, SLOW_DOWN);
     if (status >= 500) return trouble(c);
