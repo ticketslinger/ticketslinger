@@ -90,7 +90,7 @@ const FIELD_COPY: Record<string, string> = {
   bad_email: "That email doesn't look right. It should look like ada@example.com.",
   missing_answer: "This one needs an answer.",
   bad_answer: "That answer doesn't fit this question. Check it and try again.",
-  bad_attendee: "Keep the name under 120 characters, using ordinary letters and punctuation.",
+  bad_attendee: "Keep the name to 120 characters or fewer, using ordinary letters and punctuation.",
 };
 
 /** A 422 that names a field, as {field: message}. */

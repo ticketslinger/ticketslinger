@@ -82,7 +82,7 @@ var (
 	errAttendeeName = invalid("bad_attendee", "attendee_name", badName)
 )
 
-const badName = "Keep the name under 120 characters, using ordinary letters and punctuation."
+const badName = "Keep the name to 120 characters or fewer, using ordinary letters and punctuation."
 
 // A ticket's name: the buyer can't change it any more (the event started,
 // the organizer locked names, or the order or ticket can't be used), has

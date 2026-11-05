@@ -1647,3 +1647,120 @@ test("a discount is derived when the API sends all-in prices but no all-in disco
   expect(html).toContain("−$5.10");
   expect(html).not.toMatch(/NaN|undefined/);
 });
+
+const T1 = "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f";
+const T2 = "7a2d3e4f-5b6c-4d7e-9f80-1b2c3d4e5f60";
+const T3 = "8b3e4f50-6c7d-4e8f-a091-2c3d4e5f6071";
+const NAMES_UNTIL = "2027-05-02T01:00:00Z";
+const named = (over: Record<string, unknown> = {}) => ({
+  ...order,
+  names_until: NAMES_UNTIL as string | null,
+  tickets: [
+    { ...order.tickets[0], id: T1, attendee_name: "Ada", name_changes_left: 5 },
+    { ...order.tickets[1], id: T2, attendee_name: "Grace", name_changes_left: 5 },
+    { ...order.tickets[1], id: T3, attendee_name: "Gone", status: "void", name_changes_left: 5 },
+  ],
+  ...over,
+});
+const OWN = `/orders/TS-7K2QF?t=${TOK}`;
+
+test("the order page offers a name form per valid ticket while names can change", async () => {
+  const page = async (o: unknown, q = "") =>
+    (await app(() => Response.json(o)).a.request(`${OWN}${q}`)).text();
+  const html = await page(named());
+  expect(html).toContain(
+    "Need to fix a name? You can change them until Saturday, May 1, 2027 at 7:00 PM MDT. The QR codes stay the same, so tickets you've already saved or printed still work.",
+  );
+  expect(html.match(/<form method="post" action="\/orders\/TS-7K2QF\/tickets\//g)).toHaveLength(2);
+  expect(html).toContain(`action="/orders/TS-7K2QF/tickets/${T2}/name"`);
+  expect(html).not.toContain(T3);
+  expect(html).toContain('<label for="name_' + T2 + '">Name on ticket 2</label>');
+  expect(html).toContain('maxlength="120"');
+  expect(html).toContain("Save name");
+  // The name stays as text on its row, as well as in the input.
+  expect(html).toContain("<p>Ada</p>");
+  expect(await page(named({ names_until: null }))).not.toContain("Save name");
+  const spent = named();
+  spent.tickets[0].name_changes_left = 0;
+  const some = await page(spent);
+  expect(some.match(/Save name/g)).toHaveLength(1);
+  expect(some).toContain("Name on ticket 2");
+  expect(some).not.toContain("Name on ticket 1");
+});
+
+test("saving a name redirects with the ticket id, and the page says what it saved", async () => {
+  const { a, calls } = app(() => new Response(null, { status: 204 }));
+  const res = await a.request(
+    `/orders/TS-7K2QF/tickets/${T2}/name`,
+    form({ t: TOK, name: "Grace" }),
+  );
+  expect(res.status).toBe(303);
+  expect(res.headers.get("location")).toBe(`${OWN}&named=${T2}`);
+  expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+  expect(calls).toHaveLength(1);
+  expect(calls[0].method).toBe("PATCH");
+  expect(new URL(calls[0].url).pathname).toBe(`/v1/orders/TS-7K2QF/tickets/${T2}`);
+  expect(await calls[0].json()).toEqual({ token: TOK, attendee_name: "Grace" });
+
+  const read = async (o: unknown, q: string) =>
+    (await app(() => Response.json(o)).a.request(`${OWN}${q}`)).text();
+  const ok = await read(named(), `&named=${T2}`);
+  expect(ok).toContain('role="status"');
+  expect(ok).toContain("Saved. Ticket 2 now says Grace.");
+  const blank = named();
+  blank.tickets[1].attendee_name = "";
+  expect(await read(blank, `&named=${T2}`)).toContain("Saved. Ticket 2 has no name on it now.");
+  // Not a valid ticket of this order: no notice.
+  expect(await read(named(), `&named=${T3}`)).not.toContain("Saved.");
+  expect(await read(named(), "&named=junk")).not.toContain("Saved.");
+});
+
+test("a refused rename goes back to the order page with our words naming the organizer", async () => {
+  const go = async (status: number, code: string) =>
+    app(() => apiError(status, code)).a.request(
+      `/orders/TS-7K2QF/tickets/${T1}/name`,
+      form({ t: TOK, name: "x" }),
+    );
+  for (const [status, code] of [
+    [409, "names_locked"],
+    [409, "name_change_limit"],
+    [422, "bad_attendee"],
+  ] as const) {
+    const res = await go(status, code);
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe(`${OWN}&name_error=${code}`);
+  }
+  const read = async (code: string) =>
+    (await app(() => Response.json(named())).a.request(`${OWN}&name_error=${code}`)).text();
+  const locked = await read("names_locked");
+  expect(locked).toContain('role="alert"');
+  expect(locked).toContain(
+    "Names on these tickets can't be changed any more. If one's wrong, ask Acme.",
+  );
+  expect(await read("name_change_limit")).toContain(
+    "That name has been changed 5 times, which is as many as we allow. If it's still wrong, ask Acme.",
+  );
+  expect(await read("bad_attendee")).toContain(
+    "Keep the name to 120 characters or fewer, using ordinary letters and punctuation.",
+  );
+  expect(await read("bogus")).not.toContain('role="alert"');
+  expect((await go(404, "not_found")).status).toBe(404);
+  expect((await go(429, "rate_limited")).status).toBe(429);
+  expect((await go(500, "internal")).status).toBe(502);
+  expect((await go(409, "something_else")).status).toBe(404);
+});
+
+test("a rename with a bad code, token or ticket id is a 404 and never reaches the API", async () => {
+  const { a, calls } = app(() => new Response(null, { status: 204 }));
+  for (const [path, t] of [
+    [`/orders/TS-7K2QF/tickets/not-a-uuid/name`, TOK],
+    [`/orders/ts-bad/tickets/${T1}/name`, TOK],
+    [`/orders/TS-7K2QF/tickets/${T1}/name`, "short"],
+  ]) {
+    const res = await a.request(path, form({ t, name: "Ada" }));
+    expect(res.status).toBe(404);
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(await res.text()).toContain("That link doesn't open an order.");
+  }
+  expect(calls).toHaveLength(0);
+});

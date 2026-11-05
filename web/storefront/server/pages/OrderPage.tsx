@@ -59,12 +59,44 @@ export function sentNotice(sent: Sent, email: string): string {
   return "We're still trying to send the latest one. Give it a little while, then check your spam folder too.";
 }
 
-export function OrderPage({ order, token, sent }: { order: Order; token: string; sent?: Sent }) {
+export type NameError = "names_locked" | "name_change_limit" | "bad_attendee";
+
+export function namedNotice(n: number, name: string): string {
+  return name
+    ? `Saved. Ticket ${n} now says ${name}.`
+    : `Saved. Ticket ${n} has no name on it now.`;
+}
+
+export function nameErrorNotice(code: NameError, organizer: string): string {
+  if (code === "names_locked") {
+    return `Names on these tickets can't be changed any more. If one's wrong, ask ${organizer}.`;
+  }
+  if (code === "name_change_limit") {
+    return `That name has been changed 5 times, which is as many as we allow. If it's still wrong, ask ${organizer}.`;
+  }
+  return "Keep the name to 120 characters or fewer, using ordinary letters and punctuation.";
+}
+
+export function OrderPage({
+  order,
+  token,
+  sent,
+  named,
+  nameError,
+}: {
+  order: Order;
+  token: string;
+  sent?: Sent;
+  // The id of the ticket just renamed; its number is worked out here from the order we already have.
+  named?: string;
+  nameError?: NameError;
+}) {
   const e = order.event;
   const status = orderStatus(order);
   // Numbered as the email and the PDF number them: valid tickets only, in the API's order (by id).
   const valid = order.tickets.filter((t) => t.status === "valid");
   const t = encodeURIComponent(token);
+  const saved = valid.findIndex((tk) => tk.id === named);
   return (
     <Layout title={`Order ${order.code} · ${e.name}`}>
       <p class="organizer">{e.organizer_name}</p>
@@ -89,6 +121,22 @@ export function OrderPage({ order, token, sent }: { order: Order; token: string;
           {sentNotice(sent, order.email)}
         </p>
       )}
+      {order.names_until && (
+        <p class="names">
+          Need to fix a name? You can change them until {when(order.names_until, e.timezone)}. The
+          QR codes stay the same, so tickets you've already saved or printed still work.
+        </p>
+      )}
+      {saved >= 0 && (
+        <p class="sent" role="status">
+          {namedNotice(saved + 1, valid[saved].attendee_name)}
+        </p>
+      )}
+      {nameError && (
+        <p class="notice" role="alert">
+          {nameErrorNotice(nameError, e.organizer_name)}
+        </p>
+      )}
       {order.tickets.length > 0 && (
         <ul class="order-tickets">
           {order.tickets.map((tk) => {
@@ -100,6 +148,20 @@ export function OrderPage({ order, token, sent }: { order: Order; token: string;
                   {tk.ticket_type_name}
                 </h2>
                 <p>{tk.attendee_name || "No name given"}</p>
+                {n > 0 && order.names_until && tk.name_changes_left > 0 && (
+                  <form method="post" action={`/orders/${order.code}/tickets/${tk.id}/name`}>
+                    <input type="hidden" name="t" value={token} />
+                    <label for={`name_${tk.id}`}>Name on ticket {n}</label>
+                    <input
+                      id={`name_${tk.id}`}
+                      name="name"
+                      value={tk.attendee_name}
+                      maxLength={120}
+                      autocomplete="name"
+                    />
+                    <button type="submit">Save name</button>
+                  </form>
+                )}
                 {n > 0 && tk.qr_png && (
                   <img
                     class="qr"

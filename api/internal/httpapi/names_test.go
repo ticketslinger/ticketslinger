@@ -110,7 +110,7 @@ func TestRenameByLinkAnswers(t *testing.T) {
 	invalid(map[string]any{"token": token}, "missing_field", "attendee_name")
 	invalid(map[string]any{"token": strings.Repeat("a", 201), "attendee_name": "Ada"}, "bad_token", "token")
 	if res := s.renameByLink("", code, id, map[string]any{"token": token, "attendee_name": "A\u202eda"}); s.json(res)["error"].(map[string]any)["message"] !=
-		"Keep the name under 120 characters, using ordinary letters and punctuation." {
+		"Keep the name to 120 characters or fewer, using ordinary letters and punctuation." {
 		t.Errorf("bad_attendee message: %v", res)
 	}
 
