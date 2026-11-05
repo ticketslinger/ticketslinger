@@ -149,18 +149,18 @@ export function EventForm({
         names_locked_at: namesLockValue(d.names, d.timezone),
       };
       const path = { organizer: org.slug };
-      if (!event) {
-        const e = must(
-          await api.POST("/organizers/{organizer}/events", {
-            params: { path },
-            body: { ...body, slug: d.slug },
-          }),
-        );
-        navigate(`/o/${org.slug}/events/${e.id}`, false, true);
-        return;
-      }
       let e: Event;
       try {
+        if (!event) {
+          const made = must(
+            await api.POST("/organizers/{organizer}/events", {
+              params: { path },
+              body: { ...body, slug: d.slug },
+            }),
+          );
+          navigate(`/o/${org.slug}/events/${made.id}`, false, true);
+          return;
+        }
         e = must(
           await api.PATCH("/organizers/{organizer}/events/{event}", {
             params: { path: { ...path, event: event.id } },
@@ -347,14 +347,15 @@ export function EventForm({
             aria-invalid={bad === "names" || field === "names_locked_at" || undefined}
             label="Buyers can change names until"
             hint={NAMES_LOCK_HINT}
+            aria-describedby="event-names-hint event-names-error"
             type="datetime-local"
             value={d.names}
             onChange={(e) => set({ names: e.target.value })}
           />
-          {field === "names_locked_at" && <ErrorText>{error}</ErrorText>}
+          <ErrorText id="event-names-error">{field === "names_locked_at" ? error : ""}</ErrorText>
         </fieldset>
 
-        {field !== "names_locked_at" && <ErrorText>{error}</ErrorText>}
+        <ErrorText>{field === "names_locked_at" ? "" : error}</ErrorText>
         <p className="success" role="status">
           {saved ? "Saved." : ""}
         </p>

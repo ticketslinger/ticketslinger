@@ -65,8 +65,8 @@ const when = (iso: string) =>
 
 type Actor = Pick<
   components["schemas"]["AuditEntry"],
-  "actor_type" | "actor_user_id" | "actor_api_key_id" | "actor_name" | "actor_email"
-> & { action?: string; by_buyer?: boolean };
+  "actor_type" | "actor_user_id" | "actor_api_key_id" | "actor_name" | "actor_email" | "by_buyer"
+> & { action?: string };
 
 /**
  * The Who cell: a key by name, you as "You", a member by name with their

@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import type { components } from "@ticketslinger/api-client";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
 import {
   canRenameTicket,
   canResend,
@@ -10,6 +12,7 @@ import {
   refundPreview,
   renameProblem,
   retryable,
+  TicketLine,
 } from "./OrderDetail";
 import type { Org } from "./Organizer";
 
@@ -156,4 +159,37 @@ test("rename copy is the spec's, with 120 allowed", () => {
     "Keep the name 120 characters or fewer, using ordinary letters and punctuation.",
   );
   expect(renameProblem("rate_limited")).toBeUndefined();
+});
+
+const line = (over: Partial<Parameters<typeof TicketLine>[0]>) =>
+  renderToString(
+    createElement(TicketLine, {
+      t: ticket("a", 2500, 100, "valid"),
+      org: { role: "owner" } as Org,
+      path: { organizer: "o", event: "e", order: "x" },
+      picked: true,
+      busy: false,
+      renaming: false,
+      refocus: false,
+      voidLabel: "",
+      onPick: () => {},
+      onEdit: () => {},
+      onClose: () => {},
+      onSaved: async () => {},
+      ...over,
+    }),
+  );
+
+test("a ticket picked for refund keeps its checked checkbox on screen while its name is edited", () => {
+  for (const renaming of [false, true]) {
+    const html = line({ renaming });
+    expect(html).toMatch(/<input type="checkbox"[^>]*checked/);
+  }
+  expect(line({ renaming: true })).toContain('maxLength="120"');
+});
+
+test("Edit name is off while a refund is going through, and absent while editing", () => {
+  expect(line({ busy: true })).toMatch(/<button[^>]*disabled[^>]*>Edit name/);
+  expect(line({ busy: false })).not.toMatch(/<button[^>]*disabled[^>]*>Edit name/);
+  expect(line({ renaming: true })).not.toContain("Edit name");
 });

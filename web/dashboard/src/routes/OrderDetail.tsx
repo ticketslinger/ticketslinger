@@ -120,7 +120,7 @@ function RenameTicket({
         value={name}
         maxLength={120}
         ref={focusOnMount}
-        aria-describedby={`${id}-hint`}
+        aria-describedby={`${id}-hint ${id}-error`}
         onChange={(e) => setName(e.target.value)}
       />{" "}
       <button type="submit" className="inline" disabled={action.busy}>
@@ -132,8 +132,89 @@ function RenameTicket({
       <p className="hint" id={`${id}-hint`}>
         {RENAME_HINT}
       </p>
-      <ErrorText>{action.error}</ErrorText>
+      <ErrorText id={`${id}-error`}>{action.error}</ErrorText>
     </form>
+  );
+}
+
+type Ticket = Detail["tickets"][number];
+
+/**
+ * One ticket in the list. The refund checkbox stays on screen while the name is being edited,
+ * so a ticket that is picked for refund is always one the organizer can see is picked.
+ */
+export function TicketLine({
+  t,
+  org,
+  path,
+  picked,
+  busy,
+  renaming,
+  refocus,
+  refund,
+  voidLabel,
+  onPick,
+  onEdit,
+  onClose,
+  onSaved,
+}: {
+  t: Ticket;
+  org: Org;
+  path: { organizer: string; event: string; order: string };
+  picked: boolean;
+  busy: boolean;
+  renaming: boolean;
+  refocus: boolean;
+  refund?: Refund;
+  voidLabel: string;
+  onPick: () => void;
+  onEdit: () => void;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const editable = canRenameTicket(t, org);
+  const nameText = `${t.ticket_type_name}, ${t.attendee_name || "no name"}`;
+  return (
+    <li>
+      {renaming ? (
+        <>
+          <input
+            type="checkbox"
+            aria-label={`Refund ${t.ticket_type_name} ticket`}
+            checked={picked}
+            disabled={busy}
+            onChange={onPick}
+          />{" "}
+          <RenameTicket path={path} ticket={t} onSaved={onSaved} onCancel={onClose} />
+        </>
+      ) : editable ? (
+        <label>
+          <input type="checkbox" checked={picked} disabled={busy} onChange={onPick} /> {nameText}
+        </label>
+      ) : (
+        nameText
+      )}
+      {!renaming && editable && (
+        <>
+          {" "}
+          <button
+            type="button"
+            className="inline secondary"
+            disabled={busy}
+            ref={refocus ? focusOnMount : undefined}
+            onClick={onEdit}
+          >
+            Edit name
+          </button>
+        </>
+      )}
+      {t.status === "void" && (
+        <>
+          {" "}
+          <span className={`pill ${refund?.status ?? ""}`}>{voidLabel}</span>
+        </>
+      )}
+    </li>
   );
 }
 
@@ -307,6 +388,8 @@ export function OrderDetail({
   const [asking, setAsking] = useState<boolean | null>(null);
   const [resentTo, setResentTo] = useState("");
   const [renaming, setRenaming] = useState<string | null>(null);
+  // The ticket whose Edit name button gets focus back after Save or Cancel.
+  const [refocus, setRefocus] = useState<string | null>(null);
   const refund = useAction();
   const key = useRef<string | null>(null);
 
@@ -399,50 +482,28 @@ export function OrderDetail({
           <h2>Tickets</h2>
           <ul className="plain">
             {order.tickets.map((t) => (
-              <li key={t.id}>
-                {renaming === t.id ? (
-                  <RenameTicket
-                    path={path}
-                    ticket={t}
-                    onSaved={reload}
-                    onCancel={() => setRenaming(null)}
-                  />
-                ) : t.status === "valid" && canEdit(org) ? (
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={picked.includes(t.id)}
-                      disabled={refund.busy}
-                      onChange={() => change(() => setPicked(toggle(picked, t.id)))}
-                    />{" "}
-                    {t.ticket_type_name}, {t.attendee_name || "no name"}
-                  </label>
-                ) : (
-                  <>
-                    {t.ticket_type_name}, {t.attendee_name || "no name"}
-                  </>
-                )}
-                {renaming !== t.id && canRenameTicket(t, org) && (
-                  <>
-                    {" "}
-                    <button
-                      type="button"
-                      className="inline secondary"
-                      onClick={() => setRenaming(t.id)}
-                    >
-                      Edit name
-                    </button>
-                  </>
-                )}
-                {t.status === "void" && (
-                  <>
-                    {" "}
-                    <span className={`pill ${refundOf(t.refund_id)?.status ?? ""}`}>
-                      {voidLabel(t.refund_id)}
-                    </span>
-                  </>
-                )}
-              </li>
+              <TicketLine
+                key={t.id}
+                t={t}
+                org={org}
+                path={path}
+                picked={picked.includes(t.id)}
+                busy={refund.busy}
+                renaming={renaming === t.id}
+                refocus={refocus === t.id}
+                refund={refundOf(t.refund_id)}
+                voidLabel={voidLabel(t.refund_id)}
+                onPick={() => change(() => setPicked(toggle(picked, t.id)))}
+                onEdit={() => {
+                  setRefocus(null);
+                  setRenaming(t.id);
+                }}
+                onClose={() => {
+                  setRefocus(t.id);
+                  setRenaming(null);
+                }}
+                onSaved={reload}
+              />
             ))}
           </ul>
 

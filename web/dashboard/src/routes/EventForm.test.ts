@@ -73,3 +73,10 @@ test("the names lock field renders with its hint", () => {
   expect(html).toContain("Buyers can change names until");
   expect(html).toContain(NAMES_LOCK_HINT);
 });
+
+test("the names lock error is an always-present region the input points at", () => {
+  const org = { slug: "x", role: "owner" } as Parameters<typeof EventForm>[0]["org"];
+  const html = renderToString(createElement(EventForm, { org }));
+  expect(html).toContain('id="event-names-error"');
+  expect(html).toContain('aria-describedby="event-names-hint event-names-error"');
+});
