@@ -714,7 +714,8 @@ export interface paths {
         /** @description Owners and admins, or any API key; check-in staff get 403 forbidden_role, because orders show what people paid. The event's orders, newest first. Orders still waiting for payment aren't listed. email is the buyer's address. */
         get: operations["listOrders"];
         put?: never;
-        post?: never;
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Issues tickets yourself: kind comp gives them away, kind manual records an order paid outside the site, with method saying how and amount_cents what you collected ($0 or more; the order's total, split over its tickets by face price). Any ticket type of the event works, hidden ones and ones outside their sales window included, on a draft or ended event too, but quotas still hold: 409 sold_out lists what's left of every type. The order is paid at once, with no fee and no card payment, and send_tickets (true if left out) emails the buyer their tickets as a sale would. note becomes the order's first team note. Send an Idempotency-Key with every call (400 idempotency_key_required without one), so a retry can't issue the tickets twice. 20 orders a minute per member, then 429 rate_limited. 409 event_cancelled for a cancelled event; 410 event_unavailable while the organizer is suspended. 422 missing_field without kind, or without amount_cents for a manual order; 422 bad_kind, bad_method (method set for manual only), bad_amount (a comp has none), bad_email, bad_buyer_name, bad_attendee (more names than tickets, or a name we can't print), bad_note; 422 no_items, too_many_tickets (over 100, or a type listed twice), unknown_ticket_type (not this event's) and no_quota (a type in no quota), all with field lines. */
+        post: operations["createManualOrder"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1545,6 +1546,18 @@ export interface components {
             id: string;
             code: string;
             email: string;
+            /**
+             * @description online: bought at checkout. comp: given away by the organizer. manual: paid to the organizer outside the site.
+             * @enum {string}
+             */
+            source: "online" | "comp" | "manual";
+            /**
+             * @description How a manual order was paid; null for any other.
+             * @enum {string|null}
+             */
+            manual_method: "cash" | "cheque" | "invoice" | "other" | null;
+            /** @description The buyer's name an organizer gave with a comp or manual order; empty otherwise. */
+            buyer_name: string;
             /** @enum {string} */
             status: "paid" | "cancelled" | "refunded" | "partially_refunded";
             /** @description Tickets still valid. */
@@ -1815,6 +1828,39 @@ export interface components {
             fee_cents: number;
             /** @description Manual orders this cancelled. You collected their money, so you pay them back. */
             manual_orders: components["schemas"]["ManualOrderTotal"][];
+        };
+        CreateManualOrder: {
+            /** @enum {string} */
+            kind: "comp" | "manual";
+            /** @description Where the tickets go. */
+            email: string;
+            buyer_name?: string;
+            lines: {
+                /** Format: uuid */
+                ticket_type_id: string;
+                quantity: number;
+            }[];
+            /** @description Optional names, one per ticket in line order. */
+            attendees?: string[];
+            /**
+             * @description How a manual order was paid. Leave it out for a comp.
+             * @enum {string}
+             */
+            method?: "cash" | "cheque" | "invoice" | "other";
+            /**
+             * Format: int64
+             * @description What you collected for a manual order (required for one). Leave it out for a comp.
+             */
+            amount_cents?: number;
+            /** @description Email the buyer their tickets. true if left out. */
+            send_tickets?: boolean;
+            /** @description The order's first team note, plain text. */
+            note?: string;
+        };
+        ManualOrderCreated: {
+            /** Format: uuid */
+            id: string;
+            code: string;
         };
         ManualOrderTotal: {
             /** Format: uuid */
@@ -4140,6 +4186,45 @@ export interface operations {
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    createManualOrder: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateManualOrder"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualOrderCreated"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            410: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["Error"];
             503: components["responses"]["Error"];
         };
     };

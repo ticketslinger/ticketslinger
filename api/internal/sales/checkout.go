@@ -504,6 +504,20 @@ func soldOut(ctx context.Context, tx pgx.Tx, event uuid.UUID, p *promo) error {
 	return SoldOut{Available: avail}
 }
 
+// soldOutAll is SoldOut over every ticket type of event, hidden ones and a
+// draft event's included: what an owner or admin may still issue. A type's
+// room is its tightest quota's.
+func soldOutAll(ctx context.Context, tx pgx.Tx, event uuid.UUID) error {
+	rows, _ := tx.Query(ctx, `select t.id, greatest(0, min(q.size - quota_used(q.id, null))) from ticket_types t
+		join quota_ticket_types x on x.ticket_type_id = t.id join quotas q on q.id = x.quota_id
+		where t.event_id = $1 group by t.id order by t.id`, event)
+	avail, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Availability])
+	if err != nil {
+		return err
+	}
+	return SoldOut{Available: avail}
+}
+
 // checkoutOrg is the organizer of the checkout with this token, or
 // ErrNotFound.
 func (s *Service) checkoutOrg(ctx context.Context, token string) (uuid.UUID, error) {

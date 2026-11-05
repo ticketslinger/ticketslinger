@@ -787,7 +787,8 @@ func (s *server) ListOrders(ctx context.Context, req ListOrdersRequestObject) (L
 		for _, o := range list {
 			out = append(out, OrderSummary{Id: o.ID, Code: o.Code, Email: o.Email, Status: OrderSummaryStatus(o.Status), TicketCount: o.TicketCount,
 				TotalCents: o.TotalCents, FeeCents: o.FeeCents, FeeMode: OrderSummaryFeeMode(o.FeeMode), CreatedAt: o.CreatedAt, PaidAt: nullOf(o.PaidAt),
-				RefundedCents: o.RefundedCents, FeeRefundedCents: o.FeeRefundedCents, TicketEmail: toOrderEmail(o.Mail)})
+				RefundedCents: o.RefundedCents, FeeRefundedCents: o.FeeRefundedCents, TicketEmail: toOrderEmail(o.Mail),
+				Source: OrderSummarySource(o.Source), ManualMethod: nullableOf[OrderSummaryManualMethod](o.ManualMethod), BuyerName: o.BuyerName})
 		}
 		return err
 	})
@@ -810,7 +811,8 @@ func (s *server) GetOrderDetail(ctx context.Context, req GetOrderDetailRequestOb
 	}
 	out := GetOrderDetail200JSONResponse{Id: d.ID, Code: d.Code, Email: d.Email, Status: OrderDetailStatus(d.Status), TicketCount: d.TicketCount,
 		TotalCents: d.TotalCents, FeeCents: d.FeeCents, FeeMode: OrderDetailFeeMode(d.FeeMode), CreatedAt: d.CreatedAt, PaidAt: nullOf(d.PaidAt),
-		RefundedCents: d.RefundedCents, FeeRefundedCents: d.FeeRefundedCents, TicketEmail: toOrderEmail(d.Mail), Tickets: []OrderDetailTicket{}, Refunds: []Refund{}}
+		RefundedCents: d.RefundedCents, FeeRefundedCents: d.FeeRefundedCents, TicketEmail: toOrderEmail(d.Mail), Tickets: []OrderDetailTicket{}, Refunds: []Refund{},
+		Source: OrderDetailSource(d.Source), ManualMethod: nullableOf[OrderDetailManualMethod](d.ManualMethod), BuyerName: d.BuyerName}
 	for _, t := range d.Tickets {
 		out.Tickets = append(out.Tickets, OrderDetailTicket{Id: t.ID, TicketTypeName: t.TicketTypeName, AttendeeName: t.AttendeeName,
 			Status: OrderDetailTicketStatus(t.Status), ChargeCents: t.ChargeCents, FeeCents: t.FeeCents, RefundId: nullOf(t.RefundID)})
@@ -945,6 +947,57 @@ func (s *server) CancelOrder(ctx context.Context, req CancelOrderRequestObject) 
 	return out, nil
 }
 
+// CreateManualOrder issues comp or manual tickets. inOrganizer only checks
+// the caller; the order is written as ts_system, which checks the member's
+// role again in its own transaction.
+func (s *server) CreateManualOrder(ctx context.Context, req CreateManualOrderRequestObject) (CreateManualOrderResponseObject, error) {
+	var org uuid.UUID
+	if err := s.inOrganizer(ctx, req.Organizer, ordersWrite, func(o organizers.Organizer, _ pgx.Tx) error {
+		org = o.ID
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if req.Params.IdempotencyKey == nil {
+		return nil, &apiError{400, "idempotency_key_required", "Send an Idempotency-Key with every new order, so a retry can't add it twice."}
+	}
+	member := actorFrom(ctx).User
+	if !s.manualLimit.Allow("user:"+member.String(), time.Now()) {
+		return nil, &apiError{429, "rate_limited", "That's 20 orders in a minute. Give it a minute, then add the rest."}
+	}
+	b := req.Body
+	if b.Kind == "manual" && b.AmountCents == nil {
+		return nil, missingField("amount_cents", "what you collected, in cents, $0 or more")
+	}
+	in := sales.ManualOrderInput{Event: req.Event, Kind: string(b.Kind), Email: b.Email, SendTickets: b.SendTickets == nil || *b.SendTickets}
+	if b.Method != nil {
+		in.Method = string(*b.Method)
+	}
+	if b.AmountCents != nil {
+		in.AmountCents = *b.AmountCents
+	}
+	if b.BuyerName != nil {
+		in.BuyerName = *b.BuyerName
+	}
+	if b.Note != nil {
+		in.Note = *b.Note
+	}
+	if b.Attendees != nil {
+		in.Attendees = *b.Attendees
+	}
+	for _, l := range b.Lines {
+		in.Items = append(in.Items, sales.Item{TicketTypeID: l.TicketTypeId, Quantity: l.Quantity})
+	}
+	res, err := s.Sales.CreateManualOrder(ctx, org, member, in)
+	if errors.Is(err, sales.ErrNotManager) {
+		return nil, &apiError{403, "forbidden_role", "Your role here doesn't allow that."}
+	}
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return CreateManualOrder201JSONResponse{Id: res.ID, Code: res.Code}, nil
+}
+
 // CancelEvent takes a live event off sale and refunds every paid order, our
 // fee included. Stripe is asked by the jobs this queues, after it commits.
 func (s *server) CancelEvent(ctx context.Context, req CancelEventRequestObject) (CancelEventResponseObject, error) {
@@ -969,4 +1022,12 @@ func (s *server) CancelEvent(ctx context.Context, req CancelEventRequestObject) 
 		return nil, salesError(err)
 	}
 	return out, nil
+}
+
+// nullableOf is a nullable string enum of p, null when p is nil.
+func nullableOf[T ~string](p *string) nullable.Nullable[T] {
+	if p == nil {
+		return nullable.NewNullNullable[T]()
+	}
+	return nullable.NewNullableWithValue(T(*p))
 }

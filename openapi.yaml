@@ -754,6 +754,25 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createManualOrder
+      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Issues tickets yourself: kind comp gives them away, kind manual records an order paid outside the site, with method saying how and amount_cents what you collected ($0 or more; the order's total, split over its tickets by face price). Any ticket type of the event works, hidden ones and ones outside their sales window included, on a draft or ended event too, but quotas still hold: 409 sold_out lists what's left of every type. The order is paid at once, with no fee and no card payment, and send_tickets (true if left out) emails the buyer their tickets as a sale would. note becomes the order's first team note. Send an Idempotency-Key with every call (400 idempotency_key_required without one), so a retry can't issue the tickets twice. 20 orders a minute per member, then 429 rate_limited. 409 event_cancelled for a cancelled event; 410 event_unavailable while the organizer is suspended. 422 missing_field without kind, or without amount_cents for a manual order; 422 bad_kind, bad_method (method set for manual only), bad_amount (a comp has none), bad_email, bad_buyer_name, bad_attendee (more names than tickets, or a name we can't print), bad_note; 422 no_items, too_many_tickets (over 100, or a type listed twice), unknown_ticket_type (not this event's) and no_quota (a type in no quota), all with field lines."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateManualOrder" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ManualOrderCreated" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/orders/{order}:
     get:
       operationId: getOrderDetail
@@ -1541,11 +1560,14 @@ components:
         details_submitted: { type: boolean, description: Whether the organizer has finished Stripe's onboarding form. }
     OrderSummary:
       type: object
-      required: [id, code, email, status, ticket_count, total_cents, fee_cents, fee_mode, created_at, paid_at, refunded_cents, fee_refunded_cents, ticket_email]
+      required: [id, code, email, status, ticket_count, total_cents, fee_cents, fee_mode, created_at, paid_at, refunded_cents, fee_refunded_cents, ticket_email, source, manual_method, buyer_name]
       properties:
         id: { type: string, format: uuid }
         code: { type: string }
         email: { type: string }
+        source: { type: string, enum: [online, comp, manual], description: "online: bought at checkout. comp: given away by the organizer. manual: paid to the organizer outside the site." }
+        manual_method: { type: [string, "null"], enum: [cash, cheque, invoice, other, null], description: "How a manual order was paid; null for any other." }
+        buyer_name: { type: string, description: "The buyer's name an organizer gave with a comp or manual order; empty otherwise." }
         status: { type: string, enum: [paid, cancelled, refunded, partially_refunded] }
         ticket_count: { type: integer, description: "Tickets still valid." }
         total_cents: { type: integer, format: int64 }
@@ -1732,6 +1754,34 @@ components:
           type: array
           description: "Manual orders this cancelled. You collected their money, so you pay them back."
           items: { $ref: "#/components/schemas/ManualOrderTotal" }
+    CreateManualOrder:
+      type: object
+      required: [kind, email, lines]
+      properties:
+        kind: { type: string, enum: [comp, manual] }
+        email: { type: string, maxLength: 254, description: "Where the tickets go." }
+        buyer_name: { type: string, maxLength: 120 }
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            required: [ticket_type_id, quantity]
+            properties:
+              ticket_type_id: { type: string, format: uuid }
+              quantity: { type: integer, minimum: 1, maximum: 100 }
+        attendees: { type: array, maxItems: 100, items: { type: string, maxLength: 120 }, description: "Optional names, one per ticket in line order." }
+        method: { type: string, enum: [cash, cheque, invoice, other], description: "How a manual order was paid. Leave it out for a comp." }
+        amount_cents: { type: integer, format: int64, minimum: 0, maximum: 1000000000, description: "What you collected for a manual order (required for one). Leave it out for a comp." }
+        send_tickets: { type: boolean, x-go-type: "*bool", x-go-type-skip-optional-pointer: true, description: "Email the buyer their tickets. true if left out." }
+        note: { type: string, maxLength: 2000, description: "The order's first team note, plain text." }
+    ManualOrderCreated:
+      type: object
+      required: [id, code]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
     ManualOrderTotal:
       type: object
       required: [id, code, total_cents]
