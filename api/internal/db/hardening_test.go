@@ -38,7 +38,8 @@ func TestReadKeyScopeIsReadOnly(t *testing.T) {
 
 // ownerOnly tables carry an organizer_id but only the schema owner's
 // definer functions read or write them.
-var ownerOnly = map[string]bool{"organizer_suspensions": true, "staff_actions": true}
+// order_alert_counts is claim_order_alerts()'s daily tally per member.
+var ownerOnly = map[string]bool{"organizer_suspensions": true, "staff_actions": true, "order_alert_counts": true}
 
 // Every tenant table and every SECURITY DEFINER function, checked from the
 // catalog, so a new migration can't quietly skip the hardening.
@@ -123,6 +124,14 @@ func TestCatalogHardening(t *testing.T) {
 		"staff_act(uuid,uuid,text,uuid,text)": {true, false},
 		"claim_staff_refund(uuid)":            {false, true},
 		"finish_staff_refund(uuid,jsonb)":     {false, true},
+		// Order tools: the member's own alert toggle is ts_app's; the
+		// system's checks on a named member, the alert tally and the
+		// recipient lookup are ts_system's; the freeze trigger is nobody's.
+		"set_order_alerts(boolean)":   {true, false},
+		"order_manager(uuid)":         {false, true},
+		"claim_order_alerts()":        {false, true},
+		"order_alert_recipient(uuid)": {false, true},
+		"orders_source_fixed()":       {false, false},
 	} {
 		var definer, app, public, system bool
 		err := owner.QueryRow(ctx, `select p.prosecdef, has_function_privilege('ts_app', p.oid, 'EXECUTE'),
@@ -262,6 +271,21 @@ func TestSaleRolesStayNarrow(t *testing.T) {
 				t.Errorf("%s has rights on %s: %v %v", role, table, any, err)
 			}
 		}
+	}
+
+	// The one right ts_system has on order notes: adding one, for a member
+	// order_manager() vouches for (order_notes_system).
+	var rights []string
+	if err := owner.QueryRow(ctx, `select array(select a.attname || ':' || p from pg_attribute a
+			cross join unnest(array['SELECT', 'INSERT', 'UPDATE', 'REFERENCES']) p
+			where a.attrelid = 'order_notes'::regclass and a.attnum > 0 and not a.attisdropped
+			  and has_column_privilege('ts_system', a.attrelid, a.attnum, p)
+			union all select p from unnest(array['DELETE', 'TRUNCATE', 'TRIGGER']) p
+			where has_table_privilege('ts_system', 'order_notes'::regclass, p) order by 1)`).Scan(&rights); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"author:INSERT", "body:INSERT", "id:INSERT", "order_id:INSERT", "organizer_id:INSERT"}; !slices.Equal(rights, want) {
+		t.Errorf("ts_system on order_notes: %v, want only %v", rights, want)
 	}
 }
 
