@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { CANCEL_WARNING, canCancel, cancelledText } from "./CancelEvent";
+import { CANCEL_WARNING, canCancel, cancelledText, repayLines } from "./CancelEvent";
 
 test("cancelling needs the event's name, spaces aside", () => {
   expect(canCancel(" Spring Gala ", "Spring Gala")).toBe(true);
@@ -17,4 +17,10 @@ test("the warning says what happens to refunds made already", () => {
   expect(CANCEL_WARNING).toContain(
     "Everyone holding a ticket that still works gets their money back, our service fee included. Refunds you've already made stay as they are, and any that failed still need a Try again from the order.",
   );
+});
+
+test("manual orders come back as a list to pay back", () => {
+  expect(repayLines([{ id: "x", code: "TS-AB12C", total_cents: 4000 }])).toEqual([
+    "TS-AB12C · $40.00",
+  ]);
 });

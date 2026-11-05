@@ -81,3 +81,9 @@ test("the buyer's rename is credited to the buyer, not to Automatic", () => {
   );
   expect(who({ actor_type: "system", action: "ticket.renamed" }, "u1")).toBe("Automatic");
 });
+
+test("the order tools read as plain words", () => {
+  expect(say("order.created_manual")).toBe("Order added by hand");
+  expect(say("order.note_added")).toBe("Order note added");
+  expect(say("order.note_deleted")).toBe("Order note deleted");
+});

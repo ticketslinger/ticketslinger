@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
 import { ApiFailure } from "../api";
 import { eventTabs } from "./Events";
 import { ROLE } from "./Home";
 import type { Org } from "./Organizer";
-import { explain, ROLE_CHOICES, removeWarning } from "./Team";
+import { explain, ROLE_CHOICES, removeWarning, Team } from "./Team";
 
 test("roles read as the spec words them", () => {
   expect([ROLE.owner, ROLE.admin, ROLE.checkin]).toEqual(["Owner", "Admin", "Check-in"]);
@@ -42,4 +44,15 @@ test("the remove confirm says their keys stop working too", () => {
   expect(removeWarning("Acme")).toBe(
     "They lose access to Acme straight away, and any API keys they made here stop working.",
   );
+});
+
+test("owners and admins get the order email setting; check-in staff don't", () => {
+  const html = (role: Org["role"]) =>
+    renderToString(
+      createElement(Team, { org: { id: "o", name: "Acme", slug: "acme", role, suspended: false } }),
+    );
+  expect(html("owner")).toContain("Email me about each new online order");
+  expect(html("owner")).toContain("At most 50 a day. Comp and manual orders don&#x27;t send one.");
+  expect(html("admin")).toContain("Email me about each new online order");
+  expect(html("checkin")).not.toContain("Email me about each new online order");
 });

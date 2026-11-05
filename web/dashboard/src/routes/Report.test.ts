@@ -68,3 +68,12 @@ test("the saved file name comes from Content-Disposition", () => {
   );
   expect(fileName(null, "orders.csv")).toBe("orders.csv");
 });
+
+test("money taken by hand and comps show only when there are some", () => {
+  const labels = (r: EventReport) => figures(r).map(([l]) => l);
+  expect(labels(fixture)).not.toContain("Taken by hand");
+  expect(labels(fixture)).not.toContain("Comp tickets");
+  const more = { ...fixture, manual_takings_cents: 4000, comp_tickets: 3 };
+  expect(figures(more)).toContainEqual(["Taken by hand", "$40.00"]);
+  expect(figures(more)).toContainEqual(["Comp tickets", "3"]);
+});

@@ -1,9 +1,10 @@
 import type { components } from "@ticketslinger/api-client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ApiFailure, api, must } from "../api";
+import { withKey } from "../idempotency";
 import { ErrorText, Field, focusOnMount, useAction, useLoad } from "../ui";
 import { ROLE } from "./Home";
-import type { Org } from "./Organizer";
+import { canEdit, type Org } from "./Organizer";
 
 type Member = components["schemas"]["Member"];
 type Role = components["schemas"]["AddMember"]["role"];
@@ -132,7 +133,53 @@ export function Team({ org }: { org: Org }) {
           </form>
         </section>
       )}
+
+      {(org.role === "owner" || org.role === "admin") && <Notifications org={org} />}
     </>
+  );
+}
+
+/** Each owner or admin's own order emails for this organizer. */
+function Notifications({ org }: { org: Org }) {
+  const path = { organizer: org.slug };
+  const { data, setData, error } = useLoad(async () =>
+    must(await api.GET("/organizers/{organizer}/notifications", { params: { path } })),
+  );
+  const save = useAction();
+  const key = useRef<string | null>(null);
+  return (
+    <section>
+      <h2>Notifications</h2>
+      <label className="check">
+        <input
+          type="checkbox"
+          aria-describedby="order-alerts-hint"
+          checked={data?.order_alerts ?? false}
+          disabled={!data || save.busy || !canEdit(org)}
+          onChange={(e) => {
+            const on = e.target.checked;
+            key.current = null; // a new choice is a new request
+            save.run(async () => {
+              setData(
+                await withKey(key, async (k) =>
+                  must(
+                    await api.PUT("/organizers/{organizer}/notifications", {
+                      params: { path, header: { "Idempotency-Key": k } },
+                      body: { order_alerts: on },
+                    }),
+                  ),
+                ),
+              );
+            });
+          }}
+        />
+        <span>Email me about each new online order</span>
+      </label>
+      <p className="hint" id="order-alerts-hint">
+        At most 50 a day. Comp and manual orders don't send one.
+      </p>
+      <ErrorText>{error?.message || save.error}</ErrorText>
+    </section>
   );
 }
 

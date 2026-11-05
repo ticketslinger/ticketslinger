@@ -3,10 +3,12 @@ import type { components } from "@ticketslinger/api-client";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
+  cancelWarning,
   canRenameTicket,
   canResend,
   emailLine,
   failureText,
+  NoteItem,
   RENAME_HINT,
   reasonText,
   refundPreview,
@@ -164,7 +166,9 @@ const line = (over: Partial<Parameters<typeof TicketLine>[0]>) =>
       renaming: false,
       refocus: false,
       voidLabel: "",
+      refundable: true,
       onPick: () => {},
+      onCancel: () => {},
       onEdit: () => {},
       onClose: () => {},
       onSaved: async () => {},
@@ -184,4 +188,47 @@ test("Edit name is off while a refund is going through, and absent while editing
   expect(line({ busy: true })).toMatch(/<button[^>]*disabled[^>]*>Edit name/);
   expect(line({ busy: false })).not.toMatch(/<button[^>]*disabled[^>]*>Edit name/);
   expect(line({ renaming: true })).not.toContain("Edit name");
+});
+
+test("a comp or manual order's tickets have no refund checkbox, and still a More menu", () => {
+  const html = line({ refundable: false, renaming: false });
+  expect(html).not.toContain('type="checkbox"');
+  expect(html).toContain("Edit name");
+  expect(html).toMatch(/<summary[^>]*>More/);
+  expect(html).toContain("Cancel ticket");
+  expect(line({ refundable: false, renaming: true })).not.toContain('type="checkbox"');
+});
+
+test("the cancel warning says what happens to the money, and whether the buyer hears", () => {
+  expect(cancelWarning("online", 5000, true)).toBe(
+    "Nothing is refunded: the buyer's $50.00 stays paid. Their tickets stop working straight away. We'll email the buyer to say so.",
+  );
+  expect(cancelWarning("manual", 4000, false)).toBe(
+    "Nothing is refunded here. If they paid you $40.00, give it back yourself. Their tickets stop working straight away. The buyer won't be told.",
+  );
+  expect(cancelWarning("comp", 0, true)).toBe(
+    "They paid nothing, so there's nothing to refund. Their tickets stop working straight away. We'll email the buyer to say so.",
+  );
+});
+
+test("NoteItem renders text", () => {
+  const html = renderToString(
+    createElement(NoteItem, {
+      note: {
+        id: "n",
+        author_name: "Sam",
+        body: "<img src=x onerror=alert(1)>",
+        created_at: "2026-11-05T12:00:00Z",
+        can_delete: true,
+      },
+      timezone: "UTC",
+      canDelete: true,
+      onDeleted: () => {},
+      path: { organizer: "o", event: "e", order: "x" },
+    }),
+  );
+  expect(html).toContain("&lt;img");
+  expect(html).not.toContain("<img src=x");
+  expect(html).toContain("Sam");
+  expect(html).toContain("Delete");
 });

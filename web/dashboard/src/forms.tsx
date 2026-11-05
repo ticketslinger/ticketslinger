@@ -21,6 +21,7 @@ export function FormDialog({
   onSubmit,
   busy,
   submitLabel,
+  closeLabel = "Cancel",
   children,
 }: {
   title: string;
@@ -29,6 +30,7 @@ export function FormDialog({
   onSubmit: () => void;
   busy: boolean;
   submitLabel: string;
+  closeLabel?: string;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -65,7 +67,7 @@ export function FormDialog({
             className="inline secondary"
             onClick={() => askToLeave(() => ref.current?.close())}
           >
-            Cancel
+            {closeLabel}
           </button>
         </div>
       </form>

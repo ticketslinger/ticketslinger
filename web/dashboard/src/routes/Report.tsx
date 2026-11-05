@@ -14,6 +14,10 @@ export const EMPTY_REPORT =
 
 export const figures = (r: EventReport): [label: string, value: string][] => [
   ["Ticket sales", formatCents(r.gross_cents)],
+  ...(r.manual_takings_cents
+    ? [["Taken by hand", formatCents(r.manual_takings_cents)] as [string, string]]
+    : []),
+  ...(r.comp_tickets ? [["Comp tickets", String(r.comp_tickets)] as [string, string]] : []),
   ["Refunded", formatCents(r.refunded_cents)],
   ["Our fee", formatCents(r.platform_fee_cents)],
   ["Yours before Stripe's fees", formatCents(r.net_cents)],
