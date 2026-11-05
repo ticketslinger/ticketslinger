@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { bpToPercent, percentToBp } from "./EventForm";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import { bpToPercent, EventForm, FEE_HINTS, percentToBp } from "./EventForm";
 
 test("basis points show as a percent with up to two decimals", () => {
   expect(bpToPercent(0)).toBe("0");
@@ -26,4 +28,18 @@ test("anything else is refused", () => {
   for (const bad of ["8.255", "100.01", "-1", "abc", "8,25", "1e2", "8.", "101"]) {
     expect(percentToBp(bad)).toBeNull();
   }
+});
+
+test("the fee-mode hints say what buyers see and what the organizer keeps", () => {
+  expect(FEE_HINTS.pass).toBe(
+    "Buyers see one price with the fee already in it. You get your full ticket price.",
+  );
+  expect(FEE_HINTS.absorb).toBe("It comes out of your ticket price, so buyers pay no fee.");
+});
+
+test("the fee-mode radios render their hints", () => {
+  const org = { slug: "x", role: "owner" } as Parameters<typeof EventForm>[0]["org"];
+  const html = renderToString(createElement(EventForm, { org }));
+  expect(html).toContain(FEE_HINTS.pass);
+  expect(html).toContain(FEE_HINTS.absorb);
 });
