@@ -1,6 +1,6 @@
 import type { components } from "@ticketslinger/api-client";
 import { useRef, useState } from "react";
-import { ApiFailure, api, must } from "../api";
+import { api, must } from "../api";
 import { toggle } from "../forms";
 import { withKey } from "../idempotency";
 import { formatCents } from "../money";
@@ -65,14 +65,6 @@ export const reasonText = (r: Refund, eventCancelled: boolean) =>
 export const RENAME_HINT =
   "Their QR code doesn't change. The email they already have shows the old name until you resend it.";
 
-/** Our words for the rename errors the spec writes out; undefined means use the server's. */
-export function renameProblem(code: string): string | undefined {
-  if (code === "ticket_void")
-    return "This ticket has been refunded or cancelled, so its name can't change.";
-  if (code === "bad_attendee")
-    return "Keep the name 120 characters or fewer, using ordinary letters and punctuation.";
-}
-
 export const canRenameTicket = (t: { status: string }, org: Org) =>
   t.status === "valid" && canEdit(org);
 
@@ -95,20 +87,15 @@ function RenameTicket({
       onSubmit={(e) => {
         e.preventDefault();
         action.run(async () => {
-          try {
-            must(
-              await api.PATCH(
-                "/organizers/{organizer}/events/{event}/orders/{order}/tickets/{ticket}",
-                {
-                  params: { path: { ...path, ticket: ticket.id } },
-                  body: { attendee_name: name },
-                },
-              ),
-            );
-          } catch (err) {
-            const mine = err instanceof ApiFailure && renameProblem(err.code);
-            throw mine ? new ApiFailure(err.code, mine, err.status, err.field) : err;
-          }
+          must(
+            await api.PATCH(
+              "/organizers/{organizer}/events/{event}/orders/{order}/tickets/{ticket}",
+              {
+                params: { path: { ...path, ticket: ticket.id } },
+                body: { attendee_name: name },
+              },
+            ),
+          );
           await onSaved();
           onCancel();
         });
