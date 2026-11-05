@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { emptyTicket, needsCapacity, quotaBody, ticketBody } from "./Tickets";
+import { buyersSee, emptyTicket, needsCapacity, quotaBody, ticketBody } from "./Tickets";
 
 const ok = { ...emptyTicket, name: "General", price: "25" };
 
@@ -69,4 +69,11 @@ test("a sales time in a clock-change gap moves forward, as the event form does",
 test("only a live event insists on a capacity", () => {
   expect(needsCapacity("live")).toBe(true);
   for (const s of ["draft", "ended", "cancelled"] as const) expect(needsCapacity(s)).toBe(false);
+});
+
+test("the ticket list says what buyers see only when it differs", () => {
+  const t = { price_cents: 2500, all_in_cents: 2600 } as Parameters<typeof buyersSee>[0];
+  expect(buyersSee(t)).toBe("Buyers see $26.00");
+  expect(buyersSee({ ...t, all_in_cents: 2500 })).toBe("");
+  expect(buyersSee({ ...t, price_cents: 0, all_in_cents: 0 })).toBe("");
 });
