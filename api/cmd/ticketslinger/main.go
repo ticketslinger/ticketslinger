@@ -227,7 +227,8 @@ func paymentProvider(cfg config.Config, testMode bool) plugin.PaymentProvider {
 // through a proxy gets the same 404 as when they aren't mounted.
 //
 // GET /__test/last-email serves the link in the newest message to ?to=, so
-// a browser test can follow an email.
+// a browser test can follow an email. GET /__test/last-email-summary
+// describes that message: subject, text with links blanked, attachments.
 //
 // POST /__test/stripe/pay-latest is what Stripe would send when the fake's
 // newest payment succeeds, signed with our own webhook secret and served

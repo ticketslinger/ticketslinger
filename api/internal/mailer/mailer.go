@@ -121,8 +121,10 @@ func (m *Memory) LastLink(to string) string {
 }
 
 // Summary is the shape of a message, for the e2e: never its links or codes.
+// Text is the plain body with every link replaced by [link].
 type Summary struct {
 	Subject     string   `json:"subject"`
+	Text        string   `json:"text"`
 	Inline      int      `json:"inline"`
 	Attachments []string `json:"attachments"`
 	PDFPages    int      `json:"pdf_pages"`
@@ -138,7 +140,7 @@ func (m *Memory) Summary(to string) (Summary, bool) {
 		if m.Sent[i].To != to {
 			continue
 		}
-		s := Summary{Subject: m.Sent[i].Subject, Attachments: []string{}}
+		s := Summary{Subject: m.Sent[i].Subject, Text: linkRe.ReplaceAllString(m.Sent[i].Text, "[link]"), Attachments: []string{}}
 		for _, p := range m.Sent[i].Parts {
 			if p.ContentID != "" {
 				s.Inline++
