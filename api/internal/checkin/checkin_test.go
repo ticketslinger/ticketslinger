@@ -241,3 +241,26 @@ func nonCanonical(qr string) string {
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 	return qr[:21] + string(alphabet[strings.IndexByte(alphabet, qr[21])^1])
 }
+
+// Comp and manual tickets are people through the door like any other.
+func TestSummaryCountsCompAndManual(t *testing.T) {
+	f := seed(t)
+	f.order(t, f.org, f.event, f.general, "TS-0NE11", "o@example.com", "Ann")
+	for code, kind := range map[string]string{"TS-MAN22": "manual", "TS-CMP33": "comp"} {
+		o := f.id(t, `insert into orders(organizer_id, event_id, code, email, status, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents, fee_mode, quote, details, source, manual_method)
+			values ($1, $2, $3, 'x@example.com', 'paid', 0, 0, 0, 0, 0, 'absorb', '{}', '{}', $4, case when $4 = 'manual' then 'cash' end) returning id`, f.org, f.event, code, kind)
+		for _, name := range []string{"P", "Q"}[:map[string]int{"manual": 1, "comp": 2}[kind]] {
+			id := uuid.New()
+			f.exec(t, `insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, charge_cents, attendee_name, secret)
+				values ($1, $2, $3, $4, 0, 0, 0, 0, 0, $5, $6)`, f.org, f.event, o, f.general, name, id[:])
+		}
+	}
+	err := db.WithOrganizer(context.Background(), f.app, f.user, f.org, func(tx pgx.Tx, _ string) error {
+		in, sold, err := checkin.Summary(context.Background(), tx, f.event)
+		if in != 0 || sold != 4 {
+			t.Fatalf("checked in %d, sold %d, want 0 and 4", in, sold)
+		}
+		return err
+	})
+	f.must(t, err)
+}

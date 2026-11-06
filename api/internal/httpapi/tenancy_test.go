@@ -41,20 +41,27 @@ func opID(op *openapi3.Operation) string {
 // sessionOnly lists tenant operations an API key may never call, even for
 // its own organizer: they need a person behind a signed-in session.
 var sessionOnly = map[string]string{
-	"listAudit":          "the audit log is for people, not integrations, in this release",
-	"listApiKeys":        "keys don't manage keys",
-	"createApiKey":       "keys don't mint keys",
-	"revokeApiKey":       "keys don't revoke keys",
-	"connectPayments":    "a person signs Stripe's terms, and the link is theirs to follow",
-	"startStripeLink":    "a person picks the Stripe account, and the state is tied to their session",
-	"disconnectPayments": "switching payments off is a person's call",
-	"refundOrder":        "a refund moves the organizer's money; a person decides",
-	"retryRefund":        "sending a refund again is a person's call too",
-	"cancelEvent":        "cancelling an event refunds everyone; a person decides",
-	"listMembers":        "who is on the team is for people, not integrations",
-	"addMember":          "giving someone access to the organizer is a person's call",
-	"removeMember":       "taking someone's access away is a person's call",
-	"listStaffAccess":    "who from TicketSlinger looked at the organizer is for its owners, not integrations",
+	"listAudit":           "the audit log is for people, not integrations, in this release",
+	"listApiKeys":         "keys don't manage keys",
+	"createApiKey":        "keys don't mint keys",
+	"revokeApiKey":        "keys don't revoke keys",
+	"connectPayments":     "a person signs Stripe's terms, and the link is theirs to follow",
+	"startStripeLink":     "a person picks the Stripe account, and the state is tied to their session",
+	"disconnectPayments":  "switching payments off is a person's call",
+	"refundOrder":         "a refund moves the organizer's money; a person decides",
+	"retryRefund":         "sending a refund again is a person's call too",
+	"cancelEvent":         "cancelling an event refunds everyone; a person decides",
+	"cancelOrder":         "cancelling a buyer's tickets is a person's call",
+	"listOrderNotes":      "a team's notes about a buyer are for people, not integrations",
+	"addOrderNote":        "a team's notes about a buyer are for people, not integrations",
+	"deleteOrderNote":     "a team's notes about a buyer are for people, not integrations",
+	"createManualOrder":   "issuing tickets outside a sale is a person's call",
+	"getNotifications":    "an inbox setting belongs to the person",
+	"updateNotifications": "an inbox setting belongs to the person",
+	"listMembers":         "who is on the team is for people, not integrations",
+	"addMember":           "giving someone access to the organizer is a person's call",
+	"removeMember":        "taking someone's access away is a person's call",
+	"listStaffAccess":     "who from TicketSlinger looked at the organizer is for its owners, not integrations",
 }
 
 // Every secured operation not in userScoped, called by a signed-in mfa user
@@ -137,6 +144,13 @@ func seedCatalogue(h *harness, owner, slug, apiKey string) map[string]string {
 		returning id::text`, event, slug, ticketType).Scan(&ticket); err != nil {
 		h.t.Fatal(err)
 	}
+	// A note on the first order, for the {note} routes.
+	var note string
+	if err := testdb.Owner(h.t, h.pool).QueryRow(context.Background(), `insert into order_notes (organizer_id, order_id, author, body)
+		select o.organizer_id, o.id, m.user_id, 'Seeded note' from orders o join memberships m on m.organizer_id = o.organizer_id and m.role = 'owner'
+		where o.id = $1 returning id::text`, order).Scan(&note); err != nil {
+		h.t.Fatal(err)
+	}
 	// The owner's own user id: removing it is refused anyway, so a walk that
 	// got through would still change nothing.
 	var member string
@@ -145,7 +159,7 @@ func seedCatalogue(h *harness, owner, slug, apiKey string) map[string]string {
 		h.t.Fatal(err)
 	}
 	return map[string]string{"organizer": slug, "member": member, "apiKey": apiKey, "event": event, "ticketType": ticketType, "quota": quota, "promoCode": promoCode, "question": question, "challengeId": "0190a0a0-0000-7000-8000-000000000000",
-		"eventSlug": "gala", "token": "no-such-checkout-token-0000000000000000000", "order": order, "refund": refund, "ticket": ticket, "code": "TS-00000", "q": "ab", "kind": "orders.csv"}
+		"eventSlug": "gala", "token": "no-such-checkout-token-0000000000000000000", "order": order, "refund": refund, "ticket": ticket, "note": note, "code": "TS-00000", "q": "ab", "kind": "orders.csv"}
 }
 
 // walk calls every secured operation with token and checks the status (and

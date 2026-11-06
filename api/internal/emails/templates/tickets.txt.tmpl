@@ -1,7 +1,9 @@
 You're going to {{.Event}}.
 
 {{.When}}{{with .Venue}}, {{.}}{{end}}.
-
+{{with .Payment}}
+{{.}}.
+{{end}}
 Your codes are in the attached PDF and on your order page. Bring them to the door, on your phone or on paper. Each one lets one person in, once.
 {{range .Shown}}
 Ticket {{.N}} of {{$.Count}}: {{.Type}}{{with .Attendee}}

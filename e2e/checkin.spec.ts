@@ -46,7 +46,7 @@ test("door staff find a guest by name and check them in", async ({ page, context
 
   // The owner adds them to the team as check-in staff.
   await page.goto(`/o/${slug}/team`);
-  await page.getByLabel("Email").fill(doorEmail);
+  await page.getByLabel("Email", { exact: true }).fill(doorEmail);
   await page.getByLabel("Role").selectOption("checkin");
   await page.getByRole("button", { name: "Add to team" }).click();
   await expect(page.getByRole("cell", { name: doorEmail })).toBeVisible();

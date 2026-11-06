@@ -186,3 +186,54 @@ func TestCancelEventOverHTTP(t *testing.T) {
 		t.Fatalf("back to live: %d %q, want 422 status_not_allowed", r.StatusCode, s.errorCode(r))
 	}
 }
+
+// offlineOrder seeds a paid comp or manual order of one ticket by owner SQL
+// and returns its id and code.
+func (s shop) offlineOrder(source, method string, total int64) (order, code string) {
+	s.t.Helper()
+	code = map[string]string{"comp": "TS-7C0M9", "manual": "TS-4F9K2"}[source]
+	var m *string
+	if method != "" {
+		m = &method
+	}
+	ctx := context.Background()
+	o := testdb.Owner(s.t, s.pool)
+	if err := o.QueryRow(ctx, `insert into orders (organizer_id, event_id, code, email, subtotal_cents, total_cents, discount_cents, tax_cents, fee_cents, quote, details, status, paid_at, source, manual_method, fee_mode)
+		select organizer_id, id, $2, $3, $4, $4, 0, 0, 0, '{}', '{}', 'paid', now(), $5, $6, 'absorb' from events where id = $1 returning id`,
+		s.f["event"], code, source+"@example.com", total, source, m).Scan(&order); err != nil {
+		s.t.Fatal(err)
+	}
+	if _, err := o.Exec(ctx, `insert into tickets (organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, charge_cents, secret)
+		select organizer_id, event_id, id, $2, total_cents, 0, 0, 0, total_cents, $3 from orders where id = $1`, order, s.f["ticketType"], []byte((source + "-secret-0123456")[:16])); err != nil {
+		s.t.Fatal(err)
+	}
+	return order, code
+}
+
+func TestRefundOrderRefusesOfflineOrders(t *testing.T) {
+	s := newShop(t, nil)
+	for _, c := range []struct {
+		source, method string
+		total          int64
+	}{{"comp", "", 0}, {"manual", "cash", 4000}} {
+		order, _ := s.offlineOrder(c.source, c.method, c.total)
+		res := s.do(s.owner, "POST", s.orderPath(order)+"/refunds", `{"refund_fee":false}`)
+		if res.StatusCode != 409 || s.errorCode(res) != "no_payment" {
+			t.Fatalf("%s: %d %q, want 409 no_payment", c.source, res.StatusCode, s.errorCode(res))
+		}
+	}
+}
+
+func TestCancelEventListsManualOrders(t *testing.T) {
+	s := newShop(t, nil)
+	order, code := s.offlineOrder("manual", "cash", 4000)
+	res := s.must(s.do(s.owner, "POST", "/v1/organizers/acme/events/"+s.f["event"]+"/cancel", `{"confirm_name":"Gala"}`), 200)
+	list, _ := res["manual_orders"].([]any)
+	if len(list) != 1 {
+		t.Fatalf("manual_orders %v", res["manual_orders"])
+	}
+	m, _ := list[0].(map[string]any)
+	if m["total_cents"] != float64(4000) || m["code"] != code || m["id"] != order {
+		t.Fatalf("manual_orders[0] = %v", m)
+	}
+}

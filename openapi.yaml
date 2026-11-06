@@ -417,6 +417,30 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/notifications:
+    get:
+      operationId: getNotifications
+      description: "Owners and admins, signed in (403 session_required for an API key, 403 forbidden_role for check-in members). Your own email setting for this organizer: order_alerts is true when you get an email for each new online order. It is off until you turn it on. In staff mode it answers false."
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Notifications" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    put:
+      operationId: updateNotifications
+      description: "Owners and admins, signed in (403 session_required for an API key, 403 forbidden_role for check-in members). Turns your own order emails on or off for this organizer. Paid and free online orders alert; comp and manual orders don't. The email names the order's code, event, tickets and total, never the buyer. At most 50 a day, UTC; the 50th says it is the last today."
+      parameters: [{ $ref: "#/components/parameters/OrganizerPath" }, { $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Notifications" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Notifications" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/payments:
     get:
       operationId: getPayments
@@ -754,6 +778,25 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createManualOrder
+      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Issues tickets yourself: kind comp gives them away, kind manual records an order paid outside the site, with method saying how and amount_cents what you collected ($0 or more; the order's total, split over its tickets by face price). Any ticket type of the event works, hidden ones and ones outside their sales window included, on a draft or ended event too, but quotas still hold: 409 sold_out lists what's left of every type. The order is paid at once, with no fee and no card payment, and send_tickets (true if left out) emails the buyer their tickets as a sale would. note becomes the order's first team note. Send an Idempotency-Key with every call (400 idempotency_key_required without one), so a retry can't issue the tickets twice. 20 orders a minute per member, then 429 rate_limited. 409 event_cancelled for a cancelled event; 410 event_unavailable while the organizer is suspended. 422 missing_field without kind, or without amount_cents for a manual order; 422 bad_kind, bad_method (method set for manual only), bad_amount (a comp has none), bad_email, bad_buyer_name, bad_attendee (more names than tickets, or a name we can't print), bad_note; 422 no_items, too_many_tickets (over 100, or a type listed twice), unknown_ticket_type (not this event's) and no_quota (a type in no quota), all with field lines."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CreateManualOrder" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ManualOrderCreated" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/orders/{order}:
     get:
       operationId: getOrderDetail
@@ -771,7 +814,7 @@ paths:
   /organizers/{organizer}/events/{event}/orders/{order}/refunds:
     post:
       operationId: refundOrder
-      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Name the tickets in ticket_ids, or leave it out to refund every ticket still valid. The buyer gets back what they paid for those tickets; with refund_fee true our fee on them goes back too, to the buyer when they paid it and to you when you absorbed it. Those tickets stop scanning straight away, and their seats go back on sale once the refund goes through. A ticket that cost nothing is cancelled and its seat freed at once, with no refund (refund is null). 409 not_refundable when nothing is left to refund. 422 bad_tickets (field ticket_ids) when a ticket isn't in this order or is refunded already, or the list is empty or null; 422 too_many over 100 tickets; 422 missing_field without refund_fee; 422 fee_without_refund (field refund_fee) when the tickets cost nothing but refund_fee is true. 404 for an order that isn't this event's."
+      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Name the tickets in ticket_ids, or leave it out to refund every ticket still valid. The buyer gets back what they paid for those tickets; with refund_fee true our fee on them goes back too, to the buyer when they paid it and to you when you absorbed it. Those tickets stop scanning straight away, and their seats go back on sale once the refund goes through. A ticket that cost nothing is cancelled and its seat freed at once, with no refund (refund is null). 409 not_refundable when nothing is left to refund. 409 no_payment for a comp or manual order: cancel it instead. 422 bad_tickets (field ticket_ids) when a ticket isn't in this order or is refunded already, or the list is empty or null; 422 too_many over 100 tickets; 422 missing_field without refund_fee; 422 fee_without_refund (field refund_fee) when the tickets cost nothing but refund_fee is true. 404 for an order that isn't this event's."
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
@@ -823,6 +866,71 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/orders/{order}/cancel:
+    post:
+      operationId: cancelOrder
+      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Cancels tickets of an order with no refund: the buyer's payment stands and none of it moves. Name the tickets in ticket_ids, or leave it out to cancel every ticket still valid. Those tickets stop scanning at once, even if someone has checked in with one, and their seats go back on sale. The order becomes cancelled when none of its tickets is valid and none was refunded. notify (true if left out) emails the buyer which tickets were cancelled, with your reason if you give one. 409 not_cancellable when nothing is left to cancel. 422 bad_tickets (field ticket_ids) when a ticket isn't in this order or is refunded or cancelled already, or the list is empty or null; 422 too_many over 100 tickets; 422 bad_reason (field reason) over 500 characters or with control characters. 404 for an order that isn't this event's."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CancelOrderRequest" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CancelOrderResult" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/orders/{order}/notes:
+    get:
+      operationId: listOrderNotes
+      description: "Owners and admins, signed in (403 session_required for an API key, 403 forbidden_role for other members, 403 staff_not_allowed in staff mode). Your team's private notes on this order, newest first. They are for your team only: never on the buyer's page, in their email or in any export. A note is plain text, so anything that looks like markup comes back as the same characters. can_delete is true when you wrote the note or you are an owner. 404 for an order that isn't this event's."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/OrderNote" } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    post:
+      operationId: addOrderNote
+      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Adds a private note to this order for your team. It is plain text, up to 2,000 characters, trimmed; it never reaches the buyer's page, their email or an export, and it can't be edited, only deleted. 422 bad_note (field body) when it is empty, too long or has control characters. 404 for an order that isn't this event's."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AddOrderNote" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/OrderNote" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/orders/{order}/notes/{note}:
+    delete:
+      operationId: deleteOrderNote
+      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Deletes a note: its text is wiped, not hidden. The person who wrote it can, and so can an owner; any other admin gets 403 not_your_note. 404 for a note that is gone already or isn't this order's."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+        - { $ref: "#/components/parameters/NotePath" }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/orders/{order}/tickets/{ticket}:
     patch:
@@ -1264,6 +1372,7 @@ components:
     OrderPath: { name: order, in: path, required: true, schema: { type: string, format: uuid } }
     RefundPath: { name: refund, in: path, required: true, schema: { type: string, format: uuid } }
     TicketPath: { name: ticket, in: path, required: true, schema: { type: string, format: uuid } }
+    NotePath: { name: note, in: path, required: true, schema: { type: string, format: uuid } }
     CheckoutTokenPath: { name: token, in: path, required: true, schema: { type: string }, description: "The token createCheckout returned." }
   responses:
     Error: { description: Error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -1438,9 +1547,12 @@ components:
         expected_total_cents: { type: integer, format: int64, minimum: 0, description: "The total you showed the buyer. When it doesn't match, 409 price_changed and nothing is charged. Send it." }
     Order:
       type: object
-      required: [code, status, email, event, totals, tickets, refunded_cents, returned_cents, names_until]
+      required: [code, status, email, event, totals, tickets, refunded_cents, returned_cents, names_until, source, manual_method, manual_cents]
       properties:
         code: { type: string }
+        manual_cents: { type: integer, format: int64, description: "For a manual order, what its tickets came to: the valid ones, or once none is valid, the ones the last cancel took. That's the money the organizer holds, or invoiced, for them. 0 for the others." }
+        source: { type: string, enum: [online, comp, manual], description: "How the order was paid: online by card, comp for free tickets an organizer gave away, manual for money the organizer took outside the site." }
+        manual_method: { type: [string, "null"], enum: [cash, cheque, invoice, other, null], description: "How a manual order was paid; null for the others. invoice means the organizer will invoice the buyer, so nothing has been paid yet." }
         names_until: { type: [string, "null"], format: date-time, description: "Until when the buyer can change the names on these tickets (renameTicketByLink): the event's start, or the organizer's names_locked_at when that's earlier. null when they can't now: the order isn't paid, the event isn't on sale, the organizer is suspended, or that time has passed." }
         status: { type: string, enum: [paid, cancelled, refunded, partially_refunded] }
         email: { type: string }
@@ -1451,7 +1563,7 @@ components:
           required: [name, status, starts_at, ends_at, timezone, venue_name, venue_address, organizer_name]
           properties:
             name: { type: string }
-            status: { type: string, enum: [live, ended, cancelled], description: "cancelled once the organizer has cancelled the event." }
+            status: { type: string, enum: [draft, live, ended, cancelled], description: "cancelled once the organizer has cancelled the event. draft only for an order issued by hand before the event went live." }
             starts_at: { type: string, format: date-time }
             ends_at: { type: string, format: date-time }
             timezone: { type: string }
@@ -1522,11 +1634,15 @@ components:
         details_submitted: { type: boolean, description: Whether the organizer has finished Stripe's onboarding form. }
     OrderSummary:
       type: object
-      required: [id, code, email, status, ticket_count, total_cents, fee_cents, fee_mode, created_at, paid_at, refunded_cents, fee_refunded_cents, ticket_email]
+      required: [id, code, email, status, ticket_count, total_cents, fee_cents, fee_mode, created_at, paid_at, refunded_cents, fee_refunded_cents, ticket_email, source, manual_method, buyer_name, manual_cents]
       properties:
         id: { type: string, format: uuid }
         code: { type: string }
         email: { type: string }
+        source: { type: string, enum: [online, comp, manual], description: "online: bought at checkout. comp: given away by the organizer. manual: paid to the organizer outside the site." }
+        manual_method: { type: [string, "null"], enum: [cash, cheque, invoice, other, null], description: "How a manual order was paid; null for any other." }
+        buyer_name: { type: string, description: "The buyer's name an organizer gave with a comp or manual order; empty otherwise." }
+        manual_cents: { type: integer, format: int64, description: "For a manual order, what its valid tickets came to: what you took by hand for it. Cancelled tickets don't count. 0 for the others." }
         status: { type: string, enum: [paid, cancelled, refunded, partially_refunded] }
         ticket_count: { type: integer, description: "Tickets still valid." }
         total_cents: { type: integer, format: int64 }
@@ -1579,10 +1695,12 @@ components:
         sold: { type: integer, description: "The event's valid tickets." }
     EventReport:
       type: object
-      required: [currency, gross_cents, refunded_cents, platform_fee_cents, tax_cents, net_cents, orders, sold, checked_in, ticket_types, quotas, sales_by_day, promo_codes]
+      required: [currency, gross_cents, manual_takings_cents, comp_tickets, refunded_cents, platform_fee_cents, tax_cents, net_cents, orders, sold, checked_in, ticket_types, quotas, sales_by_day, promo_codes]
       properties:
         currency: { type: string, enum: [USD] }
-        gross_cents: { type: integer, format: int64, description: "Totals of the orders listOrders lists." }
+        gross_cents: { type: integer, format: int64, description: "Totals of the online orders listOrders lists." }
+        manual_takings_cents: { type: integer, format: int64, description: "What you took by hand: what manual orders' valid tickets came to. Not in gross_cents." }
+        comp_tickets: { type: integer, description: "Valid comp tickets. They count in sold." }
         refunded_cents: { type: integer, format: int64, description: "Refunds that haven't failed: gone through or on their way." }
         platform_fee_cents: { type: integer, format: int64, description: "Our fee on succeeded payments, less the fee that has gone back." }
         tax_cents: { type: integer, format: int64, description: "Tax on the orders listOrders lists." }
@@ -1683,6 +1801,38 @@ components:
         amount_cents: { type: integer, format: int64 }
         fee_cents: { type: integer, format: int64 }
         order_status: { type: string, enum: [paid, cancelled, refunded, partially_refunded] }
+    CancelOrderRequest:
+      type: object
+      properties:
+        ticket_ids: { type: array, minItems: 1, maxItems: 100, items: { type: string, format: uuid }, x-go-type: "nullable.Nullable[[]openapi_types.UUID]", x-go-type-skip-optional-pointer: true, description: "The tickets to cancel, 1 to 100 of them. Leave it out to cancel every ticket still valid; an empty list or null is refused (422 bad_tickets), so a slip can't cancel the whole order." }
+        notify: { type: boolean, x-go-type: "*bool", x-go-type-skip-optional-pointer: true, description: "Email the buyer. true if left out." }
+        reason: { type: string, maxLength: 500, description: "Plain text the buyer sees in the email." }
+    Notifications:
+      type: object
+      required: [order_alerts]
+      properties:
+        order_alerts: { type: boolean, description: "True to get an email for each new online order." }
+    OrderNote:
+      type: object
+      required: [id, author_name, body, created_at, can_delete]
+      properties:
+        id: { type: string, format: uuid }
+        author_name: { type: string, description: "Who wrote it: their name, else their email, else Former member." }
+        body: { type: string, description: "Plain text, exactly as written. Never shown to the buyer." }
+        created_at: { type: string, format: date-time }
+        can_delete: { type: boolean, description: "True when you wrote it or you are an owner." }
+    AddOrderNote:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string, minLength: 1, maxLength: 2000, description: "Plain text for your team. Never shown to the buyer." }
+    CancelOrderResult:
+      type: object
+      required: [ticket_ids, charge_cents, order_status]
+      properties:
+        ticket_ids: { type: array, items: { type: string, format: uuid } }
+        charge_cents: { type: integer, format: int64, description: "What the buyer paid for these tickets. None of it moves." }
+        order_status: { type: string, enum: [paid, cancelled, refunded, partially_refunded] }
     CancelEventRequest:
       type: object
       required: [confirm_name]
@@ -1690,12 +1840,51 @@ components:
         confirm_name: { type: string, maxLength: 200, description: "The event's name, typed out, to confirm." }
     CancelEventResult:
       type: object
-      required: [event, orders, amount_cents, fee_cents]
+      required: [event, orders, amount_cents, fee_cents, manual_orders]
       properties:
         event: { $ref: "#/components/schemas/Event" }
         orders: { type: integer, description: "Orders a refund was made for (a free order is voided with nothing to send back)." }
         amount_cents: { type: integer, format: int64, description: "Asked back from Stripe for buyers, in all." }
         fee_cents: { type: integer, format: int64, description: "Our fee going back, in all." }
+        manual_orders:
+          type: array
+          description: "Manual orders this cancelled. You collected their money, or invoiced it, so paying it back is down to you."
+          items: { $ref: "#/components/schemas/ManualOrderTotal" }
+    CreateManualOrder:
+      type: object
+      required: [kind, email, lines]
+      properties:
+        kind: { type: string, enum: [comp, manual] }
+        email: { type: string, maxLength: 254, description: "Where the tickets go." }
+        buyer_name: { type: string, maxLength: 120 }
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            required: [ticket_type_id, quantity]
+            properties:
+              ticket_type_id: { type: string, format: uuid }
+              quantity: { type: integer, minimum: 1, maximum: 100 }
+        attendees: { type: array, maxItems: 100, items: { type: string, maxLength: 120 }, description: "Optional names, one per ticket in line order." }
+        method: { type: string, enum: [cash, cheque, invoice, other], description: "How a manual order was paid. Leave it out for a comp." }
+        amount_cents: { type: integer, format: int64, minimum: 0, maximum: 1000000000, description: "What you collected for a manual order (required for one). Leave it out for a comp." }
+        send_tickets: { type: boolean, x-go-type: "*bool", x-go-type-skip-optional-pointer: true, description: "Email the buyer their tickets. true if left out." }
+        note: { type: string, maxLength: 2000, description: "The order's first team note, plain text." }
+    ManualOrderCreated:
+      type: object
+      required: [id, code]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+    ManualOrderTotal:
+      type: object
+      required: [id, code, total_cents]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        total_cents: { type: integer, format: int64, description: "What the tickets the cancel took came to. Less than the order's total when some were cancelled before." }
     LinkMethod: { type: string, enum: [created, linked] }
     StripeLinkStart:
       type: object
@@ -1835,6 +2024,17 @@ components:
           type: array
           description: "Orders the database refused to refund (say, their payment had nothing left). The others went ahead; these need refunding by hand."
           items: { $ref: "#/components/schemas/StaffRefusedOrder" }
+        manual_orders:
+          type: array
+          description: "Manual orders it cancelled. The organizer took or invoiced their money outside the site, so paying it back is down to them. Missing from refunds finished before it was recorded."
+          items: { $ref: "#/components/schemas/StaffManualOrder" }
+    StaffManualOrder:
+      type: object
+      required: [order_id, code, total_cents]
+      properties:
+        order_id: { type: string, format: uuid }
+        code: { type: string }
+        total_cents: { type: integer, format: int64, description: "What the tickets the cancel took came to." }
     StaffRefusedOrder:
       type: object
       required: [order_id, reason]

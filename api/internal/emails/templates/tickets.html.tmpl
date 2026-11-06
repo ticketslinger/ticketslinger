@@ -1,6 +1,7 @@
 {{define "body"}}<h1 style="font-size:24px; line-height:1.3; margin:0 0 16px;">You're going to {{.Event}}.</h1>
 <p>{{.When}}{{with .Venue}}, {{.}}{{end}}.</p>
-<p>Bring the codes below to the door, on your phone or on paper. Each one lets one person in, once.</p>
+{{with .Payment}}<p>{{.}}.</p>
+{{end}}<p>Bring the codes below to the door, on your phone or on paper. Each one lets one person in, once.</p>
 {{range .Shown}}<div style="margin:24px 0;">
 <p style="margin:0 0 8px;"><strong>Ticket {{.N}} of {{$.Count}}: {{.Type}}</strong>{{with .Attendee}}<br>{{.}}{{end}}</p>
 <img src="cid:qr-{{.N}}" alt="QR code for ticket {{.N}}, {{.Type}}" width="264" height="264" style="display:block; width:264px; height:264px;">

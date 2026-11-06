@@ -288,6 +288,13 @@ func toStaffRefundResult(r *staff.RefundResult) *StaffRefundResult {
 	for _, f := range r.FailedOrders {
 		out.FailedOrders = append(out.FailedOrders, StaffRefusedOrder{OrderId: f.Order, Reason: f.Reason})
 	}
+	if r.ManualOrders != nil { // left out for a result recorded before manual orders were
+		manual := make([]StaffManualOrder, 0, len(r.ManualOrders))
+		for _, m := range r.ManualOrders {
+			manual = append(manual, StaffManualOrder{OrderId: m.Order, Code: m.Code, TotalCents: m.TotalCents})
+		}
+		out.ManualOrders = &manual
+	}
 	return out
 }
 

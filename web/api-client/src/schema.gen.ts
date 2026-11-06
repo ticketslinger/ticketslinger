@@ -474,6 +474,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Owners and admins, signed in (403 session_required for an API key, 403 forbidden_role for check-in members). Your own email setting for this organizer: order_alerts is true when you get an email for each new online order. It is off until you turn it on. In staff mode it answers false. */
+        get: operations["getNotifications"];
+        /** @description Owners and admins, signed in (403 session_required for an API key, 403 forbidden_role for check-in members). Turns your own order emails on or off for this organizer. Paid and free online orders alert; comp and manual orders don't. The email names the order's code, event, tickets and total, never the buyer. At most 50 a day, UTC; the 50th says it is the last today. */
+        put: operations["updateNotifications"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/payments": {
         parameters: {
             query?: never;
@@ -714,7 +732,8 @@ export interface paths {
         /** @description Owners and admins, or any API key; check-in staff get 403 forbidden_role, because orders show what people paid. The event's orders, newest first. Orders still waiting for payment aren't listed. email is the buyer's address. */
         get: operations["listOrders"];
         put?: never;
-        post?: never;
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Issues tickets yourself: kind comp gives them away, kind manual records an order paid outside the site, with method saying how and amount_cents what you collected ($0 or more; the order's total, split over its tickets by face price). Any ticket type of the event works, hidden ones and ones outside their sales window included, on a draft or ended event too, but quotas still hold: 409 sold_out lists what's left of every type. The order is paid at once, with no fee and no card payment, and send_tickets (true if left out) emails the buyer their tickets as a sale would. note becomes the order's first team note. Send an Idempotency-Key with every call (400 idempotency_key_required without one), so a retry can't issue the tickets twice. 20 orders a minute per member, then 429 rate_limited. 409 event_cancelled for a cancelled event; 410 event_unavailable while the organizer is suspended. 422 missing_field without kind, or without amount_cents for a manual order; 422 bad_kind, bad_method (method set for manual only), bad_amount (a comp has none), bad_email, bad_buyer_name, bad_attendee (more names than tickets, or a name we can't print), bad_note; 422 no_items, too_many_tickets (over 100, or a type listed twice), unknown_ticket_type (not this event's) and no_quota (a type in no quota), all with field lines. */
+        post: operations["createManualOrder"];
         delete?: never;
         options?: never;
         head?: never;
@@ -747,7 +766,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Name the tickets in ticket_ids, or leave it out to refund every ticket still valid. The buyer gets back what they paid for those tickets; with refund_fee true our fee on them goes back too, to the buyer when they paid it and to you when you absorbed it. Those tickets stop scanning straight away, and their seats go back on sale once the refund goes through. A ticket that cost nothing is cancelled and its seat freed at once, with no refund (refund is null). 409 not_refundable when nothing is left to refund. 422 bad_tickets (field ticket_ids) when a ticket isn't in this order or is refunded already, or the list is empty or null; 422 too_many over 100 tickets; 422 missing_field without refund_fee; 422 fee_without_refund (field refund_fee) when the tickets cost nothing but refund_fee is true. 404 for an order that isn't this event's. */
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Name the tickets in ticket_ids, or leave it out to refund every ticket still valid. The buyer gets back what they paid for those tickets; with refund_fee true our fee on them goes back too, to the buyer when they paid it and to you when you absorbed it. Those tickets stop scanning straight away, and their seats go back on sale once the refund goes through. A ticket that cost nothing is cancelled and its seat freed at once, with no refund (refund is null). 409 not_refundable when nothing is left to refund. 409 no_payment for a comp or manual order: cancel it instead. 422 bad_tickets (field ticket_ids) when a ticket isn't in this order or is refunded already, or the list is empty or null; 422 too_many over 100 tickets; 422 missing_field without refund_fee; 422 fee_without_refund (field refund_fee) when the tickets cost nothing but refund_fee is true. 404 for an order that isn't this event's. */
         post: operations["refundOrder"];
         delete?: never;
         options?: never;
@@ -784,6 +803,58 @@ export interface paths {
         /** @description Owners and admins, or a write API key. Sends the order's ticket email again: the same tickets and the same order link, to the address the buyer gave. It goes out from the queue, so this answers 202 with ticket_email queued; the order shows how it went. 409 email_on_its_way while the last one is still queued or being retried. 409 too_soon within 10 minutes of the last time it was asked for (by you, by the buyer, or by the sale itself). 409 no_tickets when the order has no valid ticket left. */
         post: operations["resendTicketEmail"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/orders/{order}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Cancels tickets of an order with no refund: the buyer's payment stands and none of it moves. Name the tickets in ticket_ids, or leave it out to cancel every ticket still valid. Those tickets stop scanning at once, even if someone has checked in with one, and their seats go back on sale. The order becomes cancelled when none of its tickets is valid and none was refunded. notify (true if left out) emails the buyer which tickets were cancelled, with your reason if you give one. 409 not_cancellable when nothing is left to cancel. 422 bad_tickets (field ticket_ids) when a ticket isn't in this order or is refunded or cancelled already, or the list is empty or null; 422 too_many over 100 tickets; 422 bad_reason (field reason) over 500 characters or with control characters. 404 for an order that isn't this event's. */
+        post: operations["cancelOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/orders/{order}/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Owners and admins, signed in (403 session_required for an API key, 403 forbidden_role for other members, 403 staff_not_allowed in staff mode). Your team's private notes on this order, newest first. They are for your team only: never on the buyer's page, in their email or in any export. A note is plain text, so anything that looks like markup comes back as the same characters. can_delete is true when you wrote the note or you are an owner. 404 for an order that isn't this event's. */
+        get: operations["listOrderNotes"];
+        put?: never;
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Adds a private note to this order for your team. It is plain text, up to 2,000 characters, trimmed; it never reaches the buyer's page, their email or an export, and it can't be edited, only deleted. 422 bad_note (field body) when it is empty, too long or has control characters. 404 for an order that isn't this event's. */
+        post: operations["addOrderNote"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organizers/{organizer}/events/{event}/orders/{order}/notes/{note}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Deletes a note: its text is wiped, not hidden. The person who wrote it can, and so can an owner; any other admin gets 403 not_your_note. 404 for a note that is gone already or isn't this order's. */
+        delete: operations["deleteOrderNote"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1400,6 +1471,21 @@ export interface components {
         Order: {
             code: string;
             /**
+             * Format: int64
+             * @description For a manual order, what its tickets came to: the valid ones, or once none is valid, the ones the last cancel took. That's the money the organizer holds, or invoiced, for them. 0 for the others.
+             */
+            manual_cents: number;
+            /**
+             * @description How the order was paid: online by card, comp for free tickets an organizer gave away, manual for money the organizer took outside the site.
+             * @enum {string}
+             */
+            source: "online" | "comp" | "manual";
+            /**
+             * @description How a manual order was paid; null for the others. invoice means the organizer will invoice the buyer, so nothing has been paid yet.
+             * @enum {string|null}
+             */
+            manual_method: "cash" | "cheque" | "invoice" | "other" | null;
+            /**
              * Format: date-time
              * @description Until when the buyer can change the names on these tickets (renameTicketByLink): the event's start, or the organizer's names_locked_at when that's earlier. null when they can't now: the order isn't paid, the event isn't on sale, the organizer is suspended, or that time has passed.
              */
@@ -1420,10 +1506,10 @@ export interface components {
             event: {
                 name: string;
                 /**
-                 * @description cancelled once the organizer has cancelled the event.
+                 * @description cancelled once the organizer has cancelled the event. draft only for an order issued by hand before the event went live.
                  * @enum {string}
                  */
-                status: "live" | "ended" | "cancelled";
+                status: "draft" | "live" | "ended" | "cancelled";
                 /** Format: date-time */
                 starts_at: string;
                 /** Format: date-time */
@@ -1528,6 +1614,23 @@ export interface components {
             id: string;
             code: string;
             email: string;
+            /**
+             * @description online: bought at checkout. comp: given away by the organizer. manual: paid to the organizer outside the site.
+             * @enum {string}
+             */
+            source: "online" | "comp" | "manual";
+            /**
+             * @description How a manual order was paid; null for any other.
+             * @enum {string|null}
+             */
+            manual_method: "cash" | "cheque" | "invoice" | "other" | null;
+            /** @description The buyer's name an organizer gave with a comp or manual order; empty otherwise. */
+            buyer_name: string;
+            /**
+             * Format: int64
+             * @description For a manual order, what its valid tickets came to: what you took by hand for it. Cancelled tickets don't count. 0 for the others.
+             */
+            manual_cents: number;
             /** @enum {string} */
             status: "paid" | "cancelled" | "refunded" | "partially_refunded";
             /** @description Tickets still valid. */
@@ -1618,9 +1721,16 @@ export interface components {
             currency: "USD";
             /**
              * Format: int64
-             * @description Totals of the orders listOrders lists.
+             * @description Totals of the online orders listOrders lists.
              */
             gross_cents: number;
+            /**
+             * Format: int64
+             * @description What you took by hand: what manual orders' valid tickets came to. Not in gross_cents.
+             */
+            manual_takings_cents: number;
+            /** @description Valid comp tickets. They count in sold. */
+            comp_tickets: number;
             /**
              * Format: int64
              * @description Refunds that haven't failed: gone through or on their way.
@@ -1760,6 +1870,44 @@ export interface components {
             /** @enum {string} */
             order_status: "paid" | "cancelled" | "refunded" | "partially_refunded";
         };
+        CancelOrderRequest: {
+            /** @description The tickets to cancel, 1 to 100 of them. Leave it out to cancel every ticket still valid; an empty list or null is refused (422 bad_tickets), so a slip can't cancel the whole order. */
+            ticket_ids?: string[];
+            /** @description Email the buyer. true if left out. */
+            notify?: boolean;
+            /** @description Plain text the buyer sees in the email. */
+            reason?: string;
+        };
+        Notifications: {
+            /** @description True to get an email for each new online order. */
+            order_alerts: boolean;
+        };
+        OrderNote: {
+            /** Format: uuid */
+            id: string;
+            /** @description Who wrote it: their name, else their email, else Former member. */
+            author_name: string;
+            /** @description Plain text, exactly as written. Never shown to the buyer. */
+            body: string;
+            /** Format: date-time */
+            created_at: string;
+            /** @description True when you wrote it or you are an owner. */
+            can_delete: boolean;
+        };
+        AddOrderNote: {
+            /** @description Plain text for your team. Never shown to the buyer. */
+            body: string;
+        };
+        CancelOrderResult: {
+            ticket_ids: string[];
+            /**
+             * Format: int64
+             * @description What the buyer paid for these tickets. None of it moves.
+             */
+            charge_cents: number;
+            /** @enum {string} */
+            order_status: "paid" | "cancelled" | "refunded" | "partially_refunded";
+        };
         CancelEventRequest: {
             /** @description The event's name, typed out, to confirm. */
             confirm_name: string;
@@ -1778,6 +1926,51 @@ export interface components {
              * @description Our fee going back, in all.
              */
             fee_cents: number;
+            /** @description Manual orders this cancelled. You collected their money, or invoiced it, so paying it back is down to you. */
+            manual_orders: components["schemas"]["ManualOrderTotal"][];
+        };
+        CreateManualOrder: {
+            /** @enum {string} */
+            kind: "comp" | "manual";
+            /** @description Where the tickets go. */
+            email: string;
+            buyer_name?: string;
+            lines: {
+                /** Format: uuid */
+                ticket_type_id: string;
+                quantity: number;
+            }[];
+            /** @description Optional names, one per ticket in line order. */
+            attendees?: string[];
+            /**
+             * @description How a manual order was paid. Leave it out for a comp.
+             * @enum {string}
+             */
+            method?: "cash" | "cheque" | "invoice" | "other";
+            /**
+             * Format: int64
+             * @description What you collected for a manual order (required for one). Leave it out for a comp.
+             */
+            amount_cents?: number;
+            /** @description Email the buyer their tickets. true if left out. */
+            send_tickets?: boolean;
+            /** @description The order's first team note, plain text. */
+            note?: string;
+        };
+        ManualOrderCreated: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+        };
+        ManualOrderTotal: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            /**
+             * Format: int64
+             * @description What the tickets the cancel took came to. Less than the order's total when some were cancelled before.
+             */
+            total_cents: number;
         };
         /** @enum {string} */
         LinkMethod: "created" | "linked";
@@ -1945,6 +2138,18 @@ export interface components {
             pending_orders: number;
             /** @description Orders the database refused to refund (say, their payment had nothing left). The others went ahead; these need refunding by hand. */
             failed_orders: components["schemas"]["StaffRefusedOrder"][];
+            /** @description Manual orders it cancelled. The organizer took or invoiced their money outside the site, so paying it back is down to them. Missing from refunds finished before it was recorded. */
+            manual_orders?: components["schemas"]["StaffManualOrder"][];
+        };
+        StaffManualOrder: {
+            /** Format: uuid */
+            order_id: string;
+            code: string;
+            /**
+             * Format: int64
+             * @description What the tickets the cancel took came to.
+             */
+            total_cents: number;
         };
         StaffRefusedOrder: {
             /** Format: uuid */
@@ -2399,6 +2604,7 @@ export interface components {
         OrderPath: string;
         RefundPath: string;
         TicketPath: string;
+        NotePath: string;
         /** @description The token createCheckout returned. */
         CheckoutTokenPath: string;
     };
@@ -3373,6 +3579,67 @@ export interface operations {
             503: components["responses"]["Error"];
         };
     };
+    getNotifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Notifications"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    updateNotifications: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Notifications"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Notifications"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
     getPayments: {
         parameters: {
             query?: never;
@@ -4099,6 +4366,45 @@ export interface operations {
             503: components["responses"]["Error"];
         };
     };
+    createManualOrder: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateManualOrder"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualOrderCreated"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            410: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
     getOrderDetail: {
         parameters: {
             query?: never;
@@ -4231,6 +4537,136 @@ export interface operations {
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    cancelOrder: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelOrderRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelOrderResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    listOrderNotes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderNote"][];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    addOrderNote: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddOrderNote"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderNote"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    deleteOrderNote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+                note: components["parameters"]["NotePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
             503: components["responses"]["Error"];
         };
     };

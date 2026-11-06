@@ -42,6 +42,15 @@ type RefundResult struct {
 	AmountCents   int64           `json:"amount_cents"`
 	FeeCents      int64           `json:"fee_cents"`
 	FailedOrders  []RefusedRefund `json:"failed_orders"`
+	ManualOrders  []ManualOrder   `json:"manual_orders"` // nil in a result recorded before manual orders were
+}
+
+// ManualOrder is a manual order the refund cancelled: the organizer took its
+// money outside the site, so paying TotalCents back is down to them.
+type ManualOrder struct {
+	Order      uuid.UUID `json:"order_id"`
+	Code       string    `json:"code"`
+	TotalCents int64     `json:"total_cents"`
 }
 
 // RefusedRefund is an order the refund left out, for someone to refund by hand.

@@ -37,6 +37,7 @@ type Service struct {
 	// (TS_PAYMENTS=direct), so organizers connect nothing and no fee is taken.
 	Direct        bool
 	StorefrontURL string // TS_STOREFRONT_URL: base for order links
+	DashboardURL  string // TS_DASHBOARD_ORIGIN: base for the links in order alerts
 	SecretKey     []byte // TS_SECRET_KEY: order links are signed with a key derived from it
 	// ticketsEmail builds the ticket email; nil means emails.Tickets. Tests
 	// set it to make the step before the send fail.
@@ -497,6 +498,20 @@ func soldOut(ctx context.Context, tx pgx.Tx, event uuid.UUID, p *promo) error {
 		join ticket_types t on t.id = a.ticket_type_id
 		where not t.hidden or exists (select 1 from promo_unlocks u where u.promo_code_id = $2 and u.ticket_type_id = t.id)
 		order by a.ticket_type_id`, event, promoID)
+	avail, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Availability])
+	if err != nil {
+		return err
+	}
+	return SoldOut{Available: avail}
+}
+
+// soldOutAll is SoldOut over every ticket type of event, hidden ones and a
+// draft event's included: what an owner or admin may still issue. A type's
+// room is its tightest quota's.
+func soldOutAll(ctx context.Context, tx pgx.Tx, event uuid.UUID) error {
+	rows, _ := tx.Query(ctx, `select t.id, greatest(0, min(q.size - quota_used(q.id, null))) from ticket_types t
+		join quota_ticket_types x on x.ticket_type_id = t.id join quotas q on q.id = x.quota_id
+		where t.event_id = $1 group by t.id order by t.id`, event)
 	avail, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Availability])
 	if err != nil {
 		return err

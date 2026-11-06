@@ -3,6 +3,7 @@ import { api, must } from "../api";
 import { publicEventUrl, publicLinkState, storefrontUrl } from "../publicLink";
 import { formatWhen } from "../time";
 import { ErrorText, focusOnMount, Link, navigate, useAction, useLoad } from "../ui";
+import { AddOrder } from "./AddOrder";
 import { CancelEvent } from "./CancelEvent";
 import { type Event, EventForm } from "./EventForm";
 import { Orders } from "./Orders";
@@ -236,7 +237,9 @@ export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: s
               <Link
                 key={t.label}
                 href={`/o/${org.slug}/events/${event.id}${t.path}`}
-                aria-current={t.path === tab ? "page" : undefined}
+                aria-current={
+                  t.path === tab || (t.path && tab.startsWith(`${t.path}/`)) ? "page" : undefined
+                }
               >
                 {t.label}
               </Link>
@@ -247,6 +250,7 @@ export function EventPage({ org, id, tab = "" }: { org: Org; id: string; tab?: s
           {tab === "/promo-codes" && <Promos org={org} event={event} />}
           {tab === "/questions" && <Questions org={org} event={event} />}
           {tab === "/orders" && <Orders org={org} event={event} />}
+          {tab === "/orders/new" && canEdit(org) && <AddOrder org={org} event={event} />}
           {tab === "/report" && <Report org={org} event={event} />}
 
           {tab === "" && canEdit(org) && (

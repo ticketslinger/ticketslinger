@@ -254,3 +254,72 @@ func TestAllInDiscountZeroWhenPromoDoesNotApply(t *testing.T) {
 		t.Fatalf("amount promo of 0: %d", q.AllInDiscountCents)
 	}
 }
+
+func faceLines(faces ...int64) []pricing.Line {
+	out := make([]pricing.Line, len(faces))
+	for i, f := range faces {
+		out[i] = pricing.Line{TicketTypeID: uuid.New(), Quantity: 1, PriceCents: f, TaxRateBP: 825}
+	}
+	return out
+}
+
+func TestManualSplit(t *testing.T) {
+	for _, c := range []struct {
+		amount      int64
+		faces, want []int64
+	}{
+		{1001, []int64{2500, 2500, 1000}, []int64{417, 417, 167}},
+		{1000, []int64{2500, 2500, 2500}, []int64{334, 333, 333}},
+		{501, []int64{0, 0}, []int64{251, 250}},
+		{5000, []int64{2500, 2500}, []int64{2500, 2500}},
+		{0, []int64{2500}, []int64{0}},
+	} {
+		q := pricing.Manual(faceLines(c.faces...), c.amount, pricing.FeePass)
+		if q.TotalCents != c.amount || q.FeeCents != 0 || q.TaxCents != 0 || q.DiscountCents != 0 || len(q.Tickets) != len(c.want) {
+			t.Fatalf("%d over %v: %+v", c.amount, c.faces, q)
+		}
+		var sub int64
+		for i, tk := range q.Tickets {
+			sub += c.faces[i]
+			if tk.ChargeCents != c.want[i] || tk.AllInCents != c.want[i] || tk.PriceCents != c.faces[i] || tk.FeeCents != 0 || tk.TaxCents != 0 || tk.DiscountCents != 0 {
+				t.Errorf("%d over %v: ticket %d %+v, want charge %d", c.amount, c.faces, i, tk, c.want[i])
+			}
+		}
+		if q.SubtotalCents != sub {
+			t.Errorf("%d over %v: subtotal %d, want %d", c.amount, c.faces, q.SubtotalCents, sub)
+		}
+	}
+	// Every amount over a few face grids: the shares add up to the cent.
+	for _, faces := range [][]int64{{1}, {2500, 2500, 1000}, {0, 0, 0}, {333, 1, 7, 10000000}, {0, 2500}, {99, 99, 99, 99, 99, 99, 1}} {
+		for amount := int64(0); amount <= 2000; amount++ {
+			var sum int64
+			for _, tk := range pricing.Manual(faceLines(faces...), amount, pricing.FeeAbsorb).Tickets {
+				if tk.ChargeCents < 0 {
+					t.Fatalf("%d over %v: a negative share %d", amount, faces, tk.ChargeCents)
+				}
+				sum += tk.ChargeCents
+			}
+			if sum != amount {
+				t.Fatalf("%d over %v: shares add to %d", amount, faces, sum)
+			}
+		}
+	}
+	// The API's bounds don't overflow: $10M over one $100k face and one $1.
+	q := pricing.Manual(faceLines(10000000, 1), 1000000000, pricing.FeePass)
+	if q.Tickets[0].ChargeCents+q.Tickets[1].ChargeCents != 1000000000 || q.Tickets[1].ChargeCents != 100 {
+		t.Fatalf("at the bounds: %+v", q.Tickets)
+	}
+}
+
+func TestCompIsFree(t *testing.T) {
+	q := pricing.Comp([]pricing.Line{{TicketTypeID: uuid.New(), Quantity: 3, PriceCents: 2500, TaxRateBP: 825}}, pricing.FeePass)
+	if len(q.Tickets) != 3 || q.SubtotalCents != 0 || q.DiscountCents != 0 || q.TaxCents != 0 || q.FeeCents != 0 || q.TotalCents != 0 ||
+		q.IncludedTaxCents != 0 || q.AllInDiscountCents != 0 || q.FeeMode != pricing.FeePass {
+		t.Fatalf("comp %+v", q)
+	}
+	for _, tk := range q.Tickets {
+		if tk.PriceCents != 0 || tk.ChargeCents != 0 || tk.AllInCents != 0 || tk.FeeCents != 0 || tk.TaxCents != 0 || tk.DiscountCents != 0 || tk.TicketTypeID == uuid.Nil {
+			t.Fatalf("comp ticket %+v", tk)
+		}
+	}
+}

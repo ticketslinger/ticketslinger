@@ -21,6 +21,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/getkin/kin-openapi/routers"
 	"github.com/getkin/kin-openapi/routers/legacy"
+	"github.com/google/uuid"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/httpapi"
 	"github.com/ticketslinger/ticketslinger/api/internal/testdb"
@@ -305,7 +306,19 @@ func TestEveryBoundAnswers422(t *testing.T) {
 				for n, v := range baseExtra[opID(op)] {
 					body[n] = v
 				}
+				if opID(op) == "createManualOrder" {
+					// A real comp order of the seeded General, in quota Hall (100).
+					body["lines"] = []any{map[string]any{"ticket_type_id": f["ticketType"], "quantity": 1}}
+				}
 				return body
+			}
+			// createManualOrder refuses a call without an Idempotency-Key
+			// before it reads the body; each call gets its own.
+			call := func(body string) *http.Response {
+				if opID(op) == "createManualOrder" {
+					return h.doKey(token, method, "/v1"+target, uuid.NewString(), body)
+				}
+				return h.do(token, method, "/v1"+target, body)
 			}
 			bounded := false
 			for _, parts := range props {
@@ -316,7 +329,7 @@ func TestEveryBoundAnswers422(t *testing.T) {
 			}
 			// The base body has to be valid, or a 422 below proves nothing.
 			b, _ := json.Marshal(base())
-			if res := h.do(token, method, "/v1"+target, string(b)); res.StatusCode == http.StatusUnprocessableEntity || res.StatusCode >= 500 {
+			if res := call(string(b)); res.StatusCode == http.StatusUnprocessableEntity || res.StatusCode >= 500 {
 				t.Errorf("%s /v1%s: the valid base body got %d %q", method, target, res.StatusCode, h.errorCode(res))
 			}
 			for name, parts := range props {
@@ -324,7 +337,7 @@ func TestEveryBoundAnswers422(t *testing.T) {
 					body := base()
 					body[name] = bad
 					b, _ = json.Marshal(body)
-					res := h.do(token, method, "/v1"+target, string(b))
+					res := call(string(b))
 					e, _ := h.json(res)["error"].(map[string]any)
 					code, _ := e["code"].(string)
 					field, _ := e["field"].(string)

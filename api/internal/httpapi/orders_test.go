@@ -313,3 +313,23 @@ func TestLongOrderTokenIs404(t *testing.T) {
 		}
 	}
 }
+
+func TestOrderShowsSource(t *testing.T) {
+	s := newShop(t, nil)
+	order, code := s.offlineOrder("manual", "invoice", 4000)
+	root := testdb.Owner(t, s.pool)
+	if _, err := root.Exec(context.Background(), `update orders set magic_token_hash = sha256('tok'::bytea) where id = $1`, order); err != nil {
+		t.Fatal(err)
+	}
+	get := func() map[string]any { return s.must(s.send("", "", "GET", "/v1/orders/"+code+"?token=tok", ""), 200) }
+	if o := get(); o["source"] != "manual" || o["manual_method"] != "invoice" {
+		t.Fatalf("order = %v, want source manual, manual_method invoice", o)
+	}
+	// An organizer can issue tickets on a draft; the buyer's page must still read.
+	if _, err := root.Exec(context.Background(), `update events set status = 'draft' where id = $1`, s.f["event"]); err != nil {
+		t.Fatal(err)
+	}
+	if o := get(); o["event"].(map[string]any)["status"] != "draft" {
+		t.Fatalf("event = %v, want status draft", o["event"])
+	}
+}

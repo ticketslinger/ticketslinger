@@ -21,14 +21,19 @@ export function FormDialog({
   onSubmit,
   busy,
   submitLabel,
+  closeLabel = "Cancel",
+  describedBy,
   children,
 }: {
   title: string;
+  /** The id of the text that says what submitting does, read out with the title. */
+  describedBy?: string;
   dirty: boolean;
   onClose: () => void;
   onSubmit: () => void;
   busy: boolean;
   submitLabel: string;
+  closeLabel?: string;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -41,6 +46,7 @@ export function FormDialog({
       ref={ref}
       className="form"
       aria-labelledby="form-dialog-title"
+      aria-describedby={describedBy}
       onClose={onClose}
       onCancel={(e) => {
         if (!dirty) return;
@@ -65,7 +71,7 @@ export function FormDialog({
             className="inline secondary"
             onClick={() => askToLeave(() => ref.current?.close())}
           >
-            Cancel
+            {closeLabel}
           </button>
         </div>
       </form>

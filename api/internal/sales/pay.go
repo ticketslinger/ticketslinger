@@ -465,39 +465,63 @@ func upsertPendingOrder(ctx context.Context, tx pgx.Tx, org uuid.UUID, c lockedC
 	case !errors.Is(err, pgx.ErrNoRows):
 		return o, err
 	}
-	quote, err := json.Marshal(q)
-	if err != nil {
-		return o, err
-	}
 	var promoID *uuid.UUID
 	if c.promo != nil {
 		promoID = &c.promo.id
 	}
+	o.ID, o.Code, err = insertOrder(ctx, tx, newOrder{Org: org, Event: c.event, Checkout: &c.id, Email: d.Email, Quote: q,
+		FeeMode: c.feeMode, Promo: promoID, Details: details, Source: "online"})
+	return o, err
+}
+
+// newOrder is a new order's row: an online one from its checkout, or a comp
+// or manual one an owner or admin made (CreatedBy).
+type newOrder struct {
+	Org, Event   uuid.UUID
+	Checkout     *uuid.UUID
+	Email        string
+	Quote        pricing.Quote
+	FeeMode      string
+	Promo        *uuid.UUID
+	Details      []byte // {attendees, answers}
+	Source       string // online | comp | manual
+	ManualMethod *string
+	CreatedBy    *uuid.UUID
+	BuyerName    string
+}
+
+// insertOrder writes o pending, under a fresh code.
+func insertOrder(ctx context.Context, tx pgx.Tx, o newOrder) (id uuid.UUID, code string, err error) {
+	q := o.Quote
+	quote, err := json.Marshal(q)
+	if err != nil {
+		return id, "", err
+	}
 	// 33 million codes: a clash is rare, and a savepoint lets us try another.
 	for range 5 {
-		o.Code = newOrderCode()
+		code = newOrderCode()
 		sp, err := tx.Begin(ctx)
 		if err != nil {
-			return o, err
+			return id, "", err
 		}
 		err = sp.QueryRow(ctx, `insert into orders (organizer_id, event_id, checkout_id, code, email, subtotal_cents, discount_cents,
-				tax_cents, fee_cents, total_cents, fee_mode, promo_code_id, quote, details)
-			values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning id`,
-			org, c.event, c.id, o.Code, d.Email, q.SubtotalCents, q.DiscountCents, q.TaxCents, q.FeeCents, q.TotalCents,
-			c.feeMode, promoID, quote, details).Scan(&o.ID)
+				tax_cents, fee_cents, total_cents, fee_mode, promo_code_id, quote, details, source, manual_method, created_by, buyer_name)
+			values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) returning id`,
+			o.Org, o.Event, o.Checkout, code, o.Email, q.SubtotalCents, q.DiscountCents, q.TaxCents, q.FeeCents, q.TotalCents,
+			o.FeeMode, o.Promo, quote, o.Details, o.Source, o.ManualMethod, o.CreatedBy, o.BuyerName).Scan(&id)
 		var pg *pgconn.PgError
 		if errors.As(err, &pg) && pg.Code == "23505" && pg.ConstraintName == "orders_code_key" {
 			if err := sp.Rollback(ctx); err != nil {
-				return o, err
+				return id, "", err
 			}
 			continue
 		}
 		if err != nil {
-			return o, err
+			return id, "", err
 		}
-		return o, sp.Commit(ctx)
+		return id, code, sp.Commit(ctx)
 	}
-	return o, errors.New("sales: no free order code after 5 tries")
+	return id, "", errors.New("sales: no free order code after 5 tries")
 }
 
 // orderToken is the buyer's key to their order page: an HMAC under a key

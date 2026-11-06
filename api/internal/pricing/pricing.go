@@ -2,7 +2,12 @@
 // All amounts are integer cents; every rounding is half up, per ticket.
 package pricing
 
-import "github.com/google/uuid"
+import (
+	"cmp"
+	"slices"
+
+	"github.com/google/uuid"
+)
 
 // MinimumChargeCents is Stripe's USD minimum for a charge.
 const MinimumChargeCents = 50
@@ -146,4 +151,66 @@ func priceTicket(l Line, promo *Promo, feeMode string, fee Fee) Ticket {
 		}
 	}
 	return t
+}
+
+// Comp is an order given away: every ticket, and the whole order, costs 0.
+func Comp(lines []Line, feeMode string) Quote {
+	q := Quote{FeeMode: feeMode}
+	for _, l := range lines {
+		for range l.Quantity {
+			q.Tickets = append(q.Tickets, Ticket{TicketTypeID: l.TicketTypeID})
+		}
+	}
+	return q
+}
+
+// Manual is an order paid outside Stripe: amountCents is what the organizer
+// took, split over the tickets by face price (all weigh 1 when every face is
+// 0). Each share is ⌊amount·w/W⌋; the cents left over go one each to the
+// largest remainders, ties to the earlier ticket, so the shares add up to
+// amountCents exactly. Tickets keep their face price for reporting; no tax,
+// fee or discount. Callers keep amountCents ≤ 1e9 and faces ≤ 1e7, so
+// amount·w fits in an int64.
+func Manual(lines []Line, amountCents int64, feeMode string) Quote {
+	q := Quote{FeeMode: feeMode, TotalCents: amountCents}
+	var weights []int64
+	var total int64
+	for _, l := range lines {
+		for range l.Quantity {
+			q.Tickets = append(q.Tickets, Ticket{TicketTypeID: l.TicketTypeID, PriceCents: l.PriceCents})
+			weights = append(weights, l.PriceCents)
+			total += l.PriceCents
+		}
+	}
+	if len(q.Tickets) == 0 {
+		return q
+	}
+	if total == 0 {
+		for i := range weights {
+			weights[i] = 1
+		}
+		total = int64(len(weights))
+	}
+	rem := make([]int64, len(weights))
+	left := amountCents
+	for i, w := range weights {
+		share := amountCents * w / total
+		rem[i] = amountCents * w % total
+		q.Tickets[i].ChargeCents = share
+		left -= share
+	}
+	// left < len(tickets): hand it out by largest remainder, earlier first.
+	order := make([]int, len(weights))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortStableFunc(order, func(a, b int) int { return cmp.Compare(rem[b], rem[a]) })
+	for _, i := range order[:left] {
+		q.Tickets[i].ChargeCents++
+	}
+	for i := range q.Tickets {
+		q.Tickets[i].AllInCents = q.Tickets[i].ChargeCents
+		q.SubtotalCents += q.Tickets[i].PriceCents
+	}
+	return q
 }

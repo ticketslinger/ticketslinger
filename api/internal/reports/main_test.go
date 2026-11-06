@@ -90,8 +90,10 @@ func (f fixture) sales(t *testing.T) (orderA uuid.UUID, ticketsA []uuid.UUID) {
 // two minutes after it was placed.
 type sale struct {
 	code, email, placed, status, payment string
+	source, method                       string
 	paid, absorb                         bool
 	subtotal, discount, tax, fee, total  int64
+	charge                               int64 // each ticket's charge_cents
 	promo                                *uuid.UUID
 	ticketType                           uuid.UUID
 	names                                []string
@@ -104,19 +106,28 @@ func (f fixture) order(t *testing.T, s sale) (uuid.UUID, []uuid.UUID) {
 		mode = "absorb"
 	}
 	o := f.id(t, `insert into orders(organizer_id, event_id, code, email, status, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents,
-			fee_mode, promo_code_id, quote, details, created_at, paid_at)
-		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, '{}', '{}', $13, case when $14 then $13::timestamptz + interval '2 minutes' end) returning id`,
-		f.org, f.event, s.code, s.email, status, s.subtotal, s.discount, s.tax, s.fee, s.total, mode, s.promo, s.placed, s.paid)
+			fee_mode, promo_code_id, quote, details, created_at, paid_at, source, manual_method)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, '{}', '{}', $13, case when $14 then $13::timestamptz + interval '2 minutes' end, $15, nullif($16, ''))
+		returning id`,
+		f.org, f.event, s.code, s.email, status, s.subtotal, s.discount, s.tax, s.fee, s.total, mode, s.promo, s.placed, s.paid, cmp.Or(s.source, "online"), s.method)
+	if s.source != "" && s.source != "online" { // comp and manual orders have no payment
+		return o, f.tickets(t, o, s)
+	}
 	f.exec(t, `insert into payments(organizer_id, order_id, provider, stripe_account_id, payment_intent_id, client_secret, amount_cents, application_fee_cents, status)
 		values ($1, $2, 'test', 'acct_test', 'pi_' || $3, 'secret_' || $3, $4, $5, $6)`, f.org, o, s.code, max(s.total, 50), s.fee, payment)
+	return o, f.tickets(t, o, s)
+}
+
+func (f fixture) tickets(t *testing.T, o uuid.UUID, s sale) []uuid.UUID {
+	t.Helper()
 	ids := make([]uuid.UUID, len(s.names))
 	for i, name := range s.names {
 		secret := make([]byte, 16)
 		_, _ = rand.Read(secret)
 		ids[i] = f.id(t, `insert into tickets(organizer_id, event_id, order_id, ticket_type_id, price_cents, discount_cents, tax_cents, fee_cents, charge_cents, attendee_name, secret)
-			values ($1, $2, $3, $4, 0, 0, 0, 0, 0, $5, $6) returning id`, f.org, f.event, o, s.ticketType, name, secret)
+			values ($1, $2, $3, $4, 0, 0, 0, 0, $7, $5, $6) returning id`, f.org, f.event, o, s.ticketType, name, secret, s.charge)
 	}
-	return o, ids
+	return ids
 }
 
 // refund adds a refund of order's payment. Our fee on a succeeded one has

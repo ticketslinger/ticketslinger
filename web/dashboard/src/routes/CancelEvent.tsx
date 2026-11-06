@@ -1,3 +1,4 @@
+import type { components } from "@ticketslinger/api-client";
 import { useRef, useState } from "react";
 import { api, must } from "../api";
 import { FormDialog } from "../forms";
@@ -13,13 +14,17 @@ export const canCancel = (typed: string, name: string) =>
 
 /** What the confirm dialog warns of. */
 export const CANCEL_WARNING =
-  "Everyone holding a ticket that still works gets their money back, our service fee included. Refunds you've already made stay as they are, and any that failed still need a Try again from the order. Every ticket stops working and nobody can buy from now on. This can't be undone.";
+  "Everyone who paid by card gets their money back, our service fee included. Orders you took by hand (cash, cheque, invoice) aren't refunded by us: we'll list them so you can pay those buyers back yourself. Refunds you've already made stay as they are, and any that failed still need a Try again from the order. Every ticket stops working and nobody can buy from now on. This can't be undone.";
 
 /** The result: `orders` counts only the orders a refund was made for (free ones get nothing back). */
 export const cancelledText = (orders: number, amountCents: number) =>
   orders === 0
     ? "Cancelled. There was nothing left to refund."
     : `Cancelled. We're refunding ${orders} order${orders === 1 ? "" : "s"}, ${formatCents(amountCents)} in all.`;
+
+/** The manual orders the cancel voided, one line each, for the organizer to pay back. */
+export const repayLines = (orders: components["schemas"]["ManualOrderTotal"][]) =>
+  orders.map((o) => `${o.code} · ${formatCents(o.total_cents)}`);
 
 /** The danger button on a live event's Details tab, its confirm dialog, and the result afterwards. */
 export function CancelEvent({
@@ -34,6 +39,7 @@ export function CancelEvent({
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState("");
   const [done, setDone] = useState("");
+  const [repay, setRepay] = useState<string[]>([]);
   const action = useAction();
   // One key per confirmed press; a retry after a dropped connection reuses it.
   const key = useRef<string | null>(null);
@@ -42,6 +48,16 @@ export function CancelEvent({
     return (
       <section className="danger">
         <p role="status">{done}</p>
+        {repay.length > 0 && (
+          <>
+            <p>You took these by hand, so pay them back yourself:</p>
+            <ul>
+              {repay.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </>
+        )}
       </section>
     );
   if (event.status !== "live") return null;
@@ -60,6 +76,7 @@ export function CancelEvent({
         ),
       );
       setOpen(false);
+      setRepay(repayLines(r.manual_orders));
       setDone(cancelledText(r.orders, r.amount_cents));
       onCancelled(r.event);
     });
@@ -81,7 +98,7 @@ export function CancelEvent({
           }}
           onSubmit={submit}
           busy={action.busy || !canCancel(typed, event.name)}
-          submitLabel="Cancel the event and refund everyone"
+          submitLabel="Cancel the event"
         >
           <p>{CANCEL_WARNING}</p>
           <Field

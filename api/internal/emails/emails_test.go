@@ -179,3 +179,30 @@ func TestSubjectsHaveNoControlCharacters(t *testing.T) {
 		t.Errorf("plain subject %q", p.Subject)
 	}
 }
+
+func TestTicketsPaymentLine(t *testing.T) {
+	build := func(pay string) mailer.Message {
+		d := data(1)
+		d.Payment = pay
+		m, err := emails.Tickets(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	none := build("")
+	if strings.Contains(none.Text, "\n\n\n") || strings.Contains(none.HTML, "<p>.</p>") {
+		t.Fatalf("empty payment left a trace:\n%s", none.Text)
+	}
+	comp := build("Complimentary")
+	if !strings.Contains(comp.Text, "\nComplimentary.\n") || !strings.Contains(comp.HTML, "<p>Complimentary.</p>") {
+		t.Fatalf("comp:\n%s\n%s", comp.Text, comp.HTML)
+	}
+	// Taking the line out gives back the online email exactly.
+	if strings.Replace(comp.Text, "\nComplimentary.\n", "", 1) != none.Text || strings.Replace(comp.HTML, "<p>Complimentary.</p>\n", "", 1) != none.HTML {
+		t.Fatal("the payment line changed more than itself")
+	}
+	if cash := build("Paid to the organizer ($40.00)"); !strings.Contains(cash.Text, "Paid to the organizer ($40.00).") {
+		t.Fatalf("cash:\n%s", cash.Text)
+	}
+}

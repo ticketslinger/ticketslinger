@@ -4,7 +4,7 @@ import { formatCents } from "../money";
 import { formatWhen } from "../time";
 import { ErrorText, Link, useLoad } from "../ui";
 import type { Event } from "./EventForm";
-import type { Org } from "./Organizer";
+import { canEdit, type Org } from "./Organizer";
 
 type OrderSummary = components["schemas"]["OrderSummary"];
 
@@ -15,14 +15,35 @@ const STATUS: Record<OrderSummary["status"], string> = {
   partially_refunded: "Partly refunded",
 };
 
-/** What the event has sold and given back. Gross counts every listed order: the list only holds orders that took money. */
+/** The badge a comp or manual order gets beside its status; null for one bought online. */
+export const sourceBadge = (o: { source: string; manual_method: string | null }): string | null =>
+  o.source === "comp" ? "Comp" : o.source === "manual" ? `Manual · ${o.manual_method}` : null;
+
+/**
+ * What the event has sold and given back. Gross counts every online order: the list only holds
+ * orders that took money. Money taken by hand (what manual orders' valid tickets came to) and
+ * comp tickets are counted apart.
+ */
 export function summarize(orders: OrderSummary[]) {
-  const sum = { orders: 0, tickets: 0, grossCents: 0, refundedCents: 0, feeCents: 0, netCents: 0 };
+  const sum = {
+    orders: 0,
+    tickets: 0,
+    grossCents: 0,
+    refundedCents: 0,
+    feeCents: 0,
+    netCents: 0,
+    manualCents: 0,
+    compTickets: 0,
+  };
   for (const o of orders) {
-    if (o.status === "paid" || o.status === "partially_refunded") {
+    const standing = o.status === "paid" || o.status === "partially_refunded";
+    if (standing) {
       sum.orders += 1;
       sum.tickets += o.ticket_count;
     }
+    sum.manualCents += o.manual_cents; // valid tickets only, as on the Report
+    if (o.source === "comp") sum.compTickets += o.ticket_count;
+    if (o.source !== "online") continue;
     sum.grossCents += o.total_cents;
     sum.refundedCents += o.refunded_cents;
     sum.feeCents += o.fee_cents - o.fee_refunded_cents;
@@ -55,6 +76,13 @@ export function Orders({ org, event }: { org: Org; event: Event }) {
 
   return (
     <>
+      {canEdit(org) && (
+        <p>
+          <Link className="button" href={`/o/${org.slug}/events/${event.id}/orders/new`}>
+            Add order
+          </Link>
+        </p>
+      )}
       <ErrorText>{error?.message}</ErrorText>
       {!data && !error && <p className="muted">Loading…</p>}
       {data?.length === 0 && <p>No orders yet. Once someone buys, they'll show up here.</p>}
@@ -63,6 +91,7 @@ export function Orders({ org, event }: { org: Org; event: Event }) {
           <p>
             {plural(sum.orders, "order")} · {plural(sum.tickets, "ticket")} ·{" "}
             {formatCents(sum.grossCents)} in sales
+            {sum.manualCents > 0 && ` · Taken by hand ${formatCents(sum.manualCents)}`}
           </p>
           <p>
             Refunded or on its way {formatCents(sum.refundedCents)} · Our fee{" "}
@@ -96,6 +125,12 @@ export function Orders({ org, event }: { org: Org; event: Event }) {
                     <td>{formatCents(o.total_cents)}</td>
                     <td>
                       <span className={`pill ${o.status}`}>{STATUS[o.status]}</span>
+                      {sourceBadge(o) && (
+                        <>
+                          {" "}
+                          <span className="pill source">{sourceBadge(o)}</span>
+                        </>
+                      )}
                       {emailTag(o) && (
                         <>
                           {" "}

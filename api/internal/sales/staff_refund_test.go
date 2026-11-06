@@ -106,12 +106,12 @@ func TestRefundEventForStaff(t *testing.T) {
 		t.Fatal("the event's status changed")
 	}
 	if n := f.count(t, `select count(*) from audit_log where action = 'event.refunded_by_support' and actor_system and entity_id = $1
-		and after = jsonb_build_object('staff_action_id', $2::text, 'orders', 2, 'amount_cents', 7800, 'fee_cents', 300, 'pending_orders', 1, 'failed_orders', '[]'::jsonb)`,
+		and after = jsonb_build_object('staff_action_id', $2::text, 'orders', 2, 'amount_cents', 7800, 'fee_cents', 300, 'pending_orders', 1, 'failed_orders', '[]'::jsonb, 'manual_orders', '[]'::jsonb)`,
 		f.event, action); n != 1 {
 		t.Fatal("no event.refunded_by_support row with the totals")
 	}
 	if n := f.count(t, `select count(*) from staff_actions where id = $1 and finished_at is not null
-		and result = '{"orders": 2, "amount_cents": 7800, "fee_cents": 300, "pending_orders": 1, "failed_orders": []}'`, action); n != 1 {
+		and result = '{"orders": 2, "amount_cents": 7800, "fee_cents": 300, "pending_orders": 1, "failed_orders": [], "manual_orders": []}'`, action); n != 1 {
 		t.Fatal("the action isn't finished with the totals")
 	}
 	sent := 0

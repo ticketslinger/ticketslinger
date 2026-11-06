@@ -197,7 +197,7 @@ func TestSuspendAndLift(t *testing.T) {
 		t.Fatalf("refund of another organizer's event: %v", b)
 	}
 	b = w.actOn(w.staffTok, "refund_event", w.fixture["event"])
-	want := map[string]any{"orders": 1.0, "amount_cents": 2600.0, "fee_cents": 100.0, "pending_orders": 0.0, "failed_orders": []any{}}
+	want := map[string]any{"orders": 1.0, "amount_cents": 2600.0, "fee_cents": 100.0, "pending_orders": 0.0, "failed_orders": []any{}, "manual_orders": []any{}}
 	if b["status"] != 202 || b["kind"] != "refund_event" || b["event"] != w.fixture["event"] || b["result"] != nil {
 		t.Fatalf("refund_event: %v, want 202 with no result yet", b)
 	}

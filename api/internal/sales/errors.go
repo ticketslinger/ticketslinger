@@ -82,6 +82,27 @@ var (
 	errAttendeeName = invalid("bad_attendee", "attendee_name", badName)
 )
 
+// An owner or admin's comp or manual order (CreateManualOrder).
+var (
+	errOrderEventCancelled error = catalogue.ErrConflict{Code: "event_cancelled", Message: "This event is cancelled, so it can't take new orders."}
+
+	errBadKind    = invalid("bad_kind", "kind", "Pick comp for free tickets or manual for ones paid outside the site.")
+	errNoKind     = invalid("missing_field", "kind", "Send \u201ckind\u201d: comp for free tickets, manual for ones paid outside the site.")
+	errManualType = invalid("unknown_ticket_type", "lines", "One of those ticket types isn't part of this event. Reload the page and pick again.")
+	errBadMethod  = invalid("bad_method", "method", "Say how they paid: cash, cheque, invoice or other.")
+	errBadAmount  = invalid("bad_amount", "amount_cents", "A comp is free, so leave the amount out. For a manual order, enter what you collected, $0 or more.")
+	errOrderEmail = invalid("bad_email", "email", "That email address doesn't look right. The tickets go there, so check it.")
+	errBuyerName  = invalid("bad_buyer_name", "buyer_name", badName)
+	errBadNote    = invalid("bad_note", "note", "Keep a note to 2,000 characters of plain text.")
+)
+
+// errBadNoteBody is bad_note for the notes endpoint, whose field is body.
+var errBadNoteBody = invalid("bad_note", "body", "Keep a note to 2,000 characters of plain text.")
+
+func errNoQuota(name string) error {
+	return invalid("no_quota", "lines", name+" isn't in any quota yet, so we can't count it. Add it to one on the Tickets tab first.")
+}
+
 const badName = "Keep the name to 120 characters or fewer, using ordinary letters and punctuation."
 
 // A ticket's name: the buyer can't change it any more (the event started,

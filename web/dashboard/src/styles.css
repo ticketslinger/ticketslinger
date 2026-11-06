@@ -668,3 +668,24 @@ button.danger-button {
 .staff-actions {
   padding: 0.5rem 1rem;
 }
+
+.pill.source {
+  color: var(--text);
+}
+
+.note-body {
+  white-space: pre-wrap;
+}
+
+details.menu {
+  display: inline-block;
+}
+
+details.menu summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+details.menu[open] > button {
+  margin-left: 0.5rem;
+}

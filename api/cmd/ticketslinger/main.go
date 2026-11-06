@@ -125,7 +125,7 @@ func serve() error {
 // through m and refunds through pay, the same ones the API uses.
 func newWorker(pool *pgxpool.Pool, m mailer.Mailer, cfg config.Config, pay plugin.PaymentProvider) *jobs.Worker {
 	// Order emails only read orders and rebuild links; refunds need the provider.
-	shop := &sales.Service{Pool: pool, StorefrontURL: cfg.StorefrontURL, SecretKey: cfg.SecretKey, Payments: pay, Direct: cfg.PaymentsMode == "direct"}
+	shop := &sales.Service{Pool: pool, StorefrontURL: cfg.StorefrontURL, DashboardURL: cfg.DashboardOrigin, SecretKey: cfg.SecretKey, Payments: pay, Direct: cfg.PaymentsMode == "direct"}
 	return &jobs.Worker{Pool: pool, Handlers: map[string]jobs.Handler{
 		"send_email":               jobs.SendEmail(m),
 		sales.OrderConfirmationJob: shop.OrderConfirmation(m),
@@ -133,6 +133,7 @@ func newWorker(pool *pgxpool.Pool, m mailer.Mailer, cfg config.Config, pay plugi
 		sales.RefundJob:            sales.Refund(shop),
 		sales.CancelPaymentJob:     sales.CancelPayment(shop),
 		sales.SettleOrderJob:       sales.SettleOrder(shop),
+		sales.OrderAlertJob:        shop.OrderAlert(m),
 	}, Parked: map[string]func(context.Context, []byte, string){sales.RefundJob: sales.RefundParked(shop),
 		sales.OrderConfirmationJob: sales.TicketEmailParked(shop)}}
 }
@@ -226,7 +227,8 @@ func paymentProvider(cfg config.Config, testMode bool) plugin.PaymentProvider {
 // through a proxy gets the same 404 as when they aren't mounted.
 //
 // GET /__test/last-email serves the link in the newest message to ?to=, so
-// a browser test can follow an email.
+// a browser test can follow an email. GET /__test/last-email-summary
+// describes that message: subject, text with links blanked, attachments.
 //
 // POST /__test/stripe/pay-latest is what Stripe would send when the fake's
 // newest payment succeeds, signed with our own webhook secret and served
