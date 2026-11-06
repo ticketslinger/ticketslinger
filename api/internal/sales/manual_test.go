@@ -208,8 +208,9 @@ func TestManualOrderRespectsQuotas(t *testing.T) {
 }
 
 // Review focus: an organizer's order and a buyer's checkout race for the
-// last seat. Both queue on the quota's lock, in turn each going first; the
-// lock lets exactly one through, every round.
+// last seat. Both queue on the quota's lock, in turn each queuing first; the
+// lock lets exactly one through, every round. Which one isn't pinned: the
+// lock grant order isn't promised.
 func TestManualOrderRacesCheckoutForLastSeat(t *testing.T) {
 	s := newService(t)
 	f := seed(t, s.Pool, seedOpts{quota: 1, price: 0})
@@ -251,8 +252,6 @@ func TestManualOrderRacesCheckoutForLastSeat(t *testing.T) {
 			t.Fatalf("round %d: manual %v, hold %v, pay %v: want exactly one winner", round, manualErr, holdErr, payErr)
 		case manualErr != nil && !errors.As(manualErr, &so), holdErr != nil && !errors.As(holdErr, &so) || payErr != nil:
 			t.Fatalf("round %d: manual %v, hold %v, pay %v: the loser should be sold_out", round, manualErr, holdErr, payErr)
-		case (round%2 == 0) != (manualErr == nil):
-			t.Fatalf("round %d: manual %v, hold %v: whoever got the lock first should win", round, manualErr, holdErr)
 		}
 		if n := f.quotaUsed(t); n != 1 {
 			t.Fatalf("round %d: quota used %d, want 1", round, n)
