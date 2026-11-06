@@ -52,6 +52,14 @@ test("a manual order sends its method and the amount in cents", () => {
   });
 });
 
+test("blank lines in the names don't shift a name onto the wrong ticket", () => {
+  expect(addOrderBody(form({ names: "\nAda\n  \n\nGrace\r\n" })).attendees).toEqual([
+    "Ada",
+    "Grace",
+  ]);
+  expect(addOrderBody(form({ names: " \n\n" })).attendees).toBeUndefined();
+});
+
 test("a manual order with no amount asks for one", () => {
   expect(addOrderProblem(form({ kind: "manual", amount: "" }))).toEqual({
     field: "amount_cents",

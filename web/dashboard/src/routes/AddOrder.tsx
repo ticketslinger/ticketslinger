@@ -39,7 +39,11 @@ const count = (q: string) => (/^\d{1,3}$/.test(q.trim()) ? Number(q) : 0);
 
 /** The form as the API wants it: only the lines with tickets, and no method or amount on a comp. */
 export function addOrderBody(f: AddOrderForm): Body {
-  const names = f.names.trimEnd();
+  // A blank line isn't a ticket: dropping it keeps each name on the ticket it was typed for.
+  const names = f.names
+    .split("\n")
+    .map((n) => n.trim())
+    .filter((n) => n !== "");
   const buyer = f.buyerName.trim();
   const note = f.note.trim();
   return {
@@ -49,7 +53,7 @@ export function addOrderBody(f: AddOrderForm): Body {
     lines: f.lines
       .filter((l) => count(l.quantity) > 0)
       .map((l) => ({ ticket_type_id: l.ticket_type_id, quantity: count(l.quantity) })),
-    ...(names ? { attendees: names.split("\n").map((n) => n.trim()) } : {}),
+    ...(names.length > 0 ? { attendees: names } : {}),
     ...(f.kind === "manual" ? { method: f.method, amount_cents: parseDollars(f.amount) ?? 0 } : {}),
     send_tickets: f.sendTickets,
     ...(note ? { note } : {}),
