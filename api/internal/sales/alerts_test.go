@@ -183,3 +183,22 @@ func TestAlertSkipsRemovedMember(t *testing.T) {
 		t.Fatalf("removed: err %v, sent %d", err, len(m.Sent))
 	}
 }
+
+// An order cancelled before its alert goes out has nothing left to tell.
+func TestAlertSkipsOrderWithNoTicketsLeft(t *testing.T) {
+	s, _ := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 20, price: 0})
+	f.alertsOn(t)
+	ctx := context.Background()
+	c := f.open(t, s, buy(sales.Item{TicketTypeID: f.general, Quantity: 1}))
+	_, err := s.Pay(ctx, c.Token, sales.Details{Email: "free@example.com"})
+	f.must(t, err)
+	order, _, _ := f.orderOf(t, c.ID)
+	var payload []byte
+	f.must(t, f.owner.QueryRow(ctx, `select payload from jobs where kind = 'order_alert'`).Scan(&payload))
+	f.cancelTix(t, s, order, sales.CancelTicketsRequest{})
+	m := &mailer.Memory{}
+	if err := s.OrderAlert(m)(ctx, payload); err != nil || len(m.Sent) != 0 {
+		t.Fatalf("err %v, sent %v", err, m.Sent)
+	}
+}

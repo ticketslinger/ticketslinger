@@ -51,7 +51,7 @@ func enqueueOrderAlerts(ctx context.Context, tx pgx.Tx, org, order uuid.UUID) er
 }
 
 // OrderAlert handles OrderAlertJob. A member who is no longer an opted-in
-// owner or admin, or an order that's gone, gets nothing. The mail names no
+// owner or admin, or an order that's gone or has no valid tickets left, gets nothing. The mail names no
 // buyer and no attendee (P7-D7).
 func (s *Service) OrderAlert(m mailer.Mailer) jobs.Handler {
 	return func(ctx context.Context, payload []byte) error {
@@ -86,6 +86,9 @@ func (s *Service) OrderAlert(m mailer.Mailer) jobs.Handler {
 			for _, l := range ls {
 				a.Lines = append(a.Lines, strconv.Itoa(l.N)+" × "+l.Name)
 				a.Tickets += l.N
+			}
+			if err == nil && a.Tickets == 0 { // cancelled or refunded before the alert went out
+				return pgx.ErrNoRows
 			}
 			return err
 		})
