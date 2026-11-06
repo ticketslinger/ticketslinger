@@ -248,13 +248,14 @@ func TestOrdersCSVHasSource(t *testing.T) {
 	f.bySource(t)
 	_, b := f.csv(t, "orders.csv")
 	rs := rows(t, b)
-	got := map[string][2]string{}
+	got := map[string][3]string{}
 	for _, r := range rs[1:] {
-		got[r[0]] = [2]string{r[len(r)-2], r[len(r)-1]}
+		got[r[0]] = [3]string{r[8], r[len(r)-2], r[len(r)-1]}
 	}
 	h := rs[0]
-	want := map[string][2]string{"TS-0NE11": {"online", ""}, "TS-MAN22": {"manual", "cash"}, "TS-CMP33": {"comp", ""}}
-	if h[len(h)-2] != "Source" || h[len(h)-1] != "Manual method" || !reflect.DeepEqual(got, want) {
+	// Comp and manual orders carry no fee, so nobody paid one.
+	want := map[string][3]string{"TS-0NE11": {"buyer", "online", ""}, "TS-MAN22": {"", "manual", "cash"}, "TS-CMP33": {"", "comp", ""}}
+	if h[8] != "Fee paid by" || h[len(h)-2] != "Source" || h[len(h)-1] != "Manual method" || !reflect.DeepEqual(got, want) {
 		t.Fatalf("header %q rows %v", h, got)
 	}
 }

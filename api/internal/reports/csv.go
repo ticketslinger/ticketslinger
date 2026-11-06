@@ -96,8 +96,8 @@ func str(s *string) string {
 // writeOrders lists the orders the order list shows, newest first. Tickets
 // bought counts every ticket the order bought; Fee paid by says whether the
 // buyer paid the service fee on top or it came out of the organizer's share
-// (then Total doesn't include it); Refunded adds up every refund that hasn't
-// failed.
+// (then Total doesn't include it), and is empty for comp and manual orders,
+// which carry no fee; Refunded adds up every refund that hasn't failed.
 func writeOrders(ctx context.Context, tx pgx.Tx, event uuid.UUID, zone *time.Location, cw *csv.Writer) error {
 	if err := row(cw, "Order", "Status", "Email", "Tickets bought", "Subtotal", "Discount", "Tax", "Service fee", "Fee paid by", "Total", "Refunded",
 		"Promo code", "Placed", "Paid", "Source", "Manual method"); err != nil {
@@ -110,7 +110,7 @@ func writeOrders(ctx context.Context, tx pgx.Tx, event uuid.UUID, zone *time.Loc
 	var placed time.Time
 	var paid *time.Time
 	rows, _ := tx.Query(ctx, `select o.code, o.status, o.email::text, (select count(*) from tickets t where t.order_id = o.id),
-			o.subtotal_cents, o.discount_cents, o.tax_cents, o.fee_cents, case o.fee_mode when 'pass' then 'buyer' else 'you' end, o.total_cents,
+			o.subtotal_cents, o.discount_cents, o.tax_cents, o.fee_cents, case when o.source <> 'online' then '' when o.fee_mode = 'pass' then 'buyer' else 'you' end, o.total_cents,
 			coalesce((select sum(r.amount_cents) from refunds r join payments p on p.id = r.payment_id where p.order_id = o.id and r.status <> 'failed'), 0)::bigint,
 			coalesce(pc.code, ''), o.created_at, o.paid_at, o.source, o.manual_method
 		from (`+listed+`) o left join promo_codes pc on pc.id = o.promo_code_id
