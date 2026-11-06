@@ -9,7 +9,7 @@
   },
   "devDependencies": {
     "@playwright/test": "1.64.0",
-    "@types/bun": "1.3.14",
+    "@types/bun": "1.4.3",
     "lighthouse": "13.5.0",
     "typescript": "5.9.3"
   }
