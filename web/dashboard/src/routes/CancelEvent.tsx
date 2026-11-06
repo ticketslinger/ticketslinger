@@ -98,7 +98,7 @@ export function CancelEvent({
           }}
           onSubmit={submit}
           busy={action.busy || !canCancel(typed, event.name)}
-          submitLabel="Cancel the event and refund everyone"
+          submitLabel="Cancel the event"
         >
           <p>{CANCEL_WARNING}</p>
           <Field

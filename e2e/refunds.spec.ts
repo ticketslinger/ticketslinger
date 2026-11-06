@@ -110,7 +110,7 @@ test("an organizer refunds one ticket, then cancels the event", async ({
   // Cancel the event: the name has to match, and the fee goes back too.
   await page.getByRole("link", { name: "Details" }).click();
   await page.getByRole("button", { name: "Cancel this event" }).click();
-  const go = page.getByRole("button", { name: "Cancel the event and refund everyone" });
+  const go = page.getByRole("button", { name: "Cancel the event", exact: true });
   await page.getByLabel("Type the event's name to confirm").fill("Spring Soc");
   await expect(go).toBeDisabled();
   await page.getByLabel("Type the event's name to confirm").fill("Spring Social");

@@ -161,7 +161,7 @@ test("cancelling the event lists cash orders to pay back", async ({ page, contex
   await page.getByRole("link", { name: "Details" }).click();
   await page.getByRole("button", { name: "Cancel this event" }).click();
   await page.getByLabel("Type the event's name to confirm").fill("Spring Social");
-  await page.getByRole("button", { name: "Cancel the event and refund everyone" }).click();
+  await page.getByRole("button", { name: "Cancel the event", exact: true }).click();
   await expect(page.getByText("You took these by hand, so pay them back yourself:")).toBeVisible();
   await expect(page.getByRole("listitem").filter({ hasText: code })).toHaveText(`${code} · $40.00`);
   await expect

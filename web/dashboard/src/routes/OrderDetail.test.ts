@@ -3,6 +3,7 @@ import type { components } from "@ticketslinger/api-client";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import {
+  cancelBody,
   cancelCharge,
   cancelWarning,
   canRenameTicket,
@@ -202,7 +203,7 @@ test("a comp or manual order's tickets have no refund checkbox, and still a More
 
 test("the cancel warning says what happens to the money, and whether the buyer hears", () => {
   expect(cancelWarning("online", 5000, true)).toBe(
-    "Nothing is refunded: the buyer's $50.00 stays paid. Their tickets stop working straight away. We'll email the buyer to say so.",
+    "Nothing is refunded: the buyer's $50.00 stays paid. Their tickets stop working straight away. We'll email the buyer to say so. You can't refund these tickets afterwards. To give the money back, use Refund instead.",
   );
   expect(cancelWarning("manual", 4000, false)).toBe(
     "Nothing is refunded here. If they paid you $40.00, give it back yourself. Their tickets stop working straight away. The buyer won't be told.",
@@ -210,6 +211,12 @@ test("the cancel warning says what happens to the money, and whether the buyer h
   expect(cancelWarning("comp", 0, true)).toBe(
     "They paid nothing, so there's nothing to refund. Their tickets stop working straight away. We'll email the buyer to say so.",
   );
+});
+
+test("the cancel sends a reason only with the email it goes in", () => {
+  expect(cancelBody([], true, "  Sorry  ")).toEqual({ notify: true, reason: "Sorry" });
+  expect(cancelBody(["t1"], false, "Sorry")).toEqual({ notify: false, ticket_ids: ["t1"] });
+  expect(cancelBody([], true, "   ")).toEqual({ notify: true });
 });
 
 test("NoteItem renders text", () => {

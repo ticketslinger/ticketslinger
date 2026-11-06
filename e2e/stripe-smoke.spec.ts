@@ -210,7 +210,7 @@ test("real test-mode Stripe: a card, a 3D Secure card, a refund and a cancellati
   await page.getByRole("link", { name: "Details" }).click();
   await page.getByRole("button", { name: "Cancel this event" }).click();
   await page.getByLabel("Type the event's name to confirm").fill("Smoke Social");
-  await page.getByRole("button", { name: "Cancel the event and refund everyone" }).click();
+  await page.getByRole("button", { name: "Cancel the event", exact: true }).click();
   await expect(page.getByText("Cancelled. We're refunding 2 orders, $78.00 in all.")).toBeVisible();
   await page.getByRole("link", { name: "Orders" }).click();
   await expect(async () => {

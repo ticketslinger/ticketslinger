@@ -80,8 +80,20 @@ export function cancelWarning(source: string, chargeCents: number, notify: boole
       : source === "manual"
         ? `Nothing is refunded here. If they paid you ${formatCents(chargeCents)}, give it back yourself.`
         : "They paid nothing, so there's nothing to refund.";
-  return `${money} Their tickets stop working straight away.${notify ? " We'll email the buyer to say so." : " The buyer won't be told."}`;
+  // A cancelled ticket can't be refunded later (P7b may add that), so the confirm says so.
+  const after =
+    source === "online"
+      ? " You can't refund these tickets afterwards. To give the money back, use Refund instead."
+      : "";
+  return `${money} Their tickets stop working straight away.${notify ? " We'll email the buyer to say so." : " The buyer won't be told."}${after}`;
 }
+
+/** The cancel request: the reason only goes in the email, so it's sent only with one. */
+export const cancelBody = (ids: string[], notify: boolean, reason: string) => ({
+  notify,
+  ...(ids.length > 0 ? { ticket_ids: ids } : {}),
+  ...(notify && reason.trim() ? { reason: reason.trim() } : {}),
+});
 
 export const canRenameTicket = (t: { status: string }, org: Org) =>
   t.status === "valid" && canEdit(org);
@@ -277,17 +289,14 @@ function CancelDialog({
       busy={action.busy}
       submitLabel={ids.length === 0 ? "Cancel order" : "Cancel ticket"}
       closeLabel="Keep it"
+      describedBy="cancel-warning"
       onSubmit={() =>
         action.run(async () => {
           await withKey(key, async (k) =>
             must(
               await api.POST("/organizers/{organizer}/events/{event}/orders/{order}/cancel", {
                 params: { path, header: { "Idempotency-Key": k } },
-                body: {
-                  notify,
-                  ...(ids.length > 0 ? { ticket_ids: ids } : {}),
-                  ...(reason.trim() ? { reason: reason.trim() } : {}),
-                },
+                body: cancelBody(ids, notify, reason),
               }),
             ),
           );
