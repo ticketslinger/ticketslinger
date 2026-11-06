@@ -1547,9 +1547,10 @@ components:
         expected_total_cents: { type: integer, format: int64, minimum: 0, description: "The total you showed the buyer. When it doesn't match, 409 price_changed and nothing is charged. Send it." }
     Order:
       type: object
-      required: [code, status, email, event, totals, tickets, refunded_cents, returned_cents, names_until, source, manual_method]
+      required: [code, status, email, event, totals, tickets, refunded_cents, returned_cents, names_until, source, manual_method, manual_cents]
       properties:
         code: { type: string }
+        manual_cents: { type: integer, format: int64, description: "For a manual order, what its tickets came to: the valid ones, or once none is valid, the ones the last cancel took. That's the money the organizer holds, or invoiced, for them. 0 for the others." }
         source: { type: string, enum: [online, comp, manual], description: "How the order was paid: online by card, comp for free tickets an organizer gave away, manual for money the organizer took outside the site." }
         manual_method: { type: [string, "null"], enum: [cash, cheque, invoice, other, null], description: "How a manual order was paid; null for the others. invoice means the organizer will invoice the buyer, so nothing has been paid yet." }
         names_until: { type: [string, "null"], format: date-time, description: "Until when the buyer can change the names on these tickets (renameTicketByLink): the event's start, or the organizer's names_locked_at when that's earlier. null when they can't now: the order isn't paid, the event isn't on sale, the organizer is suspended, or that time has passed." }
@@ -1633,7 +1634,7 @@ components:
         details_submitted: { type: boolean, description: Whether the organizer has finished Stripe's onboarding form. }
     OrderSummary:
       type: object
-      required: [id, code, email, status, ticket_count, total_cents, fee_cents, fee_mode, created_at, paid_at, refunded_cents, fee_refunded_cents, ticket_email, source, manual_method, buyer_name]
+      required: [id, code, email, status, ticket_count, total_cents, fee_cents, fee_mode, created_at, paid_at, refunded_cents, fee_refunded_cents, ticket_email, source, manual_method, buyer_name, manual_cents]
       properties:
         id: { type: string, format: uuid }
         code: { type: string }
@@ -1641,6 +1642,7 @@ components:
         source: { type: string, enum: [online, comp, manual], description: "online: bought at checkout. comp: given away by the organizer. manual: paid to the organizer outside the site." }
         manual_method: { type: [string, "null"], enum: [cash, cheque, invoice, other, null], description: "How a manual order was paid; null for any other." }
         buyer_name: { type: string, description: "The buyer's name an organizer gave with a comp or manual order; empty otherwise." }
+        manual_cents: { type: integer, format: int64, description: "For a manual order, what its valid tickets came to: what you took by hand for it. Cancelled tickets don't count. 0 for the others." }
         status: { type: string, enum: [paid, cancelled, refunded, partially_refunded] }
         ticket_count: { type: integer, description: "Tickets still valid." }
         total_cents: { type: integer, format: int64 }
@@ -1697,7 +1699,7 @@ components:
       properties:
         currency: { type: string, enum: [USD] }
         gross_cents: { type: integer, format: int64, description: "Totals of the online orders listOrders lists." }
-        manual_takings_cents: { type: integer, format: int64, description: "What you took by hand: manual orders' totals. Not in gross_cents." }
+        manual_takings_cents: { type: integer, format: int64, description: "What you took by hand: what manual orders' valid tickets came to. Not in gross_cents." }
         comp_tickets: { type: integer, description: "Valid comp tickets. They count in sold." }
         refunded_cents: { type: integer, format: int64, description: "Refunds that haven't failed: gone through or on their way." }
         platform_fee_cents: { type: integer, format: int64, description: "Our fee on succeeded payments, less the fee that has gone back." }
@@ -1846,7 +1848,7 @@ components:
         fee_cents: { type: integer, format: int64, description: "Our fee going back, in all." }
         manual_orders:
           type: array
-          description: "Manual orders this cancelled. You collected their money, so you pay them back."
+          description: "Manual orders this cancelled. You collected their money, or invoiced it, so paying it back is down to you."
           items: { $ref: "#/components/schemas/ManualOrderTotal" }
     CreateManualOrder:
       type: object
@@ -1882,7 +1884,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         code: { type: string }
-        total_cents: { type: integer, format: int64 }
+        total_cents: { type: integer, format: int64, description: "What the tickets the cancel took came to. Less than the order's total when some were cancelled before." }
     LinkMethod: { type: string, enum: [created, linked] }
     StripeLinkStart:
       type: object
@@ -2022,6 +2024,17 @@ components:
           type: array
           description: "Orders the database refused to refund (say, their payment had nothing left). The others went ahead; these need refunding by hand."
           items: { $ref: "#/components/schemas/StaffRefusedOrder" }
+        manual_orders:
+          type: array
+          description: "Manual orders it cancelled. The organizer took or invoiced their money outside the site, so paying it back is down to them. Missing from refunds finished before it was recorded."
+          items: { $ref: "#/components/schemas/StaffManualOrder" }
+    StaffManualOrder:
+      type: object
+      required: [order_id, code, total_cents]
+      properties:
+        order_id: { type: string, format: uuid }
+        code: { type: string }
+        total_cents: { type: integer, format: int64, description: "What the tickets the cancel took came to." }
     StaffRefusedOrder:
       type: object
       required: [order_id, reason]

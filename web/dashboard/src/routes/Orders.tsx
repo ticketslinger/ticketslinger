@@ -21,7 +21,8 @@ export const sourceBadge = (o: { source: string; manual_method: string | null })
 
 /**
  * What the event has sold and given back. Gross counts every online order: the list only holds
- * orders that took money. Money taken by hand and comp tickets are counted apart.
+ * orders that took money. Money taken by hand (what manual orders' valid tickets came to) and
+ * comp tickets are counted apart.
  */
 export function summarize(orders: OrderSummary[]) {
   const sum = {
@@ -40,7 +41,7 @@ export function summarize(orders: OrderSummary[]) {
       sum.orders += 1;
       sum.tickets += o.ticket_count;
     }
-    if (o.source === "manual" && standing) sum.manualCents += o.total_cents;
+    sum.manualCents += o.manual_cents; // valid tickets only, as on the Report
     if (o.source === "comp") sum.compTickets += o.ticket_count;
     if (o.source !== "online") continue;
     sum.grossCents += o.total_cents;

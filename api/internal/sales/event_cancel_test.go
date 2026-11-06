@@ -125,6 +125,17 @@ func TestStaffRefundCancelsManualAndComp(t *testing.T) {
 	if len(res.ManualOrders) != 1 || len(res.Failed) != 0 {
 		t.Fatalf("result %+v", res)
 	}
+	m := res.ManualOrders[0]
+	want := `[{"order_id": "` + m.ID.String() + `", "code": "` + m.Code + `", "total_cents": 4000}]`
+	if n := f.count(t, `select count(*) from staff_actions where finished_at is not null and result->'manual_orders' = $1::jsonb`, want); n != 1 {
+		t.Fatal("the action's result doesn't list the manual order")
+	}
+	if n := f.count(t, `select count(*) from audit_log where action = 'event.refunded_by_support' and after->'manual_orders' = $1::jsonb`, want); n != 1 {
+		t.Fatal("the audit row doesn't list the manual order")
+	}
+	if _, alert := f.finishAlert(t); !strings.Contains(alert, "Manual orders cancelled: 1\n") || !strings.Contains(alert, "- "+m.Code+": $40.00\n") {
+		t.Fatalf("the alert doesn't list the manual order: %s", alert)
+	}
 	if n := f.count(t, `select count(*) from tickets where id = any($1) and status = 'void'`, compTix); n != 1 {
 		t.Fatal("the comp ticket isn't void")
 	}
@@ -159,8 +170,91 @@ func TestRefundRefusesOfflineOrders(t *testing.T) {
 }
 
 func TestManualCancelEmailFreeTotal(t *testing.T) {
-	_, text := sales.ManualCancelEmail("event_cancelled", "Gala", "Acme", 0)
+	_, text := sales.ManualCancelEmail("event_cancelled", "Gala", "Acme", "cash", 0)
 	if text != "Gala has been cancelled, so your tickets won't get you in." {
 		t.Fatalf("%q", text)
+	}
+}
+
+// cancelledMail is the event-cancel email queued for to, "" if none.
+func (f fixture) cancelledMail(t *testing.T, to string) string {
+	t.Helper()
+	subj, text := f.sentTo(t, to)
+	for i := range subj {
+		if subj[i] == "Gala has been cancelled" {
+			return text[i]
+		}
+	}
+	return ""
+}
+
+// The view the buyer's link shows, and the order list's row, for order.
+func (f fixture) manualCents(t *testing.T, s *sales.Service, order uuid.UUID) (page, list int64) {
+	t.Helper()
+	var code string
+	f.must(t, f.owner.QueryRow(context.Background(), `select code from orders where id = $1`, order).Scan(&code))
+	view, err := s.Order(context.Background(), code, sales.OrderToken(s.SecretKey, order))
+	f.must(t, err)
+	var rows []sales.OrderSummary
+	asOwner(t, s, f, func(tx pgx.Tx) (err error) {
+		rows, err = sales.ListOrders(context.Background(), tx, f.event)
+		return
+	})
+	for _, r := range rows {
+		if r.ID == order {
+			list = r.ManualCents
+		}
+	}
+	return view.ManualCents, list
+}
+
+// After a partial cancel the buyer is owed for the tickets that were left,
+// not the order's total: the email, the result, the order page and the
+// order list all say the same.
+func TestCancelEventRepaysWhatsLeft(t *testing.T) {
+	s := newService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	r := f.manual(t, s, sales.ManualOrderInput{Event: f.event, Kind: "manual", Method: "cash", AmountCents: 4000,
+		Email: "cash@example.com", Items: []sales.Item{{TicketTypeID: f.general, Quantity: 2}}})
+	rows, _ := f.owner.Query(context.Background(), `select id from tickets where order_id = $1 order by id`, r.ID)
+	tix, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	f.must(t, err)
+	f.cancelTix(t, s, r.ID, sales.CancelTicketsRequest{TicketIDs: tix[:1]})
+	if page, list := f.manualCents(t, s, r.ID); page != 2000 || list != 2000 {
+		t.Fatalf("before: page %d list %d, want 2000", page, list)
+	}
+	res := f.cancelEvent(t, s)
+	if len(res.ManualOrders) != 1 || res.ManualOrders[0] != (sales.ManualOrderTotal{ID: r.ID, Code: r.Code, TotalCents: 2000}) {
+		t.Fatalf("result %+v", res.ManualOrders)
+	}
+	if text := f.cancelledMail(t, "cash@example.com"); text != "Gala has been cancelled, so your tickets won't get you in. Acme will be in touch about your $20.00." {
+		t.Fatalf("email %q", text)
+	}
+	if page, list := f.manualCents(t, s, r.ID); page != 2000 || list != 0 {
+		t.Fatalf("after: page %d list %d, want 2000 owed and nothing taken", page, list)
+	}
+}
+
+func TestCancelEventFreeManualOrder(t *testing.T) {
+	s := newService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	order, _ := f.offlineOrder(t, "manual", "cash", 0, 1)
+	res := f.cancelEvent(t, s)
+	if len(res.ManualOrders) != 1 || res.ManualOrders[0].ID != order || res.ManualOrders[0].TotalCents != 0 {
+		t.Fatalf("result %+v", res.ManualOrders)
+	}
+	if text := f.cancelledMail(t, "manual@example.com"); text != "Gala has been cancelled, so your tickets won't get you in." {
+		t.Fatalf("email %q", text)
+	}
+}
+
+// Nothing was paid on an invoice, so the email doesn't say it was.
+func TestCancelEventInvoiceCopy(t *testing.T) {
+	s := newService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	f.offlineOrder(t, "manual", "invoice", 4000, 1)
+	f.cancelEvent(t, s)
+	if text := f.cancelledMail(t, "manual@example.com"); text != "Gala has been cancelled, so your tickets won't get you in. Acme will be in touch about the $40.00 invoice." {
+		t.Fatalf("email %q", text)
 	}
 }

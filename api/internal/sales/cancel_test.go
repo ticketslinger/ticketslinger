@@ -191,14 +191,23 @@ func TestCancelBesideRefundInFlight(t *testing.T) {
 }
 
 func TestCancelEmailCopy(t *testing.T) {
-	subject, text := sales.CancelEmailForTest("Gala", "Acme", "", []string{"- General, Ada"}, false)
+	subject, text := sales.CancelEmailForTest("Gala", "Acme", "", []string{"- General, Ada"}, "online", "", 2600)
 	want := "Acme has cancelled these tickets for Gala, so they won't get anyone in any more:\n\n- General, Ada\n\nNothing has been refunded. Questions? Contact the organizer, Acme."
 	if subject != "Tickets cancelled for Gala" || text != want {
 		t.Fatalf("%q\n%q", subject, text)
 	}
-	_, text = sales.CancelEmailForTest("Gala", "Acme", "Sorry", []string{"- General"}, true)
+	_, text = sales.CancelEmailForTest("Gala", "Acme", "Sorry", []string{"- General"}, "comp", "", 0)
 	if strings.Contains(text, "Nothing has been refunded.") || !strings.Contains(text, "Their reason: Sorry\n\nQuestions?") {
 		t.Fatalf("comp %q", text)
+	}
+	// An invoice wasn't paid, so there's nothing that wasn't refunded.
+	_, text = sales.CancelEmailForTest("Gala", "Acme", "", []string{"- General"}, "manual", "invoice", 4000)
+	if !strings.HasSuffix(text, "- General\n\nAcme will be in touch about the $40.00 invoice. Questions? Contact the organizer, Acme.") {
+		t.Fatalf("invoice %q", text)
+	}
+	_, text = sales.CancelEmailForTest("Gala", "Acme", "", []string{"- General"}, "manual", "cash", 4000)
+	if !strings.Contains(text, "Nothing has been refunded.") {
+		t.Fatalf("cash %q", text)
 	}
 }
 

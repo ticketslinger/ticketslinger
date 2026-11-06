@@ -14,9 +14,17 @@ export function orderStatus(order: Order): string {
   const total = order.totals.total_cents;
   if (order.status === "cancelled" && order.tickets.length > 0 && total > 0) {
     // Tickets were issued and then cancelled with nothing refunded: not the late-payment case below.
-    return cancelled && order.source === "manual"
-      ? `${e.name} was cancelled, so these tickets won't get you in. ${e.organizer_name} will be in touch about your ${formatCents(total)}.`
-      : `${e.organizer_name} cancelled these tickets, so they won't get you in. Nothing was refunded. Questions? Contact the organizer.`;
+    // manual_cents is what the last cancel took; an invoice was never paid, so it isn't "your" money.
+    const owed = formatCents(order.manual_cents);
+    const invoice = order.source === "manual" && order.manual_method === "invoice";
+    const touch =
+      order.manual_cents > 0
+        ? `${e.organizer_name} will be in touch about ${invoice ? `the ${owed} invoice` : `your ${owed}`}.`
+        : "Questions? Contact the organizer.";
+    if (cancelled && order.source === "manual") {
+      return `${e.name} was cancelled, so these tickets won't get you in. ${touch}`;
+    }
+    return `${e.organizer_name} cancelled these tickets, so they won't get you in. ${invoice ? touch : "Nothing was refunded. Questions? Contact the organizer."}`;
   }
   if (order.status === "cancelled") {
     // A free order voided: there was never a payment to give back.

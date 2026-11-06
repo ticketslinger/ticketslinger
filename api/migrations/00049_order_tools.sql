@@ -162,14 +162,17 @@ CREATE POLICY audit_system_member ON audit_log FOR INSERT TO ts_system
               AND actor_staff_session_id IS NULL AND entity_type = 'order'
               AND action IN ('order.created_manual', 'order.note_added') AND public.order_manager(actor_user_id));
 
--- order_by_link, as in 00048, now also saying where the order came from.
+-- order_by_link, as in 00048, now also saying where the order came from
+-- and, for a manual order, what its tickets came to: the valid ones, or with
+-- none valid, the ones the last cancel voided (one statement voids them, so
+-- they share released_at). That's what the organizer holds or invoiced.
 DROP FUNCTION order_by_link(text, bytea);
 -- +goose StatementBegin
 CREATE FUNCTION order_by_link(p_code text, p_token_hash bytea)
 RETURNS TABLE(code text, status text, email text, subtotal_cents bigint, discount_cents bigint, tax_cents bigint,
   fee_cents bigint, total_cents bigint, event_name text, timezone text, venue_name text, venue_address text,
   starts_at timestamptz, ends_at timestamptz, organizer_name text, event_status text, refunded_cents bigint,
-  returned_cents bigint, names_until timestamptz, source text, manual_method text, tickets jsonb)
+  returned_cents bigint, names_until timestamptz, source text, manual_method text, manual_cents bigint, tickets jsonb)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
   SELECT o.code, o.status, o.email::text, o.subtotal_cents, o.discount_cents, o.tax_cents, o.fee_cents, o.total_cents,
          e.name::text, e.timezone::text, e.venue_name, e.venue_address, e.starts_at, e.ends_at, g.name::text, e.status::text,
@@ -181,6 +184,12 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_te
                    AND statement_timestamp() < least(coalesce(e.names_locked_at, e.starts_at), e.starts_at)
               THEN least(coalesce(e.names_locked_at, e.starts_at), e.starts_at) END,
          o.source, o.manual_method,
+         CASE WHEN o.source <> 'manual' THEN 0
+              WHEN EXISTS (SELECT 1 FROM public.tickets t WHERE t.order_id = o.id AND t.status = 'valid')
+              THEN (SELECT sum(t.charge_cents) FROM public.tickets t WHERE t.order_id = o.id AND t.status = 'valid')
+              ELSE coalesce((SELECT sum(t.charge_cents) FROM public.tickets t WHERE t.order_id = o.id
+                              AND t.released_at = (SELECT max(l.released_at) FROM public.tickets l WHERE l.order_id = o.id)), 0)
+         END::bigint,
          coalesce((SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object('id', t.id, 'ticket_type_name', tt.name,
                      'attendee_name', t.attendee_name, 'status', t.status, 'refunded', t.refund_id IS NOT NULL, 'name_changes', t.name_changes,
                      'secret', CASE WHEN t.status = 'valid' THEN pg_catalog.encode(t.secret, 'hex') END) ORDER BY t.id)

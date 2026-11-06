@@ -886,6 +886,7 @@ const order = {
   status: "paid",
   source: "online",
   manual_method: null as string | null,
+  manual_cents: 0,
   email: "ada@example.com",
   refunded_cents: 0,
   returned_cents: 0,
@@ -1821,14 +1822,28 @@ test("a cancelled order with nothing refunded doesn't say it's refunding", async
   );
   expect(html).not.toContain("refunding");
 
-  const gala = voided({ source: "manual", manual_method: "cash" });
+  // A $20 ticket of the $40 was cancelled before the event: the buyer is owed for the one left.
+  const gala = voided({ source: "manual", manual_method: "cash", manual_cents: 2000 });
   gala.event.name = "Gala";
   gala.event.status = "cancelled";
   gala.totals.total_cents = 4000;
   html = await show(gala);
   expect(html).toContain(
-    "Gala was cancelled, so these tickets won't get you in. Acme will be in touch about your $40.00.",
+    "Gala was cancelled, so these tickets won't get you in. Acme will be in touch about your $20.00.",
   );
+
+  // Nothing was paid on an invoice, so nothing reads as paid or not refunded.
+  gala.manual_method = "invoice";
+  gala.manual_cents = 4000;
+  html = await show(gala);
+  expect(html).toContain(
+    "Gala was cancelled, so these tickets won't get you in. Acme will be in touch about the $40.00 invoice.",
+  );
+  html = await show(voided({ source: "manual", manual_method: "invoice", manual_cents: 4000 }));
+  expect(html).toContain(
+    "Acme cancelled these tickets, so they won't get you in. Acme will be in touch about the $40.00 invoice.",
+  );
+  expect(html).not.toContain("Nothing was refunded");
 
   // A late payment has no tickets: unchanged.
   html = await show(voided({ tickets: [] }));

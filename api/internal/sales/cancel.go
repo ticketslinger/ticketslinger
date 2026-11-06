@@ -54,9 +54,10 @@ func cancelTickets(ctx context.Context, tx pgx.Tx, org, event, order uuid.UUID, 
 	if !ok {
 		return CancelTicketsResult{}, errBadReason
 	}
-	var status, source string
+	var status, source, method string
 	var email *string
-	err := tx.QueryRow(ctx, `select status, source, email::text from orders where id = $1 and event_id = $2 for update`, order, event).Scan(&status, &source, &email)
+	err := tx.QueryRow(ctx, `select status, source, coalesce(manual_method, ''), email::text from orders where id = $1 and event_id = $2 for update`, order, event).
+		Scan(&status, &source, &method, &email)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CancelTicketsResult{}, catalogue.ErrNotFound
 	}
@@ -107,7 +108,7 @@ func cancelTickets(ctx context.Context, tx pgx.Tx, org, event, order uuid.UUID, 
 		if err := tx.QueryRow(ctx, `select e.name, g.name from events e join organizers g on g.id = e.organizer_id where e.id = $1`, event).Scan(&eventName, &organizer); err != nil {
 			return CancelTicketsResult{}, err
 		}
-		subject, text := cancelEmail(eventName, organizer, reason, lines, source == "comp")
+		subject, text := cancelEmail(eventName, organizer, reason, lines, source, method, res.ChargeCents)
 		if err := jobs.Enqueue(ctx, tx, "send_email", map[string]string{"to": *email, "subject": subject, "text": text}); err != nil {
 			return CancelTicketsResult{}, err
 		}
@@ -116,16 +117,27 @@ func cancelTickets(ctx context.Context, tx pgx.Tx, org, event, order uuid.UUID, 
 		After: map[string]any{"ticket_ids": res.TicketIDs, "notify": in.Notify, "reason": reason, "via": via}})
 }
 
-// cancelEmail tells a buyer which tickets were cancelled. comp: nothing was
-// paid, so it doesn't say nothing was refunded.
-func cancelEmail(event, organizer, reason string, lines []string, comp bool) (subject, text string) {
+// cancelEmail tells a buyer which tickets were cancelled. A comp or an
+// invoice wasn't paid, so neither says nothing was refunded; an invoice says
+// the organizer will be in touch about the cents those tickets came to.
+func cancelEmail(event, organizer, reason string, lines []string, source, method string, cents int64) (subject, text string) {
 	subject = "Tickets cancelled for " + event
 	text = organizer + " has cancelled these tickets for " + event + ", so they won't get anyone in any more:\n\n" + strings.Join(lines, "\n") + "\n\n"
 	if reason != "" {
 		text += "Their reason: " + reason + "\n\n"
 	}
-	if !comp {
+	switch {
+	case source == "manual" && method == "invoice":
+		if cents > 0 {
+			text += invoiceLine(organizer, cents) + " "
+		}
+	case source != "comp":
 		text += "Nothing has been refunded. "
 	}
 	return subject, text + "Questions? Contact the organizer, " + organizer + "."
+}
+
+// invoiceLine is what a buyer of an invoiced order is told about its money.
+func invoiceLine(organizer string, cents int64) string {
+	return organizer + " will be in touch about the " + dollars(cents) + " invoice."
 }

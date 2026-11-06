@@ -257,7 +257,8 @@ type CancelResult struct {
 }
 
 // ManualOrderTotal is a manual order an event cancel voided. The organizer
-// took its money, so they pay it back.
+// took its money, so they pay it back: TotalCents is what the tickets the
+// cancel voided came to, not the order's total.
 type ManualOrderTotal struct {
 	ID         uuid.UUID `json:"order_id"`
 	Code       string    `json:"code"`
@@ -333,7 +334,7 @@ func refundEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, reason st
 	// Pending orders are locked too, so a confirmation waits and then sees
 	// the event cancelled (or its organizer suspended) and refunds itself;
 	// only paid ones are refunded here.
-	rows, _ := tx.Query(ctx, `select id, status, source, code, total_cents from orders where event_id = $1
+	rows, _ := tx.Query(ctx, `select id, status, source, code from orders where event_id = $1
 		and status in ('pending', 'paid', 'partially_refunded') order by id for update`, event)
 	type paidOrder struct {
 		ManualOrderTotal
@@ -343,7 +344,7 @@ func refundEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, reason st
 	var pending []uuid.UUID
 	var p paidOrder
 	var st string
-	if _, err := pgx.ForEachRow(rows, []any{&p.ID, &st, &p.source, &p.Code, &p.TotalCents}, func() error {
+	if _, err := pgx.ForEachRow(rows, []any{&p.ID, &st, &p.source, &p.Code}, func() error {
 		if st == "pending" {
 			pending = append(pending, p.ID)
 		} else {
@@ -368,7 +369,7 @@ func refundEvent(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, reason st
 		if po.source == "online" {
 			r, err = RefundTickets(ctx, sp, org, event, o, RefundRequest{FeeBack: true}, reason, actor)
 		} else {
-			err = cancelOffline(ctx, sp, org, event, po.ManualOrderTotal, po.source == "manual", reason, actor)
+			po.TotalCents, err = cancelOffline(ctx, sp, org, event, po.ID, po.source == "manual", reason, actor)
 		}
 		if err != nil {
 			if rbErr := sp.Rollback(ctx); rbErr != nil {
@@ -443,7 +444,7 @@ func (s *Service) RefundEventForStaff(ctx context.Context, org, action uuid.UUID
 		}
 		res = r
 		totals := map[string]any{"orders": r.Orders, "amount_cents": r.AmountCents, "fee_cents": r.FeeCents, "pending_orders": r.PendingOrders,
-			"failed_orders": r.Failed}
+			"failed_orders": r.Failed, "manual_orders": r.ManualOrders}
 		if _, err := tx.Exec(ctx, `select finish_staff_refund($1, $2)`, action, totals); err != nil {
 			return err
 		}
@@ -476,6 +477,12 @@ func refundFinishedAlert(slug, event string, action uuid.UUID, r CancelResult) (
 			text += "- " + f.Order.String() + ": " + f.Reason + "\n"
 		}
 	}
+	if len(r.ManualOrders) > 0 {
+		text += fmt.Sprintf("\nManual orders cancelled: %d\nThe organizer took or invoiced this money outside TicketSlinger, so paying it back is down to them:\n", len(r.ManualOrders))
+		for _, m := range r.ManualOrders {
+			text += "- " + m.Code + ": " + dollars(m.TotalCents) + "\n"
+		}
+	}
 	return subject, text
 }
 
@@ -495,28 +502,31 @@ func rollUpOrder(ctx context.Context, tx pgx.Tx, order uuid.UUID) (string, error
 }
 
 // cancelOffline voids a comp or manual order's tickets inside the event
-// cancel's savepoint. A comp buyer paid nothing and isn't mailed, as with a
-// free online order; a manual buyer is told their money comes from the organizer.
-func cancelOffline(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, o ManualOrderTotal, manual bool, reason string, actor audit.Actor) error {
-	if _, err := cancelTickets(ctx, tx, org, event, o.ID, CancelTicketsRequest{}, reason, actor); err != nil || !manual {
-		return err
+// cancel's savepoint and returns what they came to: what a manual buyer is
+// owed. A comp buyer paid nothing and isn't mailed, as with a free online
+// order; a manual buyer is told their money comes from the organizer.
+func cancelOffline(ctx context.Context, tx pgx.Tx, org, event, order uuid.UUID, manual bool, reason string, actor audit.Actor) (int64, error) {
+	r, err := cancelTickets(ctx, tx, org, event, order, CancelTicketsRequest{}, reason, actor)
+	if err != nil || !manual {
+		return r.ChargeCents, err
 	}
 	var email *string
-	var eventName, organizer string
-	if err := tx.QueryRow(ctx, `select o.email::text, e.name, g.name from orders o join events e on e.id = o.event_id
-		join organizers g on g.id = o.organizer_id where o.id = $1`, o.ID).Scan(&email, &eventName, &organizer); err != nil {
-		return err
+	var eventName, organizer, method string
+	if err := tx.QueryRow(ctx, `select o.email::text, e.name, g.name, coalesce(o.manual_method, '') from orders o join events e on e.id = o.event_id
+		join organizers g on g.id = o.organizer_id where o.id = $1`, order).Scan(&email, &eventName, &organizer, &method); err != nil {
+		return 0, err
 	}
 	if email == nil || *email == "" {
-		return nil
+		return r.ChargeCents, nil
 	}
-	subject, text := manualCancelEmail(reason, eventName, organizer, o.TotalCents)
-	return jobs.Enqueue(ctx, tx, "send_email", map[string]string{"to": *email, "subject": subject, "text": text})
+	subject, text := manualCancelEmail(reason, eventName, organizer, method, r.ChargeCents)
+	return r.ChargeCents, jobs.Enqueue(ctx, tx, "send_email", map[string]string{"to": *email, "subject": subject, "text": text})
 }
 
 // manualCancelEmail tells a manual order's buyer the event is off and that
-// the organizer, who has their money, will be in touch.
-func manualCancelEmail(reason, event, organizer string, total int64) (subject, text string) {
+// the organizer, who has their money (or invoiced it), will be in touch
+// about total: what the tickets the cancel voided came to.
+func manualCancelEmail(reason, event, organizer, method string, total int64) (subject, text string) {
 	if reason == "platform" {
 		subject = "Your tickets for " + event
 		text = event + " isn't being sold through TicketSlinger any more, so your tickets won't get you in."
@@ -524,7 +534,10 @@ func manualCancelEmail(reason, event, organizer string, total int64) (subject, t
 		subject = event + " has been cancelled"
 		text = event + " has been cancelled, so your tickets won't get you in."
 	}
-	if total > 0 {
+	switch {
+	case total > 0 && method == "invoice":
+		text += " " + invoiceLine(organizer, total)
+	case total > 0:
 		text += " " + organizer + " will be in touch about your " + dollars(total) + "."
 	}
 	return subject, text

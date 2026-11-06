@@ -690,7 +690,7 @@ func (s *server) GetOrder(ctx context.Context, req GetOrderRequestObject) (GetOr
 	out.Event.Status = OrderEventStatus(e.Status)
 	out.RefundedCents, out.ReturnedCents = o.RefundedCents, o.ReturnedCents
 	out.NamesUntil = nullOf(o.NamesUntil)
-	out.Source, out.ManualMethod = OrderSource(o.Source), nullableOf[OrderManualMethod](o.ManualMethod)
+	out.Source, out.ManualMethod, out.ManualCents = OrderSource(o.Source), nullableOf[OrderManualMethod](o.ManualMethod), o.ManualCents
 	for _, t := range o.Tickets {
 		qr, qrPNG := nullable.NewNullNullable[string](), nullable.NewNullNullable[string]()
 		if t.QR != "" {
@@ -789,7 +789,8 @@ func (s *server) ListOrders(ctx context.Context, req ListOrdersRequestObject) (L
 			out = append(out, OrderSummary{Id: o.ID, Code: o.Code, Email: o.Email, Status: OrderSummaryStatus(o.Status), TicketCount: o.TicketCount,
 				TotalCents: o.TotalCents, FeeCents: o.FeeCents, FeeMode: OrderSummaryFeeMode(o.FeeMode), CreatedAt: o.CreatedAt, PaidAt: nullOf(o.PaidAt),
 				RefundedCents: o.RefundedCents, FeeRefundedCents: o.FeeRefundedCents, TicketEmail: toOrderEmail(o.Mail),
-				Source: OrderSummarySource(o.Source), ManualMethod: nullableOf[OrderSummaryManualMethod](o.ManualMethod), BuyerName: o.BuyerName})
+				Source: OrderSummarySource(o.Source), ManualMethod: nullableOf[OrderSummaryManualMethod](o.ManualMethod), BuyerName: o.BuyerName,
+				ManualCents: o.ManualCents})
 		}
 		return err
 	})
@@ -813,7 +814,7 @@ func (s *server) GetOrderDetail(ctx context.Context, req GetOrderDetailRequestOb
 	out := GetOrderDetail200JSONResponse{Id: d.ID, Code: d.Code, Email: d.Email, Status: OrderDetailStatus(d.Status), TicketCount: d.TicketCount,
 		TotalCents: d.TotalCents, FeeCents: d.FeeCents, FeeMode: OrderDetailFeeMode(d.FeeMode), CreatedAt: d.CreatedAt, PaidAt: nullOf(d.PaidAt),
 		RefundedCents: d.RefundedCents, FeeRefundedCents: d.FeeRefundedCents, TicketEmail: toOrderEmail(d.Mail), Tickets: []OrderDetailTicket{}, Refunds: []Refund{},
-		Source: OrderDetailSource(d.Source), ManualMethod: nullableOf[OrderDetailManualMethod](d.ManualMethod), BuyerName: d.BuyerName}
+		Source: OrderDetailSource(d.Source), ManualMethod: nullableOf[OrderDetailManualMethod](d.ManualMethod), BuyerName: d.BuyerName, ManualCents: d.ManualCents}
 	for _, t := range d.Tickets {
 		out.Tickets = append(out.Tickets, OrderDetailTicket{Id: t.ID, TicketTypeName: t.TicketTypeName, AttendeeName: t.AttendeeName,
 			Status: OrderDetailTicketStatus(t.Status), ChargeCents: t.ChargeCents, FeeCents: t.FeeCents, RefundId: nullOf(t.RefundID)})

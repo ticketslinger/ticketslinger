@@ -1471,6 +1471,11 @@ export interface components {
         Order: {
             code: string;
             /**
+             * Format: int64
+             * @description For a manual order, what its tickets came to: the valid ones, or once none is valid, the ones the last cancel took. That's the money the organizer holds, or invoiced, for them. 0 for the others.
+             */
+            manual_cents: number;
+            /**
              * @description How the order was paid: online by card, comp for free tickets an organizer gave away, manual for money the organizer took outside the site.
              * @enum {string}
              */
@@ -1621,6 +1626,11 @@ export interface components {
             manual_method: "cash" | "cheque" | "invoice" | "other" | null;
             /** @description The buyer's name an organizer gave with a comp or manual order; empty otherwise. */
             buyer_name: string;
+            /**
+             * Format: int64
+             * @description For a manual order, what its valid tickets came to: what you took by hand for it. Cancelled tickets don't count. 0 for the others.
+             */
+            manual_cents: number;
             /** @enum {string} */
             status: "paid" | "cancelled" | "refunded" | "partially_refunded";
             /** @description Tickets still valid. */
@@ -1716,7 +1726,7 @@ export interface components {
             gross_cents: number;
             /**
              * Format: int64
-             * @description What you took by hand: manual orders' totals. Not in gross_cents.
+             * @description What you took by hand: what manual orders' valid tickets came to. Not in gross_cents.
              */
             manual_takings_cents: number;
             /** @description Valid comp tickets. They count in sold. */
@@ -1916,7 +1926,7 @@ export interface components {
              * @description Our fee going back, in all.
              */
             fee_cents: number;
-            /** @description Manual orders this cancelled. You collected their money, so you pay them back. */
+            /** @description Manual orders this cancelled. You collected their money, or invoiced it, so paying it back is down to you. */
             manual_orders: components["schemas"]["ManualOrderTotal"][];
         };
         CreateManualOrder: {
@@ -1956,7 +1966,10 @@ export interface components {
             /** Format: uuid */
             id: string;
             code: string;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description What the tickets the cancel took came to. Less than the order's total when some were cancelled before.
+             */
             total_cents: number;
         };
         /** @enum {string} */
@@ -2125,6 +2138,18 @@ export interface components {
             pending_orders: number;
             /** @description Orders the database refused to refund (say, their payment had nothing left). The others went ahead; these need refunding by hand. */
             failed_orders: components["schemas"]["StaffRefusedOrder"][];
+            /** @description Manual orders it cancelled. The organizer took or invoiced their money outside the site, so paying it back is down to them. Missing from refunds finished before it was recorded. */
+            manual_orders?: components["schemas"]["StaffManualOrder"][];
+        };
+        StaffManualOrder: {
+            /** Format: uuid */
+            order_id: string;
+            code: string;
+            /**
+             * Format: int64
+             * @description What the tickets the cancel took came to.
+             */
+            total_cents: number;
         };
         StaffRefusedOrder: {
             /** Format: uuid */

@@ -21,6 +21,7 @@ test("summary: gross, refunds, our fee and net, in cents", () => {
       fee_refunded_cents: feeBack,
       ticket_count: tickets,
       source: "online",
+      manual_cents: 0,
     }) as OrderSummary;
   const sum = summarize([
     o("paid", 5200, 200),
@@ -59,7 +60,7 @@ test("the source badge names comp and manual orders, never online ones", () => {
 });
 
 test("summary keeps money taken by hand and comps out of sales", () => {
-  const o = (source: OrderSummary["source"], total: number, tickets: number) =>
+  const o = (source: OrderSummary["source"], total: number, tickets: number, manual = 0) =>
     ({
       source,
       status: "paid",
@@ -68,10 +69,12 @@ test("summary keeps money taken by hand and comps out of sales", () => {
       refunded_cents: 0,
       fee_refunded_cents: 0,
       ticket_count: tickets,
+      manual_cents: manual,
     }) as OrderSummary;
-  const sum = summarize([o("online", 2600, 1), o("manual", 4000, 2), o("comp", 0, 2)]);
+  // The manual order had a $20 ticket cancelled: only the one left counts, as on the Report.
+  const sum = summarize([o("online", 2600, 1), o("manual", 4000, 1, 2000), o("comp", 0, 2)]);
   expect(sum.grossCents).toBe(2600);
-  expect(sum.manualCents).toBe(4000);
+  expect(sum.manualCents).toBe(2000);
   expect(sum.compTickets).toBe(2);
   expect(sum.netCents).toBe(2600);
 });

@@ -22,10 +22,13 @@ import (
 // OrderView is the buyer's order page. RefundedCents adds up the refunds
 // that haven't failed; ReturnedCents the ones that went through and that the
 // buyer's bank then sent back. NamesUntil is when the buyer's chance to
-// change names ends, or nil when they can't now.
+// change names ends, or nil when they can't now. ManualCents is what a
+// manual order's valid tickets came to, or with none left valid, the ones
+// the last cancel voided: what the organizer holds or invoiced for them.
 type OrderView struct {
 	Code, Status, Email, Source                                  string
 	ManualMethod                                                 *string
+	ManualCents                                                  int64
 	Event                                                        OrderEvent
 	SubtotalCents, DiscountCents, TaxCents, FeeCents, TotalCents int64
 	RefundedCents, ReturnedCents                                 int64
@@ -62,10 +65,10 @@ func (s *Service) Order(ctx context.Context, code, token string) (OrderView, err
 	e := &out.Event
 	err := s.Pool.QueryRow(ctx, `select code, status, email, subtotal_cents, discount_cents, tax_cents, fee_cents, total_cents,
 		event_name, timezone, venue_name, venue_address, starts_at, ends_at, organizer_name, event_status,
-		refunded_cents, returned_cents, names_until, source, manual_method, tickets from order_by_link($1, $2)`, code, hash).Scan(&out.Code, &out.Status, &out.Email,
+		refunded_cents, returned_cents, names_until, source, manual_method, manual_cents, tickets from order_by_link($1, $2)`, code, hash).Scan(&out.Code, &out.Status, &out.Email,
 		&out.SubtotalCents, &out.DiscountCents, &out.TaxCents, &out.FeeCents, &out.TotalCents,
 		&e.Name, &e.Timezone, &e.VenueName, &e.VenueAddress, &e.StartsAt, &e.EndsAt, &e.Organizer, &e.Status,
-		&out.RefundedCents, &out.ReturnedCents, &out.NamesUntil, &out.Source, &out.ManualMethod, &tickets)
+		&out.RefundedCents, &out.ReturnedCents, &out.NamesUntil, &out.Source, &out.ManualMethod, &out.ManualCents, &tickets)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return OrderView{}, catalogue.ErrNotFound
 	}
@@ -163,6 +166,7 @@ type OrderSummary struct {
 	Mail                            MailState
 	Source, BuyerName               string  // source: online | comp | manual
 	ManualMethod                    *string // set only for manual
+	ManualCents                     int64   // a manual order's valid tickets' charges: what was taken by hand; 0 for the others
 }
 
 // orderSummarySelect lists the orders of event $1 that took money or were
@@ -172,7 +176,8 @@ const orderSummarySelect = `select o.id, o.code, o.email::text, o.status,
 		o.total_cents, o.fee_cents, o.fee_mode, o.created_at, o.paid_at,
 		coalesce((select sum(r.amount_cents) from refunds r join payments p on p.id = r.payment_id where p.order_id = o.id and r.status <> 'failed'), 0),
 		coalesce((select sum(r.fee_cents) from refunds r join payments p on p.id = r.payment_id where p.order_id = o.id and r.fee_refunded_at is not null), 0),
-		o.mail_status, o.mail_problem, o.mail_attempts, o.mail_updated_at, o.source, o.manual_method, o.buyer_name
+		o.mail_status, o.mail_problem, o.mail_attempts, o.mail_updated_at, o.source, o.manual_method, o.buyer_name,
+		case when o.source = 'manual' then coalesce((select sum(t.charge_cents) from tickets t where t.order_id = o.id and t.status = 'valid'), 0) else 0 end::bigint
 	from orders o
 	where o.event_id = $1 and o.status <> 'pending'
 	  and (o.paid_at is not null or exists (select 1 from payments p where p.order_id = o.id and p.status = 'succeeded'))`
@@ -180,7 +185,7 @@ const orderSummarySelect = `select o.id, o.code, o.email::text, o.status,
 func scanOrderSummary(r pgx.CollectableRow) (o OrderSummary, err error) {
 	err = r.Scan(&o.ID, &o.Code, &o.Email, &o.Status, &o.TicketCount, &o.TotalCents, &o.FeeCents, &o.FeeMode, &o.CreatedAt, &o.PaidAt,
 		&o.RefundedCents, &o.FeeRefundedCents, &o.Mail.Status, &o.Mail.Problem, &o.Mail.Attempts, &o.Mail.UpdatedAt,
-		&o.Source, &o.ManualMethod, &o.BuyerName)
+		&o.Source, &o.ManualMethod, &o.BuyerName, &o.ManualCents)
 	return o, err
 }
 

@@ -82,9 +82,12 @@ func New(d Deps) http.Handler {
 		d.Staff = staff.New(d.Pool, alertTo, func(ctx context.Context, org, action uuid.UUID) (staff.RefundResult, error) {
 			r, err := sv.RefundEventForStaff(ctx, org, action, alertTo)
 			out := staff.RefundResult{Orders: r.Orders, PendingOrders: r.PendingOrders, AmountCents: r.AmountCents, FeeCents: r.FeeCents,
-				FailedOrders: make([]staff.RefusedRefund, 0, len(r.Failed))}
+				FailedOrders: make([]staff.RefusedRefund, 0, len(r.Failed)), ManualOrders: make([]staff.ManualOrder, 0, len(r.ManualOrders))}
 			for _, f := range r.Failed {
 				out.FailedOrders = append(out.FailedOrders, staff.RefusedRefund{Order: f.Order, Reason: f.Reason})
+			}
+			for _, m := range r.ManualOrders {
+				out.ManualOrders = append(out.ManualOrders, staff.ManualOrder{Order: m.ID, Code: m.Code, TotalCents: m.TotalCents})
 			}
 			return out, err
 		})
