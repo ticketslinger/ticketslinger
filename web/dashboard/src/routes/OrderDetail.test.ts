@@ -25,12 +25,16 @@ type OrderEmail = components["schemas"]["OrderEmail"];
 
 const ticket = (id: string, charge: number, fee: number, status: "valid" | "void") => ({
   id,
+  ticket_type_id: "tt",
   ticket_type_name: "General",
   attendee_name: id,
   status,
   charge_cents: charge,
   fee_cents: fee,
   refund_id: null,
+  checked_in_at: null,
+  blocked_at: null,
+  blocked_reason: null,
 });
 const order = (mode: "pass" | "absorb") =>
   ({

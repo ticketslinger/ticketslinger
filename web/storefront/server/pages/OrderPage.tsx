@@ -119,8 +119,10 @@ export function OrderPage({
 }) {
   const e = order.event;
   const status = orderStatus(order);
-  // Numbered as the email and the PDF number them: valid tickets only, in the API's order (by id).
+  // Numbered by the valid tickets, in the API's order (by id). A blocked one keeps its number:
+  // it's still the buyer's ticket, it just has no QR until the organizer lifts the hold.
   const valid = order.tickets.filter((t) => t.status === "valid");
+  const scannable = valid.filter((t) => !t.blocked);
   const t = encodeURIComponent(token);
   const saved = valid.findIndex((tk) => tk.id === named);
   return (
@@ -142,7 +144,7 @@ export function OrderPage({
       <p>
         Order {order.code} · {paymentLine(order)} · sent to {order.email}
       </p>
-      {sent && valid.length > 0 && (
+      {sent && scannable.length > 0 && (
         <p class="sent" role="status">
           {sentNotice(sent, order.email)}
         </p>
@@ -188,7 +190,7 @@ export function OrderPage({
                     <button type="submit">Save name</button>
                   </form>
                 )}
-                {n > 0 && tk.qr_png && (
+                {n > 0 && !tk.blocked && tk.qr_png && (
                   <img
                     class="qr"
                     src={`data:image/png;base64,${tk.qr_png}`}
@@ -200,12 +202,13 @@ export function OrderPage({
                 {tk.status === "void" && (
                   <p class="status">{tk.refunded ? "Refunded" : "Cancelled"}</p>
                 )}
+                {n > 0 && tk.blocked && <p class="status">On hold — contact the organizer</p>}
               </li>
             );
           })}
         </ul>
       )}
-      {valid.length > 0 && (
+      {scannable.length > 0 && (
         <>
           <p>
             <a href={`/orders/${order.code}/tickets.pdf?t=${t}`}>Download all tickets (PDF)</a>

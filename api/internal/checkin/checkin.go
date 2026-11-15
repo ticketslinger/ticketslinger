@@ -16,9 +16,10 @@ import (
 	"github.com/ticketslinger/ticketslinger/api/internal/audit"
 )
 
-// Result is what a check-in decided: accepted, duplicate, invalid or void,
-// the ticket it found (nil for invalid; a duplicate's first check-in time is
-// Ticket.CheckedInAt), and the event's count of valid tickets in and sold.
+// Result is what a check-in decided: accepted, duplicate, invalid, void or
+// blocked, the ticket it found (nil for invalid; a duplicate's first check-in
+// time is Ticket.CheckedInAt), and the event's count of valid tickets in and
+// sold.
 type Result struct {
 	Result          string
 	Ticket          *Ticket
@@ -29,6 +30,7 @@ type Ticket struct {
 	ID                                              uuid.UUID
 	TicketTypeName, AttendeeName, OrderCode, Status string
 	CheckedInAt                                     *time.Time
+	Blocked                                         bool // held at the door by an owner or admin
 }
 
 // Input is one check-in: a scanned QR text or a ticket picked by hand
@@ -65,7 +67,7 @@ func CheckIn(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, in Input) (Re
 	// matches nothing; the follow-up read then sees the committed time.
 	var id uuid.UUID
 	err := tx.QueryRow(ctx, `UPDATE tickets SET checked_in_at = statement_timestamp()
-		WHERE event_id = $1 AND `+where+` AND status = 'valid' AND checked_in_at IS NULL RETURNING id`, event, match).Scan(&id)
+		WHERE event_id = $1 AND `+where+` AND status = 'valid' AND checked_in_at IS NULL AND blocked_at IS NULL RETURNING id`, event, match).Scan(&id)
 	if err == nil {
 		return record(ctx, tx, org, event, in, method, hash, "accepted", &id)
 	}
@@ -73,7 +75,8 @@ func CheckIn(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, in Input) (Re
 		return Result{}, err
 	}
 	var status string
-	err = tx.QueryRow(ctx, `SELECT id, status FROM tickets WHERE event_id = $1 AND `+where, event, match).Scan(&id, &status)
+	var blocked bool
+	err = tx.QueryRow(ctx, `SELECT id, status, blocked_at IS NOT NULL FROM tickets WHERE event_id = $1 AND `+where, event, match).Scan(&id, &status, &blocked)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return record(ctx, tx, org, event, in, method, hash, "invalid", nil)
@@ -81,6 +84,8 @@ func CheckIn(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, in Input) (Re
 		return Result{}, err
 	case status == "void":
 		return record(ctx, tx, org, event, in, method, hash, "void", &id)
+	case blocked: // checked in or not: a hold beats "already in"
+		return record(ctx, tx, org, event, in, method, hash, "blocked", &id)
 	}
 	return record(ctx, tx, org, event, in, method, hash, "duplicate", &id)
 }
@@ -106,11 +111,11 @@ func record(ctx context.Context, tx pgx.Tx, org, event uuid.UUID, in Input, meth
 	return r, err
 }
 
-const view = `SELECT t.id, tt.name, t.attendee_name, o.code, t.status, t.checked_in_at
+const view = `SELECT t.id, tt.name, t.attendee_name, o.code, t.status, t.checked_in_at, t.blocked_at IS NOT NULL
 	FROM tickets t JOIN ticket_types tt ON tt.id = t.ticket_type_id JOIN orders o ON o.id = t.order_id`
 
 func scanTicket(row pgx.CollectableRow) (t Ticket, err error) {
-	err = row.Scan(&t.ID, &t.TicketTypeName, &t.AttendeeName, &t.OrderCode, &t.Status, &t.CheckedInAt)
+	err = row.Scan(&t.ID, &t.TicketTypeName, &t.AttendeeName, &t.OrderCode, &t.Status, &t.CheckedInAt, &t.Blocked)
 	return t, err
 }
 

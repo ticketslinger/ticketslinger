@@ -264,3 +264,60 @@ func TestSummaryCountsCompAndManual(t *testing.T) {
 	})
 	f.must(t, err)
 }
+
+// A blocked ticket is held at the door, by scan or by hand, until the block
+// is lifted; the refusal is recorded and lets nobody in.
+func TestBlockedCheckin(t *testing.T) {
+	f := seed(t)
+	tk := f.order(t, f.org, f.event, f.general, "TS-BKD01", "b@example.com", "Ada")
+	f.exec(t, `update tickets set blocked_at = now(), blocked_reason = 'chargeback' where id = $1`, tk[0].id)
+
+	r := f.checkIn(t, f.event, checkin.Input{QR: tk[0].qr})
+	if r.Result != "blocked" || r.Ticket == nil || !r.Ticket.Blocked || r.Ticket.CheckedInAt != nil || r.CheckedIn != 0 || r.Sold != 1 {
+		t.Fatalf("scan of a blocked ticket: %+v %+v, want blocked, not in, still sold", r, r.Ticket)
+	}
+	if n := f.count(t, `select count(*) from checkins where ticket_id = $1 and result = 'blocked'`, tk[0].id); n != 1 {
+		t.Fatalf("blocked checkins rows: %d, want 1", n)
+	}
+	if n := f.count(t, `select count(*) from tickets where id = $1 and checked_in_at is null`, tk[0].id); n != 1 {
+		t.Fatal("a blocked scan checked the ticket in")
+	}
+	if r := f.checkIn(t, f.event, checkin.Input{TicketID: tk[0].id}); r.Result != "blocked" {
+		t.Fatalf("manual check-in of a blocked ticket: %+v, want blocked", r)
+	}
+	ctx := context.Background()
+	found, err := func() (ts []checkin.Ticket, err error) {
+		err = db.WithOrganizer(ctx, f.app, f.user, f.org, func(tx pgx.Tx, _ string) (err error) {
+			ts, err = checkin.Search(ctx, tx, f.event, "Ada")
+			return err
+		})
+		return ts, err
+	}()
+	f.must(t, err)
+	if len(found) != 1 || !found[0].Blocked {
+		t.Fatalf("search: %+v, want the blocked ticket, marked blocked", found)
+	}
+
+	f.exec(t, `update tickets set blocked_at = null, blocked_reason = null where id = $1`, tk[0].id)
+	if r := f.checkIn(t, f.event, checkin.Input{QR: tk[0].qr}); r.Result != "accepted" || r.Ticket.Blocked {
+		t.Fatalf("scan after unblocking: %+v, want accepted", r)
+	}
+}
+
+// A ticket blocked after it got in is still refused (not "already in"), and
+// a cancelled one says void whether or not it was blocked.
+func TestBlockCheckedIn(t *testing.T) {
+	f := seed(t)
+	tk := f.order(t, f.org, f.event, f.general, "TS-BKD02", "b@example.com", "Ada")
+	if r := f.checkIn(t, f.event, checkin.Input{QR: tk[0].qr}); r.Result != "accepted" {
+		t.Fatalf("first scan: %+v", r)
+	}
+	f.exec(t, `update tickets set blocked_at = now() where id = $1`, tk[0].id)
+	if r := f.checkIn(t, f.event, checkin.Input{QR: tk[0].qr}); r.Result != "blocked" || r.Ticket.CheckedInAt == nil {
+		t.Fatalf("scan of a checked-in, then blocked, ticket: %+v, want blocked", r)
+	}
+	f.exec(t, `update tickets set status = 'void', released_at = now() where id = $1`, tk[0].id)
+	if r := f.checkIn(t, f.event, checkin.Input{QR: tk[0].qr}); r.Result != "void" {
+		t.Fatalf("scan of a cancelled, blocked ticket: %+v, want void", r)
+	}
+}

@@ -52,6 +52,8 @@ var sessionOnly = map[string]string{
 	"retryRefund":         "sending a refund again is a person's call too",
 	"cancelEvent":         "cancelling an event refunds everyone; a person decides",
 	"cancelOrder":         "cancelling a buyer's tickets is a person's call",
+	"blockTicket":         "moves what a buyer holds",
+	"unblockTicket":       "moves what a buyer holds",
 	"listOrderNotes":      "a team's notes about a buyer are for people, not integrations",
 	"addOrderNote":        "a team's notes about a buyer are for people, not integrations",
 	"deleteOrderNote":     "a team's notes about a buyer are for people, not integrations",

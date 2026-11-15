@@ -118,5 +118,5 @@ func (s *server) GetCheckinSummary(ctx context.Context, req GetCheckinSummaryReq
 // toCheckinTicket carries no money: check-in staff never see what anyone paid.
 func toCheckinTicket(t checkin.Ticket) CheckinTicket {
 	return CheckinTicket{Id: t.ID, TicketTypeName: t.TicketTypeName, AttendeeName: t.AttendeeName,
-		OrderCode: t.OrderCode, Status: CheckinTicketStatus(t.Status), CheckedInAt: nullOf(t.CheckedInAt)}
+		OrderCode: t.OrderCode, Status: CheckinTicketStatus(t.Status), CheckedInAt: nullOf(t.CheckedInAt), Blocked: t.Blocked}
 }
