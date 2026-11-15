@@ -32,7 +32,8 @@ func newTicketToolsFixture(t *testing.T) ticketToolsFixture {
 	typ := func(org, event uuid.UUID, name string, price int64, quota int) uuid.UUID {
 		t.Helper()
 		var id uuid.UUID
-		if err := f.owner.QueryRow(ctx, `insert into ticket_types(organizer_id, event_id, name, price_cents) values ($1, $2, $3, $4) returning id`,
+		if err := f.owner.QueryRow(ctx, `insert into ticket_types(organizer_id, event_id, name, price_cents, position)
+			values ($1, $2, $3, $4, (select count(*) + 1 from ticket_types where event_id = $2)) returning id`,
 			org, event, name, price).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
