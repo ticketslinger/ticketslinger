@@ -825,6 +825,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/events/{event}/orders/{order}/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Gives tickets new QR codes. The old codes stop working at the door at once and scan as unknown; the buyer's link keeps working and shows the new ones. Name the tickets in ticket_ids, or leave it out for every valid ticket not checked in yet. We email the buyer their tickets again: email says whether that was queued or one already on its way will carry the new codes. 409 checked_in for a named ticket that's in already; 409 not_regenerable when nothing is left to replace; 422 bad_tickets (field ticket_ids) when a ticket isn't in this order or is refunded or cancelled, or the list is empty or null; 422 too_many over 100 tickets. 404 for an order that isn't this event's. */
+        post: operations["regenerateTickets"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/events/{event}/orders/{order}/notes": {
         parameters: {
             query?: never;
@@ -1947,6 +1964,19 @@ export interface components {
             charge_cents: number;
             /** @enum {string} */
             order_status: "paid" | "cancelled" | "refunded" | "partially_refunded";
+        };
+        RegenerateRequest: {
+            /** @description The tickets to give new QR codes, 1 to 100 of them. Leave it out for every valid ticket not checked in yet; an empty list or null is refused (422 bad_tickets). */
+            ticket_ids?: string[];
+        };
+        RegenerateResult: {
+            /** @description The tickets that got new QR codes. */
+            ticket_ids: string[];
+            /**
+             * @description queued: we've queued an email with the new codes. on_its_way: an email that hasn't gone yet will carry them. no_tickets: every ticket left is on hold, so there's nothing to email until you lift a hold.
+             * @enum {string}
+             */
+            email: "queued" | "on_its_way" | "no_tickets";
         };
         CancelEventRequest: {
             /** @description The event's name, typed out, to confirm. */
@@ -4607,6 +4637,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CancelOrderResult"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    regenerateTickets: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 1 to 255 printable ASCII characters. Retrying with the same key replays the first response instead of running again. Callers who aren't signed in need at least 22 characters from A-Z a-z 0-9 - _ (a UUID works). */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegenerateRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegenerateResult"];
                 };
             };
             400: components["responses"]["Error"];

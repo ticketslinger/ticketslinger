@@ -114,6 +114,13 @@ var (
 	ErrTicketVoid  error = catalogue.ErrConflict{Code: "ticket_void", Message: "This ticket has been refunded or cancelled, so its name can't change."}
 )
 
+// An owner or admin's change to a ticket itself (a new QR code): a
+// checked-in ticket is in, and a void one has nothing left to change.
+var (
+	ErrCheckedIn     error = catalogue.ErrConflict{Code: "checked_in", Message: "That ticket's already been checked in, so it can't change now."}
+	errTicketVoidNow error = catalogue.ErrConflict{Code: "ticket_void", Message: "This ticket has been refunded or cancelled, so it can't change now."}
+)
+
 // answerField names the answer an error is about: answers.<question id>.<ticket index>,
 // with -1 for a question asked once per order.
 func answerField(q uuid.UUID, ticket int) string {
