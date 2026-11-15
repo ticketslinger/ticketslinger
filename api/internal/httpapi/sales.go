@@ -919,8 +919,8 @@ func (s *server) RetryRefund(ctx context.Context, req RetryRefundRequestObject) 
 	return out, nil
 }
 
-// ordersWrite: cancelling or holding a buyer's tickets is a person's call,
-// never an integration's.
+// ordersWrite: cancelling, holding or replacing a buyer's tickets is a
+// person's call, never an integration's.
 var ordersWrite = Access{Roles: ownerAdmin, Write: true, SessionOnly: true}
 
 // CancelOrder cancels tickets of an order with no refund and frees their seats.
@@ -942,6 +942,29 @@ func (s *server) CancelOrder(ctx context.Context, req CancelOrderRequestObject) 
 			return err
 		}
 		out = CancelOrder200JSONResponse{TicketIds: res.TicketIDs, ChargeCents: res.ChargeCents, OrderStatus: CancelOrderResultOrderStatus(res.OrderStatus)}
+		return nil
+	})
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return out, nil
+}
+
+// RegenerateTickets gives tickets new QR codes and emails the buyer.
+func (s *server) RegenerateTickets(ctx context.Context, req RegenerateTicketsRequestObject) (RegenerateTicketsResponseObject, error) {
+	var out RegenerateTickets200JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, ordersWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		// Absent: the whole order. null or [] names none (bad_tickets).
+		var ids []uuid.UUID
+		if req.Body.TicketIds.IsSpecified() {
+			named, _ := req.Body.TicketIds.Get()
+			ids = append([]uuid.UUID{}, named...)
+		}
+		res, err := sales.RegenerateTickets(ctx, tx, org.ID, req.Event, req.Order, ids, actorFrom(ctx))
+		if err != nil {
+			return err
+		}
+		out = RegenerateTickets200JSONResponse{TicketIds: res.TicketIDs, Email: RegenerateResultEmail(res.Email)}
 		return nil
 	})
 	if err != nil {

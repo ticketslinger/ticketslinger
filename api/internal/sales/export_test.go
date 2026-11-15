@@ -49,3 +49,5 @@ var ManualCancelEmail = manualCancelEmail
 type AlertMail = alertMail
 
 var OrderAlertEmail = orderAlertEmail
+
+var SecretErrorForTest = secretError

@@ -886,6 +886,25 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/orders/{order}/regenerate:
+    post:
+      operationId: regenerateTickets
+      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Gives tickets new QR codes. The old codes stop working at the door at once and scan as unknown; the buyer's link keeps working and shows the new ones. Name the tickets in ticket_ids, or leave it out for every valid ticket not checked in yet. We email the buyer their tickets again: email says whether that was queued or one already on its way will carry the new codes. 409 checked_in for a named ticket that's in already; 409 not_regenerable when nothing is left to replace; 422 bad_tickets (field ticket_ids) when a ticket isn't in this order or is refunded or cancelled, or the list is empty or null; 422 too_many over 100 tickets. 404 for an order that isn't this event's."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RegenerateRequest" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RegenerateResult" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/orders/{order}/notes:
     get:
       operationId: listOrderNotes
@@ -1879,6 +1898,16 @@ components:
         ticket_ids: { type: array, items: { type: string, format: uuid } }
         charge_cents: { type: integer, format: int64, description: "What the buyer paid for these tickets. None of it moves." }
         order_status: { type: string, enum: [paid, cancelled, refunded, partially_refunded] }
+    RegenerateRequest:
+      type: object
+      properties:
+        ticket_ids: { type: array, minItems: 1, maxItems: 100, items: { type: string, format: uuid }, x-go-type: "nullable.Nullable[[]openapi_types.UUID]", x-go-type-skip-optional-pointer: true, description: "The tickets to give new QR codes, 1 to 100 of them. Leave it out for every valid ticket not checked in yet; an empty list or null is refused (422 bad_tickets)." }
+    RegenerateResult:
+      type: object
+      required: [ticket_ids, email]
+      properties:
+        ticket_ids: { type: array, items: { type: string, format: uuid }, description: "The tickets that got new QR codes." }
+        email: { type: string, enum: [queued, on_its_way, no_tickets], description: "queued: we've queued an email with the new codes. on_its_way: an email that hasn't gone yet will carry them. no_tickets: every ticket left is on hold, so there's nothing to email until you lift a hold." }
     CancelEventRequest:
       type: object
       required: [confirm_name]
