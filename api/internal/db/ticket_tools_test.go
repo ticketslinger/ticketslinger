@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ticketslinger/ticketslinger/api/internal/db"
 )
@@ -196,6 +199,13 @@ func TestSetTicketSecret(t *testing.T) {
 	}
 	_, err := f.asApp(f.ua, f.oa, q, f.paid[1], secret[:15])
 	wantRefusal(t, "15 bytes", err, "bad_secret")
+	// A secret already in use is refused without the error quoting it.
+	_, err = f.asApp(f.ua, f.oa, q, f.paid[1], secret)
+	wantRefusal(t, "another ticket's secret", err, "bad_secret")
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && strings.Contains(strings.ToLower(err.Error()+pg.Detail+pg.Hint+pg.Where), hex.EncodeToString(secret)) {
+		t.Errorf("the refusal quotes the secret: %v %s", err, pg.Detail)
+	}
 	_, err = f.asApp(f.checkin, f.oa, q, f.paid[1], make([]byte, 16))
 	wantCode(t, "check-in member", err, "42501")
 	_, err = f.asApp(f.ua, f.oa, q, f.ticketB, make([]byte, 16))
@@ -246,6 +256,15 @@ func TestForceOrderEmail(t *testing.T) {
 	force("queued with the job running", "owner", f.oa, "queued")
 	if all, live := jobs(); all != 2 || live != 1 {
 		t.Errorf("jobs beside a running one: %d, %d waiting", all, live)
+	}
+
+	// The running job sends and marks the order sent; the one beside it
+	// still waits, so a third email isn't queued.
+	f.set(t, `delete from jobs where locked_until > now()`)
+	f.set(t, `update orders set mail_status = 'sent' where id = $1`, f.orderA)
+	force("sent with a job still waiting", "owner", f.oa, "on_its_way")
+	if all, live := jobs(); all != 1 || live != 1 {
+		t.Errorf("jobs after the running one sent: %d, %d waiting", all, live)
 	}
 
 	// A failing job is brought forward, not doubled.

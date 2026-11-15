@@ -116,7 +116,12 @@ BEGIN
   IF k.checked_in_at IS NOT NULL THEN
     RAISE EXCEPTION 'checked_in' USING ERRCODE = 'invalid_parameter_value';
   END IF;
-  UPDATE public.tickets SET secret = p_secret WHERE id = p_ticket;
+  -- secret is UNIQUE, and a unique_violation's detail would quote the bytes.
+  BEGIN
+    UPDATE public.tickets SET secret = p_secret WHERE id = p_ticket;
+  EXCEPTION WHEN unique_violation THEN
+    RAISE EXCEPTION 'bad_secret' USING ERRCODE = 'invalid_parameter_value';
+  END;
 END $$;
 -- +goose StatementEnd
 REVOKE ALL ON FUNCTION set_ticket_secret(uuid, bytea) FROM PUBLIC;
@@ -143,21 +148,21 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'force_order_email: not this organizer''s order' USING ERRCODE = 'insufficient_privilege';
   END IF;
-  IF o.mail_status IN ('queued', 'failing') THEN
-    SELECT j.id INTO waiting FROM public.jobs j
-     WHERE j.kind = 'order_confirmation' AND j.payload->>'order_id' = p_order::text AND j.run_at <> 'infinity'
-       AND (j.locked_until IS NULL OR j.locked_until < now())
-     ORDER BY j.run_at LIMIT 1 FOR UPDATE;
-    IF FOUND AND o.mail_status = 'queued' THEN
-      RETURN 'on_its_way';
-    END IF;
-    IF FOUND THEN
-      UPDATE public.jobs SET run_at = statement_timestamp(), attempts = 0, locked_until = NULL WHERE id = waiting;
-      UPDATE public.orders SET mail_status = 'queued', mail_attempts = 0, mail_problem = NULL,
-        mail_requested_at = statement_timestamp(), mail_updated_at = statement_timestamp()
-       WHERE id = p_order;
-      RETURN 'queued';
-    END IF;
+  -- Whatever mail_status says: a running job's send can mark the order
+  -- 'sent' while the job queued beside it still waits.
+  SELECT j.id INTO waiting FROM public.jobs j
+   WHERE j.kind = 'order_confirmation' AND j.payload->>'order_id' = p_order::text AND j.run_at <> 'infinity'
+     AND (j.locked_until IS NULL OR j.locked_until < now())
+   ORDER BY j.run_at LIMIT 1 FOR UPDATE;
+  IF FOUND AND o.mail_status IS DISTINCT FROM 'failing' THEN
+    RETURN 'on_its_way';
+  END IF;
+  IF FOUND THEN
+    UPDATE public.jobs SET run_at = statement_timestamp(), attempts = 0, locked_until = NULL WHERE id = waiting;
+    UPDATE public.orders SET mail_status = 'queued', mail_attempts = 0, mail_problem = NULL,
+      mail_requested_at = statement_timestamp(), mail_updated_at = statement_timestamp()
+     WHERE id = p_order;
+    RETURN 'queued';
   END IF;
   IF o.status NOT IN ('paid', 'partially_refunded')
      OR NOT EXISTS (SELECT 1 FROM public.tickets t WHERE t.order_id = p_order AND t.status = 'valid' AND t.blocked_at IS NULL) THEN
@@ -351,6 +356,8 @@ BEGIN
 END $$;
 -- +goose StatementEnd
 -- Fails while a 'blocked' check-in row exists: those are kept, not deleted.
+-- To go down anyway, remap them by hand first:
+--   UPDATE checkins SET result = 'invalid' WHERE result = 'blocked';
 ALTER TABLE checkins DROP CONSTRAINT checkins_result_check,
   ADD CONSTRAINT checkins_result_check CHECK (result IN ('accepted', 'duplicate', 'invalid', 'void'));
 ALTER TABLE tickets DROP CONSTRAINT tickets_block_reason, DROP COLUMN blocked_reason, DROP COLUMN blocked_at;
