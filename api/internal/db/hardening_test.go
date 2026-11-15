@@ -132,6 +132,11 @@ func TestCatalogHardening(t *testing.T) {
 		"claim_order_alerts()":        {false, true},
 		"order_alert_recipient(uuid)": {false, true},
 		"orders_source_fixed()":       {false, false},
+		// Ticket tools: the organizer's own type change, new QR and
+		// forced resend, each checking the member's role again.
+		"set_ticket_type(uuid,uuid)":    {true, false},
+		"set_ticket_secret(uuid,bytea)": {true, false},
+		"force_order_email(uuid)":       {true, false},
 	} {
 		var definer, app, public, system bool
 		err := owner.QueryRow(ctx, `select p.prosecdef, has_function_privilege('ts_app', p.oid, 'EXECUTE'),
@@ -286,6 +291,19 @@ func TestSaleRolesStayNarrow(t *testing.T) {
 	}
 	if want := []string{"author:INSERT", "body:INSERT", "id:INSERT", "order_id:INSERT", "organizer_id:INSERT"}; !slices.Equal(rights, want) {
 		t.Errorf("ts_system on order_notes: %v, want only %v", rights, want)
+	}
+
+	// ts_app changes tickets column by column, through tickets_app_one_way,
+	// and never the type or the secret: those go through set_ticket_type
+	// and set_ticket_secret.
+	var updates []string
+	if err := owner.QueryRow(ctx, `select array(select a.attname::text from pg_attribute a
+			where a.attrelid = 'tickets'::regclass and a.attnum > 0 and not a.attisdropped
+			  and has_column_privilege('ts_app', a.attrelid, a.attnum, 'UPDATE') order by 1)`).Scan(&updates); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"attendee_name", "blocked_at", "blocked_reason", "checked_in_at", "refund_id", "released_at", "status"}; !slices.Equal(updates, want) {
+		t.Errorf("ts_app updates tickets.%v, want only %v", updates, want)
 	}
 }
 
