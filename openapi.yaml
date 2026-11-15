@@ -1006,6 +1006,25 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/orders/{order}/tickets/{ticket}/type:
+    put:
+      operationId: changeTicketType
+      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Moves one valid ticket that isn't checked in to another type of this event at the same price and tax (any type, for a comp). The QR code, name and answers stay. It needs room in the new type's quotas and frees its place in the old one's. We email the buyer their tickets again when we can; email says what happened, and the change stands either way. 409 price_differs, checked_in, ticket_void, sold_out; 503 try_again when the quotas changed under us (try again). 422 same_type, unknown_ticket_type, no_quota (field ticket_type_id). 404 for a ticket that isn't this order's."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+        - { $ref: "#/components/parameters/TicketPath" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ChangeTicketType" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ChangeTypeResult" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/cancel:
     post:
       operationId: cancelEvent
@@ -1658,6 +1677,16 @@ components:
       type: object
       properties:
         reason: { type: string, maxLength: 200, description: "Why it's on hold, for your team only: never on the buyer's page or in their email. Plain text; empty or left out for none." }
+    ChangeTicketType:
+      type: object
+      required: [ticket_type_id]
+      properties:
+        ticket_type_id: { type: string, format: uuid, description: "The type to move the ticket to: one of this event's." }
+    ChangeTypeResult:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, enum: [queued, on_its_way, too_soon, no_tickets], description: "queued: we've emailed the buyer their updated tickets. on_its_way: an email that hasn't gone yet will show the new type. too_soon: one went out in the last ten minutes, so we didn't send another; resend later. no_tickets: nothing in the order can be emailed (every ticket left is on hold)." }
     RenameTicket:
       type: object
       required: [attendee_name]

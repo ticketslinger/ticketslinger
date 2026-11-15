@@ -103,6 +103,13 @@ func errNoQuota(name string) error {
 	return invalid("no_quota", "lines", name+" isn't in any quota yet, so we can't count it. Add it to one on the Tickets tab first.")
 }
 
+// errNoQuotaType is no_quota for the change-type body, whose field is ticket_type_id.
+func errNoQuotaType(name string) error {
+	e := errNoQuota(name).(catalogue.ErrInvalid)
+	e.Field = "ticket_type_id"
+	return e
+}
+
 const badName = "Keep the name to 120 characters or fewer, using ordinary letters and punctuation."
 
 // A ticket's name: the buyer can't change it any more (the event started,
