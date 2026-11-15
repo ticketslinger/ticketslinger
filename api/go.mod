@@ -9,12 +9,12 @@ require (
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/oapi-codegen/nullable v1.1.0
-	github.com/oapi-codegen/runtime v1.7.0
+	github.com/oapi-codegen/nullable v1.2.0
+	github.com/oapi-codegen/runtime v1.8.0
 	github.com/pquerna/otp v1.5.0
 	github.com/pressly/goose/v3 v3.29.0
-	github.com/signintech/gopdf v0.38.2
-	github.com/stripe/stripe-go/v87 v87.0.0
+	github.com/signintech/gopdf v0.38.4
+	github.com/stripe/stripe-go/v87 v87.1.0
 	golang.org/x/crypto v0.58.0
 )
 
