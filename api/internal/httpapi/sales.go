@@ -919,8 +919,8 @@ func (s *server) RetryRefund(ctx context.Context, req RetryRefundRequestObject) 
 	return out, nil
 }
 
-// ordersWrite: cancelling, holding or replacing a buyer's tickets is a
-// person's call, never an integration's.
+// ordersWrite: cancelling, holding, replacing or retyping a buyer's
+// tickets is a person's call, never an integration's.
 var ordersWrite = Access{Roles: ownerAdmin, Write: true, SessionOnly: true}
 
 // CancelOrder cancels tickets of an order with no refund and frees their seats.
@@ -986,6 +986,23 @@ func (s *server) BlockTicket(ctx context.Context, req BlockTicketRequestObject) 
 		return nil, salesError(err)
 	}
 	return BlockTicket204Response{}, nil
+}
+
+// ChangeTicketType moves a ticket to another type of its event.
+func (s *server) ChangeTicketType(ctx context.Context, req ChangeTicketTypeRequestObject) (ChangeTicketTypeResponseObject, error) {
+	var out ChangeTicketType200JSONResponse
+	err := s.inOrganizer(ctx, req.Organizer, ordersWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		email, err := sales.ChangeTicketType(ctx, tx, org.ID, req.Event, req.Order, req.Ticket, req.Body.TicketTypeId, actorFrom(ctx))
+		if err != nil {
+			return err
+		}
+		out.Email = ChangeTypeResultEmail(email)
+		return nil
+	})
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return out, nil
 }
 
 // UnblockTicket takes a ticket off hold.

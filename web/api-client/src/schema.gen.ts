@@ -912,6 +912,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizers/{organizer}/events/{event}/orders/{order}/tickets/{ticket}/type": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Moves one valid ticket that isn't checked in to another type of this event at the same price and tax (any type, for a comp). The QR code, name and answers stay. It needs room in the new type's quotas and frees its place in the old one's. We email the buyer their tickets again when we can; email says what happened, and the change stands either way. 409 price_differs, checked_in, ticket_void, sold_out; 503 try_again when the quotas changed under us (try again). 422 same_type, unknown_ticket_type, no_quota (field ticket_type_id). 404 for a ticket that isn't this order's. */
+        put: operations["changeTicketType"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/events/{event}/cancel": {
         parameters: {
             query?: never;
@@ -1596,6 +1613,20 @@ export interface components {
         BlockTicket: {
             /** @description Why it's on hold, for your team only: never on the buyer's page or in their email. Plain text; empty or left out for none. */
             reason?: string;
+        };
+        ChangeTicketType: {
+            /**
+             * Format: uuid
+             * @description The type to move the ticket to: one of this event's.
+             */
+            ticket_type_id: string;
+        };
+        ChangeTypeResult: {
+            /**
+             * @description queued: we've emailed the buyer their updated tickets. on_its_way: an email that hasn't gone yet will show the new type. too_soon: one went out in the last ten minutes, so we didn't send another; resend later. no_tickets: nothing in the order can be emailed (every ticket left is on hold).
+             * @enum {string}
+             */
+            email: "queued" | "on_its_way" | "too_soon" | "no_tickets";
         };
         RenameTicket: {
             /** @description The name to put on the ticket. Empty takes the name off. */
@@ -4866,6 +4897,42 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    changeTicketType: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+                ticket: components["parameters"]["TicketPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeTicketType"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeTypeResult"];
+                };
             };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];

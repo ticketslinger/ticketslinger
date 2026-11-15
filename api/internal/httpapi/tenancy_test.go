@@ -54,6 +54,7 @@ var sessionOnly = map[string]string{
 	"cancelOrder":         "cancelling a buyer's tickets is a person's call",
 	"blockTicket":         "moves what a buyer holds",
 	"unblockTicket":       "moves what a buyer holds",
+	"changeTicketType":    "moves what a buyer holds",
 	"regenerateTickets":   "moves what a buyer holds",
 	"listOrderNotes":      "a team's notes about a buyer are for people, not integrations",
 	"addOrderNote":        "a team's notes about a buyer are for people, not integrations",
