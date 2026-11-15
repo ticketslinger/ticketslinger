@@ -219,6 +219,33 @@ func TestChangeTypeRefusals(t *testing.T) {
 	}
 }
 
+// The price and tax are read after the quota locks: a catalogue edit that
+// holds the target's quota and changes its tax wins, and the change sees it.
+func TestChangeTypeReadsTaxAfterTheLocks(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500})
+	vip := f.ticketType(t, f.org, f.event, "VIP", 2500, false)
+	vipQ := f.quota(t, f.org, f.event, "VIP", 5, vip)
+	order, _, tickets := f.paidOrder(t, s, fake, 1, 1)
+	ctx := context.Background()
+	edit, err := f.owner.Begin(ctx)
+	f.must(t, err)
+	_, err = edit.Exec(ctx, `select 1 from quotas where id = $1 for update`, vipQ)
+	f.must(t, err)
+	_, err = edit.Exec(ctx, `update ticket_types set tax_rate_bp = 825 where id = $1`, vip)
+	f.must(t, err)
+	done := make(chan error, 1)
+	go func() { _, err := f.changeType(s, order, tickets[0], vip); done <- err }()
+	waitForLockWaiters(t, f.owner, 1)
+	f.must(t, edit.Commit(ctx))
+	if err := <-done; conflictCode(err) != "price_differs" {
+		t.Fatalf("change past a tax edit: %v, want price_differs", err)
+	}
+	if f.typeOf(t, tickets[0]) != f.general {
+		t.Fatal("the ticket moved on a stale tax")
+	}
+}
+
 func TestChangeTypeComp(t *testing.T) {
 	s := newService(t)
 	f := seed(t, s.Pool, seedOpts{quota: 10, price: 2500, taxBP: 825})

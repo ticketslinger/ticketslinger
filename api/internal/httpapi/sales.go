@@ -993,8 +993,11 @@ func (s *server) ChangeTicketType(ctx context.Context, req ChangeTicketTypeReque
 	var out ChangeTicketType200JSONResponse
 	err := s.inOrganizer(ctx, req.Organizer, ordersWrite, func(org organizers.Organizer, tx pgx.Tx) error {
 		email, err := sales.ChangeTicketType(ctx, tx, org.ID, req.Event, req.Order, req.Ticket, req.Body.TicketTypeId, actorFrom(ctx))
+		if err != nil {
+			return err
+		}
 		out.Email = ChangeTypeResultEmail(email)
-		return err
+		return nil
 	})
 	if err != nil {
 		return nil, salesError(err)

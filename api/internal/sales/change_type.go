@@ -52,8 +52,18 @@ func ChangeTicketType(ctx context.Context, tx pgx.Tx, org, event, order, ticket,
 	case to == from:
 		return "", errSameType
 	}
-	// Price and tax before any quota work: a dearer type is price_differs,
-	// full or not. Tax counts too, so the ticket's stored tax stays true.
+	sizes, links, err := lockQuotas(ctx, tx, event, []uuid.UUID{from, to}) // in quota id order
+	if errors.Is(err, errQuotasMoved) {
+		return "", ErrBusy
+	}
+	if err != nil {
+		return "", err
+	}
+	// Price and tax are read after the quota locks, as checkout reads what
+	// it decides on: a type edit holds its quotas while it changes them, so
+	// one that committed while we waited shows here. FOR SHARE on the types
+	// before the locks would deadlock against that edit instead. Before
+	// no_quota and sold_out: a dearer type is price_differs, full or not.
 	var name string
 	var differs bool
 	err = tx.QueryRow(ctx, `select n.name, n.price_cents <> c.price_cents
@@ -68,13 +78,6 @@ func ChangeTicketType(ctx context.Context, tx pgx.Tx, org, event, order, ticket,
 		return "", err
 	case differs && source != "comp":
 		return "", errPriceDiffers
-	}
-	sizes, links, err := lockQuotas(ctx, tx, event, []uuid.UUID{from, to}) // in quota id order
-	if errors.Is(err, errQuotasMoved) {
-		return "", ErrBusy
-	}
-	if err != nil {
-		return "", err
 	}
 	if len(links[to]) == 0 {
 		return "", errNoQuotaType(name)

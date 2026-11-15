@@ -99,15 +99,13 @@ var (
 // errBadNoteBody is bad_note for the notes endpoint, whose field is body.
 var errBadNoteBody = invalid("bad_note", "body", "Keep a note to 2,000 characters of plain text.")
 
-func errNoQuota(name string) error {
-	return invalid("no_quota", "lines", name+" isn't in any quota yet, so we can't count it. Add it to one on the Tickets tab first.")
-}
+func errNoQuota(name string) error { return invalid("no_quota", "lines", noQuota(name)) }
 
 // errNoQuotaType is no_quota for the change-type body, whose field is ticket_type_id.
-func errNoQuotaType(name string) error {
-	e := errNoQuota(name).(catalogue.ErrInvalid)
-	e.Field = "ticket_type_id"
-	return e
+func errNoQuotaType(name string) error { return invalid("no_quota", "ticket_type_id", noQuota(name)) }
+
+func noQuota(name string) string {
+	return name + " isn't in any quota yet, so we can't count it. Add it to one on the Tickets tab first."
 }
 
 const badName = "Keep the name to 120 characters or fewer, using ordinary letters and punctuation."
