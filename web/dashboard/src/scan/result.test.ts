@@ -9,6 +9,7 @@ const ticket = {
   order_code: "TS-7KQ2MX",
   status: "valid" as const,
   checked_in_at: "2027-03-02T02:42:00Z",
+  blocked: false,
 };
 const r = (
   result: CheckinResult["result"],
@@ -39,6 +40,16 @@ test("duplicate is amber and says when, in the event's zone", () => {
     tone: "amber",
     heading: "Already checked in",
     body: "This ticket came in at 7:42 PM. Make sure it's the same person before you let them through.",
+    action: "Scan the next ticket",
+    autoDismissMs: null,
+  });
+});
+
+test("blocked is red, sends them to the box office and waits for a tap", () => {
+  expect(viewFor(r("blocked", { ...ticket, blocked: true }), ZONE)).toEqual({
+    tone: "red",
+    heading: "Blocked — send to the box office",
+    body: "The organizer put this ticket on hold. Don't let them in until someone on the team clears it.",
     action: "Scan the next ticket",
     autoDismissMs: null,
   });

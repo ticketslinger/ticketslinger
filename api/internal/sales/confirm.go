@@ -302,7 +302,7 @@ type confirmation struct {
 // OrderConfirmation handles OrderConfirmationJob. It reads the order and
 // its valid tickets as ts_system for the named organizer and sends outside
 // the transaction. An order that is gone or not paid sends nothing, and so
-// does one with no valid ticket left: there's nothing to bring to the door,
+// does one with no valid, unblocked ticket left: nothing to bring to the door,
 // and the refund email already told the buyer why. Either way its mail
 // status goes back to none (nothingToSend). After a send it records how it
 // went (recordSend). Delivery is at least once, as for every job.
@@ -329,13 +329,18 @@ func (s *Service) OrderConfirmation(m mailer.Mailer) jobs.Handler {
 			if err != nil {
 				return err
 			}
-			rows, _ := tx.Query(ctx, `select tt.name, t.attendee_name, t.secret from tickets t join ticket_types tt on tt.id = t.ticket_type_id
+			// Every valid row, blocked ones too: they're still sold. Only
+			// d.Tickets, what brings someone to the door, leaves them out.
+			rows, _ := tx.Query(ctx, `select tt.name, t.attendee_name, t.secret, t.blocked_at is not null from tickets t join ticket_types tt on tt.id = t.ticket_type_id
 				where t.order_id = $1 and t.status = 'valid' order by t.id`, c.Order)
 			var t emails.Ticket
 			var secret []byte
-			if _, err := pgx.ForEachRow(rows, []any{&t.Type, &t.Attendee, &secret}, func() error {
-				t.QR = base64.RawURLEncoding.EncodeToString(secret)
-				d.Tickets = append(d.Tickets, t)
+			var blocked bool
+			if _, err := pgx.ForEachRow(rows, []any{&t.Type, &t.Attendee, &secret, &blocked}, func() error {
+				if !blocked {
+					t.QR = base64.RawURLEncoding.EncodeToString(secret)
+					d.Tickets = append(d.Tickets, t)
+				}
 				return nil
 			}); err != nil {
 				return err

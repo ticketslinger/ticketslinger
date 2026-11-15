@@ -1437,6 +1437,32 @@ test("the order page shows each valid ticket's QR code, the PDF and the email bu
   expect(missing.headers.get("content-security-policy")).not.toContain("data:");
 });
 
+test("a blocked ticket shows no QR, says it's on hold and keeps its number", async () => {
+  const o = structuredClone(order);
+  // The API sends no QR for a blocked ticket; the page doesn't trust that alone.
+  o.tickets[0] = { ...o.tickets[0], blocked: true } as (typeof o.tickets)[0];
+  const { a } = app(() => Response.json(o));
+  const html = await (await a.request(`/orders/TS-7K2QF?t=${TOK}`)).text();
+  expect(html.match(/<img class="qr"/g)).toHaveLength(1);
+  expect(html).not.toContain(QR_ONE as string);
+  expect(html).toContain('<p class="status">On hold — contact the organizer</p>');
+  expect(html).toContain("Ticket 1 of 2: General");
+  expect(html).toContain(`src="data:image/png;base64,${QR_TWO}" alt="QR code for ticket 2"`);
+  expect(html).toContain("Download all tickets (PDF)");
+});
+
+test("an order whose tickets are all blocked has no PDF and no email button", async () => {
+  const o = structuredClone(order);
+  o.tickets = o.tickets.map((t) => ({ ...t, blocked: true, qr: null, qr_png: null }));
+  const { a } = app(() => Response.json(o));
+  const html = await (await a.request(`/orders/TS-7K2QF?t=${TOK}`)).text();
+  expect(html).not.toContain('class="qr"');
+  expect(html.match(/On hold — contact the organizer/g)).toHaveLength(2);
+  expect(html).toContain("Ticket 2 of 2: General");
+  expect(html).not.toContain("Download all tickets (PDF)");
+  expect(html).not.toContain("Email me my tickets again");
+});
+
 test("an order with no valid ticket has no QR, no PDF and no email button", async () => {
   const o = structuredClone(order);
   o.status = "refunded";

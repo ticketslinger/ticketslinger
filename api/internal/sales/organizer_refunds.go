@@ -189,10 +189,12 @@ type OrderDetailView struct {
 }
 
 type OrderDetailTicket struct {
-	ID                                   uuid.UUID
+	ID, TicketTypeID                     uuid.UUID
 	TicketTypeName, AttendeeName, Status string
 	ChargeCents, FeeCents                int64
 	RefundID                             *uuid.UUID
+	CheckedInAt, BlockedAt               *time.Time
+	BlockedReason                        *string
 }
 
 type RefundView struct {
@@ -234,10 +236,12 @@ func OrderDetail(ctx context.Context, tx pgx.Tx, event, order uuid.UUID) (OrderD
 		return OrderDetailView{}, err
 	}
 	out := OrderDetailView{OrderSummary: sum}
-	rows, _ = tx.Query(ctx, `select t.id, tt.name, t.attendee_name, t.status, t.charge_cents, t.fee_cents, t.refund_id
+	rows, _ = tx.Query(ctx, `select t.id, t.ticket_type_id, tt.name, t.attendee_name, t.status, t.charge_cents, t.fee_cents, t.refund_id,
+		t.checked_in_at, t.blocked_at, t.blocked_reason
 		from tickets t join ticket_types tt on tt.id = t.ticket_type_id where t.order_id = $1 order by t.id`, order)
 	if out.Tickets, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (t OrderDetailTicket, err error) {
-		err = r.Scan(&t.ID, &t.TicketTypeName, &t.AttendeeName, &t.Status, &t.ChargeCents, &t.FeeCents, &t.RefundID)
+		err = r.Scan(&t.ID, &t.TicketTypeID, &t.TicketTypeName, &t.AttendeeName, &t.Status, &t.ChargeCents, &t.FeeCents, &t.RefundID,
+			&t.CheckedInAt, &t.BlockedAt, &t.BlockedReason)
 		return t, err
 	}); err != nil {
 		return OrderDetailView{}, err

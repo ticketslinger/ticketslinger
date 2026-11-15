@@ -45,7 +45,8 @@ type OrderTicket struct {
 	ID                                   uuid.UUID
 	TicketTypeName, AttendeeName, Status string
 	Refunded                             bool   // void because it was refunded
-	QR                                   string // base64url of the ticket's secret, 22 characters; "" for a void ticket
+	QR                                   string // base64url of the ticket's secret, 22 characters; "" for a void or blocked ticket
+	Blocked                              bool   // on hold: still the buyer's, but it won't get in
 	NameChangesLeft                      int    // of the buyer's five
 }
 
@@ -81,7 +82,8 @@ func (s *Service) Order(ctx context.Context, code, token string) (OrderView, err
 		AttendeeName   string    `json:"attendee_name"`
 		Status         string    `json:"status"`
 		Refunded       bool      `json:"refunded"`
-		Secret         *string   `json:"secret"` // hex; null for a void ticket
+		Blocked        bool      `json:"blocked"`
+		Secret         *string   `json:"secret"` // hex; null for a void or blocked ticket
 		NameChanges    int       `json:"name_changes"`
 	}
 	if err := json.Unmarshal(tickets, &rows); err != nil {
@@ -90,7 +92,7 @@ func (s *Service) Order(ctx context.Context, code, token string) (OrderView, err
 	out.Tickets = make([]OrderTicket, len(rows))
 	for i, r := range rows {
 		out.Tickets[i] = OrderTicket{ID: r.ID, TicketTypeName: r.TicketTypeName, AttendeeName: r.AttendeeName, Status: r.Status,
-			Refunded: r.Refunded, NameChangesLeft: 5 - r.NameChanges}
+			Refunded: r.Refunded, Blocked: r.Blocked, NameChangesLeft: 5 - r.NameChanges}
 		if r.Secret != nil {
 			secret, err := hex.DecodeString(*r.Secret)
 			if err != nil {
@@ -130,8 +132,9 @@ func (s *Service) RequestTicketEmail(ctx context.Context, code, token string) er
 	return queueAnswer(res)
 }
 
-// OrderPDF is the order's valid tickets, one to a page, numbered as the
-// email numbers them (by ticket id); errNoTickets when none is valid.
+// OrderPDF is the order's tickets with a QR (valid and not blocked), one to
+// a page, numbered as the email numbers them (by ticket id); errNoTickets
+// when there are none.
 func (s *Service) OrderPDF(ctx context.Context, code, token string) (pdf []byte, filename string, err error) {
 	o, err := s.Order(ctx, code, token)
 	if err != nil {

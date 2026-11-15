@@ -951,6 +951,42 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+  /organizers/{organizer}/events/{event}/orders/{order}/tickets/{ticket}/block:
+    put:
+      operationId: blockTicket
+      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Puts a valid ticket on hold: the door refuses it with blocked, the buyer's page and emails stop showing its QR code, and it keeps its seat and stays sold. reason is for your team only, up to 200 characters. Blocking a blocked ticket changes nothing. 409 ticket_void for a refunded or cancelled ticket. 422 bad_reason (field reason). 404 for a ticket that isn't this order's."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+        - { $ref: "#/components/parameters/TicketPath" }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BlockTicket" } } } }
+      responses:
+        "204": { description: Blocked }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: unblockTicket
+      description: "Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Takes a ticket off hold, so it scans again and the buyer sees its QR code. Unblocking a ticket that isn't blocked changes nothing. 409 ticket_void. 404 for a ticket that isn't this order's."
+      parameters:
+        - { $ref: "#/components/parameters/OrganizerPath" }
+        - { $ref: "#/components/parameters/EventPath" }
+        - { $ref: "#/components/parameters/OrderPath" }
+        - { $ref: "#/components/parameters/TicketPath" }
+      responses:
+        "204": { description: Unblocked }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /organizers/{organizer}/events/{event}/cancel:
     post:
       operationId: cancelEvent
@@ -972,7 +1008,7 @@ paths:
   /organizers/{organizer}/events/{event}/checkins:
     post:
       operationId: createCheckin
-      description: "Owners, admins and check-in staff, or a write API key. Checks one ticket in: send the scanned QR text as qr, or a ticket picked by hand as ticket_id, never both (422 qr_or_ticket). Every outcome is a 200, and result says which it was. accepted: the ticket is valid and wasn't in yet, so it's in now. duplicate: it's already in, and ticket.checked_in_at says since when. invalid: no ticket of this event matches, so ticket is null. void: the ticket was refunded or cancelled. checked_in and sold count the event's valid tickets. Retrying with the same Idempotency-Key replays the first answer, so a scan resent after a dropped connection still says accepted. 422 (field qr) for an empty or over-long qr, (field gate) for a gate over 40 characters. 429 rate_limited after 300 scans in a minute from one caller at one event."
+      description: "Owners, admins and check-in staff, or a write API key. Checks one ticket in: send the scanned QR text as qr, or a ticket picked by hand as ticket_id, never both (422 qr_or_ticket). Every outcome is a 200, and result says which it was. accepted: the ticket is valid and wasn't in yet, so it's in now. duplicate: it's already in, and ticket.checked_in_at says since when. invalid: no ticket of this event matches, so ticket is null. void: the ticket was refunded or cancelled. blocked: an owner or admin put the ticket on hold, so it doesn't get in, whether or not it was in before; void wins over blocked. checked_in and sold count the event's valid tickets. Retrying with the same Idempotency-Key replays the first answer, so a scan resent after a dropped connection still says accepted. 422 (field qr) for an empty or over-long qr, (field gate) for a gate over 40 characters. 429 rate_limited after 300 scans in a minute from one caller at one event."
       parameters:
         - { $ref: "#/components/parameters/OrganizerPath" }
         - { $ref: "#/components/parameters/EventPath" }
@@ -1313,7 +1349,7 @@ paths:
     get:
       operationId: getOrderPDF
       security: []
-      description: "The order's valid tickets as a PDF, one to a page, numbered as the email numbers them, for whoever holds the token from the order's link. An unknown code and a wrong token get the same 404. 409 no_tickets when the order has no valid ticket. It comes with Content-Disposition: attachment; filename=\"tickets-<code>.pdf\", Cache-Control: no-store and Referrer-Policy: no-referrer. Counts against the same 60 reads a minute per client address as getOrder, then 429 rate_limited."
+      description: "The order's valid tickets as a PDF, one to a page, numbered as the email numbers them, for whoever holds the token from the order's link. A ticket the organizer has put on hold isn't in it. An unknown code and a wrong token get the same 404. 409 no_tickets when the order has no valid ticket that isn't on hold. It comes with Content-Disposition: attachment; filename=\"tickets-<code>.pdf\", Cache-Control: no-store and Referrer-Policy: no-referrer. Counts against the same 60 reads a minute per client address as getOrder, then 429 rate_limited."
       parameters:
         - { name: code, in: path, required: true, schema: { type: string }, description: "The order code, like TS-7K2QF." }
         - { name: token, in: query, required: true, schema: { type: string }, description: "The t= value from the order's link." }
@@ -1582,15 +1618,16 @@ components:
         tickets: { type: array, items: { $ref: "#/components/schemas/OrderTicket" } }
     OrderTicket:
       type: object
-      required: [id, ticket_type_name, attendee_name, status, refunded, qr, qr_png, name_changes_left]
+      required: [id, ticket_type_name, attendee_name, status, refunded, blocked, qr, qr_png, name_changes_left]
       properties:
         id: { type: string, format: uuid }
         ticket_type_name: { type: string }
         attendee_name: { type: string, description: "Empty when the buyer didn't give one." }
         status: { type: string, enum: [valid, void] }
         refunded: { type: boolean, description: "true when it's void because it was refunded." }
-        qr: { type: [string, "null"], description: "What the ticket's QR code holds: 22 base64url characters. Whoever has it can get in, so show it only to the ticket's holder. null for a void ticket." }
-        qr_png: { type: [string, "null"], description: "The same QR code drawn as a PNG, standard base64, ready for a data: URL. Whoever has it can get in. null for a void ticket." }
+        blocked: { type: boolean, description: "true when the organizer has put this valid ticket on hold: it's still yours, but it won't get in until they lift it." }
+        qr: { type: [string, "null"], description: "What the ticket's QR code holds: 22 base64url characters. Whoever has it can get in, so show it only to the ticket's holder. null for a void or blocked ticket." }
+        qr_png: { type: [string, "null"], description: "The same QR code drawn as a PNG, standard base64, ready for a data: URL. Whoever has it can get in. null for a void or blocked ticket." }
         name_changes_left: { type: integer, minimum: 0, maximum: 5, description: "How many more times the buyer can change this ticket's name. The organizer's changes don't count." }
     RenameTicketByLink:
       type: object
@@ -1598,6 +1635,10 @@ components:
       properties:
         token: { type: string, maxLength: 200, description: "The t= value from the order's link." }
         attendee_name: { type: string, maxLength: 120, x-go-type: "*string", description: "The name to put on the ticket. Empty takes the name off." }
+    BlockTicket:
+      type: object
+      properties:
+        reason: { type: string, maxLength: 200, description: "Why it's on hold, for your team only: never on the buyer's page or in their email. Plain text; empty or left out for none." }
     RenameTicket:
       type: object
       required: [attendee_name]
@@ -1671,7 +1712,7 @@ components:
         gate: { type: string, maxLength: 40, description: "Which door, if you name them." }
     CheckinTicket:
       type: object
-      required: [id, ticket_type_name, attendee_name, order_code, status, checked_in_at]
+      required: [id, ticket_type_name, attendee_name, order_code, status, checked_in_at, blocked]
       properties:
         id: { type: string, format: uuid }
         ticket_type_name: { type: string }
@@ -1679,11 +1720,12 @@ components:
         order_code: { type: string }
         status: { type: string, enum: [valid, void] }
         checked_in_at: { type: [string, "null"], format: date-time, description: "When it was first checked in; null if it hasn't been." }
+        blocked: { type: boolean, description: "true when an owner or admin has put it on hold, so it won't get in." }
     CheckinResult:
       type: object
       required: [result, ticket, checked_in, sold]
       properties:
-        result: { type: string, enum: [accepted, duplicate, invalid, void] }
+        result: { type: string, enum: [accepted, duplicate, invalid, void, blocked] }
         ticket: { oneOf: [{ $ref: "#/components/schemas/CheckinTicket" }, { type: "null" }], description: "The ticket the scan matched; null for invalid." }
         checked_in: { type: integer, description: "The event's valid tickets checked in so far." }
         sold: { type: integer, description: "The event's valid tickets." }
@@ -1764,15 +1806,19 @@ components:
             refunds: { type: array, items: { $ref: "#/components/schemas/Refund" }, description: "Newest first." }
     OrderDetailTicket:
       type: object
-      required: [id, ticket_type_name, attendee_name, status, charge_cents, fee_cents, refund_id]
+      required: [id, ticket_type_id, ticket_type_name, attendee_name, status, charge_cents, fee_cents, refund_id, checked_in_at, blocked_at, blocked_reason]
       properties:
         id: { type: string, format: uuid }
+        ticket_type_id: { type: string, format: uuid }
         ticket_type_name: { type: string }
         attendee_name: { type: string }
         status: { type: string, enum: [valid, void] }
         charge_cents: { type: integer, format: int64, description: "What the buyer paid for this ticket, before a passed-on fee." }
         fee_cents: { type: integer, format: int64 }
         refund_id: { type: [string, "null"], format: uuid, description: "The refund that covered this ticket; null when it hasn't been refunded, or cost nothing." }
+        checked_in_at: { type: [string, "null"], format: date-time, description: "When it was first checked in; null if it hasn't been." }
+        blocked_at: { type: [string, "null"], format: date-time, description: "When an owner or admin put it on hold (blockTicket); null when it isn't on hold." }
+        blocked_reason: { type: [string, "null"], description: "Why it's on hold, for your team only; null without a reason or a block." }
     Refund:
       type: object
       required: [id, amount_cents, fee_cents, fee_back, status, reason, failure, returned_by_bank, created_at]

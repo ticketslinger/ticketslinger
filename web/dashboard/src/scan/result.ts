@@ -56,6 +56,14 @@ export function viewFor(r: CheckinResult | "network", zone: string): View {
         action: NEXT,
         autoDismissMs: null,
       };
+    case "blocked":
+      return {
+        tone: "red",
+        heading: "Blocked — send to the box office",
+        body: "The organizer put this ticket on hold. Don't let them in until someone on the team clears it.",
+        action: NEXT,
+        autoDismissMs: null,
+      };
     default:
       return {
         tone: "red",

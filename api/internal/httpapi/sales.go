@@ -702,7 +702,7 @@ func (s *server) GetOrder(ctx context.Context, req GetOrderRequestObject) (GetOr
 			qrPNG.Set(base64.StdEncoding.EncodeToString(png))
 		}
 		out.Tickets = append(out.Tickets, OrderTicket{Id: t.ID, TicketTypeName: t.TicketTypeName, AttendeeName: t.AttendeeName,
-			Status: OrderTicketStatus(t.Status), Refunded: t.Refunded, Qr: qr, QrPng: qrPNG, NameChangesLeft: t.NameChangesLeft})
+			Status: OrderTicketStatus(t.Status), Refunded: t.Refunded, Blocked: t.Blocked, Qr: qr, QrPng: qrPNG, NameChangesLeft: t.NameChangesLeft})
 	}
 	return GetOrder200JSONResponse(out), nil
 }
@@ -817,7 +817,8 @@ func (s *server) GetOrderDetail(ctx context.Context, req GetOrderDetailRequestOb
 		Source: OrderDetailSource(d.Source), ManualMethod: nullableOf[OrderDetailManualMethod](d.ManualMethod), BuyerName: d.BuyerName, ManualCents: d.ManualCents}
 	for _, t := range d.Tickets {
 		out.Tickets = append(out.Tickets, OrderDetailTicket{Id: t.ID, TicketTypeName: t.TicketTypeName, AttendeeName: t.AttendeeName,
-			Status: OrderDetailTicketStatus(t.Status), ChargeCents: t.ChargeCents, FeeCents: t.FeeCents, RefundId: nullOf(t.RefundID)})
+			Status: OrderDetailTicketStatus(t.Status), ChargeCents: t.ChargeCents, FeeCents: t.FeeCents, RefundId: nullOf(t.RefundID),
+			TicketTypeId: t.TicketTypeID, CheckedInAt: nullOf(t.CheckedInAt), BlockedAt: nullOf(t.BlockedAt), BlockedReason: nullOf(t.BlockedReason)})
 	}
 	for _, r := range d.Refunds {
 		out.Refunds = append(out.Refunds, toRefund(r))
@@ -918,8 +919,8 @@ func (s *server) RetryRefund(ctx context.Context, req RetryRefundRequestObject) 
 	return out, nil
 }
 
-// ordersWrite: cancelling a buyer's tickets is a person's call, never an
-// integration's.
+// ordersWrite: cancelling or holding a buyer's tickets is a person's call,
+// never an integration's.
 var ordersWrite = Access{Roles: ownerAdmin, Write: true, SessionOnly: true}
 
 // CancelOrder cancels tickets of an order with no refund and frees their seats.
@@ -947,6 +948,32 @@ func (s *server) CancelOrder(ctx context.Context, req CancelOrderRequestObject) 
 		return nil, salesError(err)
 	}
 	return out, nil
+}
+
+// BlockTicket puts a valid ticket on hold at the door; it stays sold.
+func (s *server) BlockTicket(ctx context.Context, req BlockTicketRequestObject) (BlockTicketResponseObject, error) {
+	err := s.inOrganizer(ctx, req.Organizer, ordersWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		reason := ""
+		if req.Body.Reason != nil {
+			reason = *req.Body.Reason
+		}
+		return sales.BlockTicket(ctx, tx, org.ID, req.Event, req.Order, req.Ticket, reason, actorFrom(ctx))
+	})
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return BlockTicket204Response{}, nil
+}
+
+// UnblockTicket takes a ticket off hold.
+func (s *server) UnblockTicket(ctx context.Context, req UnblockTicketRequestObject) (UnblockTicketResponseObject, error) {
+	err := s.inOrganizer(ctx, req.Organizer, ordersWrite, func(org organizers.Organizer, tx pgx.Tx) error {
+		return sales.UnblockTicket(ctx, tx, org.ID, req.Event, req.Order, req.Ticket, actorFrom(ctx))
+	})
+	if err != nil {
+		return nil, salesError(err)
+	}
+	return UnblockTicket204Response{}, nil
 }
 
 // notesRead: a team's notes about a buyer are for people, not integrations,

@@ -877,6 +877,24 @@ export interface paths {
         patch: operations["renameTicket"];
         trace?: never;
     };
+    "/organizers/{organizer}/events/{event}/orders/{order}/tickets/{ticket}/block": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Puts a valid ticket on hold: the door refuses it with blocked, the buyer's page and emails stop showing its QR code, and it keeps its seat and stays sold. reason is for your team only, up to 200 characters. Blocking a blocked ticket changes nothing. 409 ticket_void for a refunded or cancelled ticket. 422 bad_reason (field reason). 404 for a ticket that isn't this order's. */
+        put: operations["blockTicket"];
+        post?: never;
+        /** @description Owners and admins, signed in with a passkey or authenticator app (403 session_required for an API key, 403 forbidden_role for other members, 403 mfa_required without one). Takes a ticket off hold, so it scans again and the buyer sees its QR code. Unblocking a ticket that isn't blocked changes nothing. 409 ticket_void. 404 for a ticket that isn't this order's. */
+        delete: operations["unblockTicket"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organizers/{organizer}/events/{event}/cancel": {
         parameters: {
             query?: never;
@@ -903,7 +921,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Owners, admins and check-in staff, or a write API key. Checks one ticket in: send the scanned QR text as qr, or a ticket picked by hand as ticket_id, never both (422 qr_or_ticket). Every outcome is a 200, and result says which it was. accepted: the ticket is valid and wasn't in yet, so it's in now. duplicate: it's already in, and ticket.checked_in_at says since when. invalid: no ticket of this event matches, so ticket is null. void: the ticket was refunded or cancelled. checked_in and sold count the event's valid tickets. Retrying with the same Idempotency-Key replays the first answer, so a scan resent after a dropped connection still says accepted. 422 (field qr) for an empty or over-long qr, (field gate) for a gate over 40 characters. 429 rate_limited after 300 scans in a minute from one caller at one event. */
+        /** @description Owners, admins and check-in staff, or a write API key. Checks one ticket in: send the scanned QR text as qr, or a ticket picked by hand as ticket_id, never both (422 qr_or_ticket). Every outcome is a 200, and result says which it was. accepted: the ticket is valid and wasn't in yet, so it's in now. duplicate: it's already in, and ticket.checked_in_at says since when. invalid: no ticket of this event matches, so ticket is null. void: the ticket was refunded or cancelled. blocked: an owner or admin put the ticket on hold, so it doesn't get in, whether or not it was in before; void wins over blocked. checked_in and sold count the event's valid tickets. Retrying with the same Idempotency-Key replays the first answer, so a scan resent after a dropped connection still says accepted. 422 (field qr) for an empty or over-long qr, (field gate) for a gate over 40 characters. 429 rate_limited after 300 scans in a minute from one caller at one event. */
         post: operations["createCheckin"];
         delete?: never;
         options?: never;
@@ -1179,7 +1197,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description The order's valid tickets as a PDF, one to a page, numbered as the email numbers them, for whoever holds the token from the order's link. An unknown code and a wrong token get the same 404. 409 no_tickets when the order has no valid ticket. It comes with Content-Disposition: attachment; filename="tickets-<code>.pdf", Cache-Control: no-store and Referrer-Policy: no-referrer. Counts against the same 60 reads a minute per client address as getOrder, then 429 rate_limited. */
+        /** @description The order's valid tickets as a PDF, one to a page, numbered as the email numbers them, for whoever holds the token from the order's link. A ticket the organizer has put on hold isn't in it. An unknown code and a wrong token get the same 404. 409 no_tickets when the order has no valid ticket that isn't on hold. It comes with Content-Disposition: attachment; filename="tickets-<code>.pdf", Cache-Control: no-store and Referrer-Policy: no-referrer. Counts against the same 60 reads a minute per client address as getOrder, then 429 rate_limited. */
         get: operations["getOrderPDF"];
         put?: never;
         post?: never;
@@ -1543,9 +1561,11 @@ export interface components {
             status: "valid" | "void";
             /** @description true when it's void because it was refunded. */
             refunded: boolean;
-            /** @description What the ticket's QR code holds: 22 base64url characters. Whoever has it can get in, so show it only to the ticket's holder. null for a void ticket. */
+            /** @description true when the organizer has put this valid ticket on hold: it's still yours, but it won't get in until they lift it. */
+            blocked: boolean;
+            /** @description What the ticket's QR code holds: 22 base64url characters. Whoever has it can get in, so show it only to the ticket's holder. null for a void or blocked ticket. */
             qr: string | null;
-            /** @description The same QR code drawn as a PNG, standard base64, ready for a data: URL. Whoever has it can get in. null for a void ticket. */
+            /** @description The same QR code drawn as a PNG, standard base64, ready for a data: URL. Whoever has it can get in. null for a void or blocked ticket. */
             qr_png: string | null;
             /** @description How many more times the buyer can change this ticket's name. The organizer's changes don't count. */
             name_changes_left: number;
@@ -1555,6 +1575,10 @@ export interface components {
             token: string;
             /** @description The name to put on the ticket. Empty takes the name off. */
             attendee_name: string;
+        };
+        BlockTicket: {
+            /** @description Why it's on hold, for your team only: never on the buyer's page or in their email. Plain text; empty or left out for none. */
+            reason?: string;
         };
         RenameTicket: {
             /** @description The name to put on the ticket. Empty takes the name off. */
@@ -1699,10 +1723,12 @@ export interface components {
              * @description When it was first checked in; null if it hasn't been.
              */
             checked_in_at: string | null;
+            /** @description true when an owner or admin has put it on hold, so it won't get in. */
+            blocked: boolean;
         };
         CheckinResult: {
             /** @enum {string} */
-            result: "accepted" | "duplicate" | "invalid" | "void";
+            result: "accepted" | "duplicate" | "invalid" | "void" | "blocked";
             /** @description The ticket the scan matched; null for invalid. */
             ticket: components["schemas"]["CheckinTicket"] | null;
             /** @description The event's valid tickets checked in so far. */
@@ -1805,6 +1831,8 @@ export interface components {
         OrderDetailTicket: {
             /** Format: uuid */
             id: string;
+            /** Format: uuid */
+            ticket_type_id: string;
             ticket_type_name: string;
             attendee_name: string;
             /** @enum {string} */
@@ -1821,6 +1849,18 @@ export interface components {
              * @description The refund that covered this ticket; null when it hasn't been refunded, or cost nothing.
              */
             refund_id: string | null;
+            /**
+             * Format: date-time
+             * @description When it was first checked in; null if it hasn't been.
+             */
+            checked_in_at: string | null;
+            /**
+             * Format: date-time
+             * @description When an owner or admin put it on hold (blockTicket); null when it isn't on hold.
+             */
+            blocked_at: string | null;
+            /** @description Why it's on hold, for your team only; null without a reason or a block. */
+            blocked_reason: string | null;
         };
         Refund: {
             /** Format: uuid */
@@ -4689,6 +4729,70 @@ export interface operations {
         };
         responses: {
             /** @description Renamed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    blockTicket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+                ticket: components["parameters"]["TicketPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockTicket"];
+            };
+        };
+        responses: {
+            /** @description Blocked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    unblockTicket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organizer: components["parameters"]["OrganizerPath"];
+                event: components["parameters"]["EventPath"];
+                order: components["parameters"]["OrderPath"];
+                ticket: components["parameters"]["TicketPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Unblocked */
             204: {
                 headers: {
                     [name: string]: unknown;
