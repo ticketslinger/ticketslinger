@@ -1013,3 +1013,138 @@ func TestRetryRefundRespectsTheCap(t *testing.T) {
 		t.Fatal("a refund that fits again wasn't retried")
 	}
 }
+
+func (f fixture) refundTry(s *sales.Service, order uuid.UUID, in sales.RefundRequest) (res sales.RefundResult, err error) {
+	err = db.WithOrganizer(context.Background(), s.Pool, f.user, f.org, func(tx pgx.Tx, _ string) (err error) {
+		res, err = sales.RefundTickets(context.Background(), tx, f.org, f.event, order, in, "organizer", audit.Actor{User: f.user})
+		return
+	})
+	return res, err
+}
+
+// Cancel A, then refund A and B: one refund for both, and A's seat, freed
+// by the cancel, isn't freed again when the refund goes through.
+func TestRefundAfterCancel(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500})
+	f.exec(t, `update events set fee_mode = 'pass' where id = $1`, f.event)
+	order, pi, ids := f.paidOrder(t, s, fake, 2, 1)
+	a, b := ids[0], ids[1]
+	f.cancelTix(t, s, order, sales.CancelTicketsRequest{TicketIDs: []uuid.UUID{a}})
+	releasedA := f.str(t, `select released_at::text from tickets where id = $1`, a)
+	if f.quotaUsed(t) != 1 {
+		t.Fatalf("quota used %d after the cancel, want 1", f.quotaUsed(t))
+	}
+	res := f.refund(t, s, order, sales.RefundRequest{TicketIDs: []uuid.UUID{b, a}, FeeBack: true})
+	if res.AmountCents != 5200 || res.FeeCents != 200 || res.RefundID == nil || res.OrderStatus != "refunded" || len(res.TicketIDs) != 2 {
+		t.Fatalf("result %+v", res)
+	}
+	if n := f.count(t, `select count(*) from refunds where amount_cents = 5200 and fee_cents = 200`); n != 1 || f.count(t, `select count(*) from refunds`) != 1 {
+		t.Fatalf("%d refund rows of $52, want exactly one", n)
+	}
+	if got := f.str(t, `select released_at::text from tickets where id = $1 and refund_id = $2`, a, *res.RefundID); got != releasedA {
+		t.Fatalf("A released_at %q, want %q from the cancel", got, releasedA)
+	}
+	drain(t, s, &mailer.Memory{})
+	if amount, fee := fake.Refunded(pi); amount != 5200 || fee != 200 {
+		t.Fatalf("Stripe refunded %d and fee %d", amount, fee)
+	}
+	if f.quotaUsed(t) != 0 || f.str(t, `select released_at::text from tickets where id = $1`, a) != releasedA {
+		t.Fatalf("quota used %d, want 0; A released again", f.quotaUsed(t))
+	}
+	if st := f.str(t, `select status from orders where id = $1`, order); st != "refunded" {
+		t.Fatalf("order %q, want refunded", st)
+	}
+	if _, err := f.refundTry(s, order, sales.RefundRequest{TicketIDs: []uuid.UUID{a}}); invalidCode(err) != "bad_tickets" {
+		t.Fatalf("refunding A again: %v, want bad_tickets", err)
+	}
+}
+
+// Cancel A, refund B: the order reads refunded, and A can still be refunded.
+func TestRefundCancelledBesideRefunded(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500})
+	order, _, ids := f.paidOrder(t, s, fake, 2, 1)
+	a, b := ids[0], ids[1]
+	f.cancelTix(t, s, order, sales.CancelTicketsRequest{TicketIDs: []uuid.UUID{a}})
+	if res := f.refund(t, s, order, sales.RefundRequest{TicketIDs: []uuid.UUID{b}}); res.OrderStatus != "refunded" {
+		t.Fatalf("refund B %+v, want the order refunded", res)
+	}
+	res := f.refund(t, s, order, sales.RefundRequest{TicketIDs: []uuid.UUID{a}})
+	if res.AmountCents != 2500 || res.RefundID == nil || res.OrderStatus != "refunded" {
+		t.Fatalf("refund A %+v", res)
+	}
+	drain(t, s, &mailer.Memory{})
+	if n := f.count(t, `select count(*) from refunds where status = 'succeeded' and amount_cents = 2500`); n != 2 || f.quotaUsed(t) != 0 {
+		t.Fatalf("%d $25 refunds succeeded, quota used %d; want 2 and 0", n, f.quotaUsed(t))
+	}
+}
+
+// No list means every valid ticket: a ticket cancelled on purpose stays unrefunded.
+func TestRefundNilSkipsCancelled(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500})
+	order, _, ids := f.paidOrder(t, s, fake, 2, 1)
+	a, b := ids[0], ids[1]
+	f.cancelTix(t, s, order, sales.CancelTicketsRequest{TicketIDs: []uuid.UUID{a}})
+	res := f.refund(t, s, order, sales.RefundRequest{})
+	if len(res.TicketIDs) != 1 || res.TicketIDs[0] != b || res.AmountCents != 2500 {
+		t.Fatalf("result %+v, want B alone", res)
+	}
+	if n := f.count(t, `select count(*) from tickets where id = $1 and refund_id is null`, a); n != 1 {
+		t.Fatal("A was refunded without being named")
+	}
+}
+
+func TestEventCancelSkipsCancelledTickets(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500})
+	order, _, ids := f.paidOrder(t, s, fake, 2, 1)
+	a, b := ids[0], ids[1]
+	f.cancelTix(t, s, order, sales.CancelTicketsRequest{TicketIDs: []uuid.UUID{a}})
+	if res := f.cancelEvent(t, s); res.Orders != 1 {
+		t.Fatalf("event cancel %+v", res)
+	}
+	if n := f.count(t, `select count(*) from tickets where id = $1 and refund_id is not null`, b); n != 1 {
+		t.Fatal("B wasn't refunded")
+	}
+	if n := f.count(t, `select count(*) from tickets where id = $1 and refund_id is null`, a); n != 1 {
+		t.Fatal("the event cancel refunded A, which the organizer had cancelled")
+	}
+}
+
+func TestRefundWholeCancelledOrder(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500})
+	order, _, ids := f.paidOrder(t, s, fake, 2, 1)
+	if res := f.cancelTix(t, s, order, sales.CancelTicketsRequest{}); res.OrderStatus != "cancelled" {
+		t.Fatalf("cancel %+v", res)
+	}
+	res := f.refund(t, s, order, sales.RefundRequest{TicketIDs: ids})
+	if res.AmountCents != 5000 || res.RefundID == nil || res.OrderStatus != "refunded" {
+		t.Fatalf("result %+v", res)
+	}
+	drain(t, s, &mailer.Memory{})
+	if f.quotaUsed(t) != 0 || f.str(t, `select status from orders where id = $1`, order) != "refunded" {
+		t.Fatalf("quota used %d", f.quotaUsed(t))
+	}
+}
+
+// A cancelled ticket that cost nothing has no money to send back, so it
+// can't be named; only valid tickets reach the free branch.
+func TestRefundSkipsCancelledFree(t *testing.T) {
+	s, fake := newPaidService(t)
+	f := seed(t, s.Pool, seedOpts{quota: 5, price: 2500})
+	order, _, ids := f.paidOrder(t, s, fake, 2, 1)
+	free := ids[0]
+	f.exec(t, `update tickets set charge_cents = 0 where id = $1`, free) // a $0 line beside a paid one
+	f.cancelTix(t, s, order, sales.CancelTicketsRequest{TicketIDs: []uuid.UUID{free}})
+	for _, named := range [][]uuid.UUID{{free}, {free, ids[1]}} {
+		if _, err := f.refundTry(s, order, sales.RefundRequest{TicketIDs: named}); invalidCode(err) != "bad_tickets" {
+			t.Fatalf("naming the cancelled $0 ticket: %v, want bad_tickets", err)
+		}
+	}
+	if n := f.count(t, `select count(*) from refunds`); n != 0 {
+		t.Fatalf("%d refunds", n)
+	}
+}
