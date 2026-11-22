@@ -15,7 +15,7 @@
     "@ticketslinger/api-client": "workspace:*",
     "hono": "4.13.16",
     "preact": "11.0.1",
-    "preact-render-to-string": "6.8.1"
+    "preact-render-to-string": "6.8.3"
   },
   "devDependencies": {
     "@types/bun": "1.4.3",
