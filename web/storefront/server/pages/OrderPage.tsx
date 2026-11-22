@@ -38,9 +38,16 @@ export function orderStatus(order: Order): string {
       : "Your payment arrived after the last tickets had gone, so this order was cancelled. We're refunding you in full.";
   }
   const back = formatCents(order.refunded_cents);
-  const going = order.tickets.some((t) => t.status === "valid");
+  const valid = order.tickets.filter((t) => t.status === "valid");
+  // A ticket on hold won't get them in, so it isn't "going"; it isn't refunded either.
+  const going = valid.some((t) => !t.blocked);
   const fee = order.totals.fee_cents;
-  if (order.refunded_cents > 0 && !going && fee > 0 && order.refunded_cents + fee === total) {
+  if (
+    order.refunded_cents > 0 &&
+    valid.length === 0 &&
+    fee > 0 &&
+    order.refunded_cents + fee === total
+  ) {
     return `You're getting everything back except the ${formatCents(fee)} service fee: ${back} is on its way to your card.`;
   }
   if (order.refunded_cents > 0 && order.refunded_cents < total) {
@@ -51,7 +58,7 @@ export function orderStatus(order: Order): string {
       ? `${e.name} was cancelled, so this order was refunded in full: ${back} is on its way back to your card.`
       : `This order was refunded in full: ${back} is on its way back to your card.`;
   }
-  if (order.returned_cents > 0 || going) return going ? "You're going." : "";
+  if (order.returned_cents > 0 || valid.length > 0) return going ? "You're going." : "";
   if (order.status === "partially_refunded") return "Part of this order was refunded.";
   return cancelled
     ? `${e.name} was cancelled, so these tickets won't get you in any more.`

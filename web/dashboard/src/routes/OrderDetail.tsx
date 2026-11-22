@@ -14,13 +14,24 @@ type Refund = components["schemas"]["Refund"];
 type Note = components["schemas"]["OrderNote"];
 type OrderPath = { organizer: string; event: string; order: string };
 
+type Ticket = Detail["tickets"][number];
+
+/** A ticket the API refunds when named: a valid one, or one cancelled without a refund that cost something. */
+export const refundableTicket = (t: Ticket) =>
+  t.status === "valid" || (t.status === "void" && t.refund_id === null && t.charge_cents > 0);
+
+/** The refund box: a card order with a ticket left to refund, whatever the order's status says. */
+export const refundShown = (order: Detail) =>
+  order.source === "online" && order.tickets.some(refundableTicket);
+
 /**
  * What the API will refund for this choice, for the button label only: the same rule the
- * server uses (empty `picked` means every valid ticket). The API's answer is what we show after.
+ * server uses (empty `picked` means every valid ticket, never a cancelled one). The API's
+ * answer is what we show after.
  */
 export function refundPreview(order: Detail, picked: string[], feeBack: boolean) {
-  const chosen = order.tickets.filter(
-    (t) => t.status === "valid" && (picked.length === 0 || picked.includes(t.id)),
+  const chosen = order.tickets.filter((t) =>
+    picked.length === 0 ? t.status === "valid" : picked.includes(t.id) && refundableTicket(t),
   );
   const charge = chosen.reduce((n, t) => n + t.charge_cents, 0);
   const fee = chosen.reduce((n, t) => n + t.fee_cents, 0);
@@ -68,9 +79,29 @@ export const reasonText = (r: Refund, eventCancelled: boolean) =>
 export const RENAME_HINT =
   "Their QR code doesn't change. The email they already have shows the old name until you resend it.";
 
-/** What the buyer paid for the tickets a cancel names, a passed-on fee included: the refund preview's rule. */
-export const cancelCharge = (order: Detail, ids: string[]) =>
-  refundPreview(order, ids, true).amountCents;
+/** What the buyer paid for the valid tickets a cancel names, a passed-on fee included. */
+export function cancelCharge(order: Detail, ids: string[]) {
+  const chosen = order.tickets.filter(
+    (t) => t.status === "valid" && (ids.length === 0 || ids.includes(t.id)),
+  );
+  const fee = order.fee_mode === "pass" ? chosen.reduce((n, t) => n + t.fee_cents, 0) : 0;
+  return chosen.reduce((n, t) => n + t.charge_cents, 0) + fee;
+}
+
+/** The refund button's words: with nothing valid left, the organizer has to pick. */
+export function refundLabel(order: Detail, picked: string[]) {
+  if (picked.length > 0)
+    return `Refund ${plural(refundPreview(order, picked, false).tickets, "ticket")}`;
+  return order.tickets.some((t) => t.status === "valid")
+    ? "Refund the whole order"
+    : "Pick the tickets to refund";
+}
+
+/** The refund request: picked tickets by id, else the whole order (every valid ticket). */
+export const refundBody = (picked: string[], feeBack: boolean, feeCents: number) => ({
+  refund_fee: feeBack && feeCents > 0,
+  ...(picked.length > 0 ? { ticket_ids: picked } : {}),
+});
 
 /** The cancel dialog's warning: what happens to the money, then whether the buyer hears. */
 export function cancelWarning(source: string, chargeCents: number, notify: boolean): string {
@@ -80,11 +111,8 @@ export function cancelWarning(source: string, chargeCents: number, notify: boole
       : source === "manual"
         ? `Nothing is refunded here. If they paid you ${formatCents(chargeCents)}, give it back yourself.`
         : "They paid nothing, so there's nothing to refund.";
-  // A cancelled ticket can't be refunded later (P7b may add that), so the confirm says so.
   const after =
-    source === "online"
-      ? " You can't refund these tickets afterwards. To give the money back, use Refund instead."
-      : "";
+    source === "online" ? " You can still refund these tickets later from this page." : "";
   return `${money} Their tickets stop working straight away.${notify ? " We'll email the buyer to say so." : " The buyer won't be told."}${after}`;
 }
 
@@ -154,8 +182,6 @@ function RenameTicket({
   );
 }
 
-type Ticket = Detail["tickets"][number];
-
 /**
  * One ticket in the list. The refund checkbox stays on screen while the name is being edited,
  * so a ticket that is picked for refund is always one the organizer can see is picked.
@@ -195,7 +221,7 @@ export function TicketLine({
   onCancel: () => void;
 }) {
   const editable = canRenameTicket(t, org);
-  const pickable = editable && refundable;
+  const pickable = canEdit(org) && refundable && refundableTicket(t);
   const nameText = `${t.ticket_type_name}, ${t.attendee_name || "no name"}`;
   return (
     <li>
@@ -677,10 +703,7 @@ export function OrderDetail({
     order && event && emailLine(order.ticket_email, (iso) => formatWhen(iso, event.timezone));
   const valid = order?.tickets.filter((t) => t.status === "valid") ?? [];
   const preview = order && refundPreview(order, picked, feeBack);
-  const label =
-    picked.length === 0
-      ? "Refund the whole order"
-      : `Refund ${plural(preview?.tickets ?? 0, "ticket")}`;
+  const label = order ? refundLabel(order, picked) : "";
   const money = formatCents(preview?.amountCents ?? 0);
 
   const confirm = () =>
@@ -690,10 +713,7 @@ export function OrderDetail({
         must(
           await api.POST("/organizers/{organizer}/events/{event}/orders/{order}/refunds", {
             params: { path, header: { "Idempotency-Key": k } },
-            body: {
-              refund_fee: feeBack && preview.feeCents > 0,
-              ...(picked.length > 0 ? { ticket_ids: picked } : {}),
-            },
+            body: refundBody(picked, feeBack, preview.feeCents),
           }),
         ),
       );
@@ -805,7 +825,7 @@ export function OrderDetail({
             />
           )}
 
-          {canEdit(org) && order.source === "online" && valid.length > 0 && (
+          {canEdit(org) && refundShown(order) && (
             <div className="status-box">
               <label>
                 <input
@@ -850,6 +870,7 @@ export function OrderDetail({
                   type="button"
                   className="inline"
                   ref={asking === false ? focusOnMount : undefined}
+                  disabled={preview?.tickets === 0}
                   onClick={() => setAsking(true)}
                 >
                   {label} · {money}

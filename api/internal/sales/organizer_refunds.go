@@ -23,7 +23,7 @@ import (
 
 // RefundRequest is an organizer's refund of an order.
 type RefundRequest struct {
-	TicketIDs []uuid.UUID // nil: every ticket still valid; empty but not nil names none (bad_tickets)
+	TicketIDs []uuid.UUID // nil: every ticket still valid, never a cancelled one; named: valid ones, or cancelled card tickets not yet refunded; empty but not nil names none (bad_tickets)
 	FeeBack   bool        // our fee on those tickets goes back too
 }
 
@@ -73,7 +73,9 @@ func RefundTickets(ctx context.Context, tx pgx.Tx, org, event, order uuid.UUID, 
 	if source != "online" {
 		return RefundResult{}, errNoPayment
 	}
-	if status != "paid" && status != "partially_refunded" {
+	// Any settled order: a cancelled ticket can sit beside a refunded one
+	// (order refunded) or be the whole order (cancelled). The tickets decide.
+	if status == "pending" {
 		return RefundResult{}, errNotRefundable
 	}
 	var named []uuid.UUID
@@ -81,7 +83,9 @@ func RefundTickets(ctx context.Context, tx pgx.Tx, org, event, order uuid.UUID, 
 		named = slices.Compact(slices.SortedFunc(slices.Values(in.TicketIDs), func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) }))
 	}
 	rows, _ := tx.Query(ctx, `select id, charge_cents, fee_cents from tickets
-		where order_id = $1 and status = 'valid' and ($2::uuid[] is null or id = any($2)) order by id for update`, order, named)
+		where order_id = $1 and ((status = 'valid' and ($2::uuid[] is null or id = any($2)))
+			or (id = any($2) and status = 'void' and refund_id is null and charge_cents > 0))
+		order by id for update`, order, named)
 	res := RefundResult{}
 	var charges, fees int64
 	var id uuid.UUID

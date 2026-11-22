@@ -13,7 +13,10 @@ import {
   NoteItem,
   RENAME_HINT,
   reasonText,
+  refundBody,
+  refundLabel,
   refundPreview,
+  refundShown,
   retryable,
   TicketLine,
 } from "./OrderDetail";
@@ -207,7 +210,7 @@ test("a comp or manual order's tickets have no refund checkbox, and still a More
 
 test("the cancel warning says what happens to the money, and whether the buyer hears", () => {
   expect(cancelWarning("online", 5000, true)).toBe(
-    "Nothing is refunded: the buyer's $50.00 stays paid. Their tickets stop working straight away. We'll email the buyer to say so. You can't refund these tickets afterwards. To give the money back, use Refund instead.",
+    "Nothing is refunded: the buyer's $50.00 stays paid. Their tickets stop working straight away. We'll email the buyer to say so. You can still refund these tickets later from this page.",
   );
   expect(cancelWarning("manual", 4000, false)).toBe(
     "Nothing is refunded here. If they paid you $40.00, give it back yourself. Their tickets stop working straight away. The buyer won't be told.",
@@ -249,4 +252,55 @@ test("the cancel warning's amount counts a fee the buyer paid on top, and only t
   expect(cancelCharge(order("pass"), [])).toBe(3670);
   expect(cancelCharge(order("pass"), ["b"])).toBe(1070);
   expect(cancelCharge(order("absorb"), [])).toBe(3500);
+});
+
+test("a cancelled card ticket not yet refunded can be picked, and counts only when picked", () => {
+  // c is cancelled, refund_id null, $25: the API refunds it only when named.
+  expect(refundPreview(order("pass"), ["c"], true)).toEqual({
+    tickets: 1,
+    amountCents: 2600,
+    feeCents: 100,
+  });
+  expect(refundPreview(order("pass"), ["a", "c"], false).amountCents).toBe(5000);
+  expect(refundPreview(order("pass"), [], false).amountCents).toBe(3500);
+  const c = ticket("c", 2500, 100, "void");
+  expect(line({ t: c, picked: false })).toContain('type="checkbox"');
+  expect(line({ t: { ...c, refund_id: "r" }, picked: false })).not.toContain('type="checkbox"');
+  expect(line({ t: { ...c, charge_cents: 0 }, picked: false })).not.toContain('type="checkbox"');
+  expect(line({ t: c, picked: false, refundable: false })).not.toContain('type="checkbox"');
+  expect(line({ t: c, picked: false, org: { role: "member" } as Org })).not.toContain(
+    'type="checkbox"',
+  );
+});
+
+test("the refund button shows on a cancelled or refunded card order with a ticket left to refund", () => {
+  const left = (status: Detail["status"], source = "online") =>
+    ({
+      status,
+      source,
+      fee_mode: "pass",
+      tickets: [
+        ticket("c", 2500, 100, "void"),
+        { ...ticket("d", 2500, 100, "void"), refund_id: "r" },
+      ],
+    }) as Detail;
+  expect(refundShown(left("cancelled"))).toBe(true);
+  expect(refundShown(left("refunded"))).toBe(true);
+  expect(refundShown(left("cancelled", "manual"))).toBe(false);
+  const done = {
+    ...left("refunded"),
+    tickets: [{ ...ticket("d", 2500, 100, "void"), refund_id: "r" }],
+  };
+  expect(refundShown(done)).toBe(false);
+  // With nothing valid, the whole order means nothing: the organizer picks, and ids go.
+  expect(refundLabel(left("cancelled"), [])).toBe("Pick the tickets to refund");
+  expect(refundLabel(left("cancelled"), ["c"])).toBe("Refund 1 ticket");
+  expect(refundLabel(order("pass"), [])).toBe("Refund the whole order");
+  expect(refundBody(["c"], true, 100)).toEqual({ refund_fee: true, ticket_ids: ["c"] });
+  expect(refundBody([], true, 0)).toEqual({ refund_fee: false });
+});
+
+test("an already-cancelled ticket never adds to the next cancel's warning", () => {
+  expect(cancelCharge(order("pass"), ["c"])).toBe(0);
+  expect(cancelCharge(order("pass"), ["a", "c"])).toBe(2600);
 });

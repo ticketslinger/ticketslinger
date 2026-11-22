@@ -1463,6 +1463,36 @@ test("an order whose tickets are all blocked has no PDF and no email button", as
   expect(html).not.toContain("Email me my tickets again");
 });
 
+test("an order whose only valid tickets are on hold doesn't say you're going", async () => {
+  const o = structuredClone(order);
+  o.tickets = o.tickets.map((t) => ({ ...t, blocked: true, qr: null, qr_png: null }));
+  const { a } = app(() => Response.json(o));
+  const html = await (await a.request(`/orders/TS-7K2QF?t=${TOK}`)).text();
+  expect(html).not.toContain("You're going.");
+  expect(html).not.toContain("refunded");
+  // One on hold, one not: still going.
+  const one = structuredClone(order);
+  one.tickets[0] = { ...one.tickets[0], blocked: true, qr: null, qr_png: null };
+  const b = app(() => Response.json(one)).a;
+  expect(await (await b.request(`/orders/TS-7K2QF?t=${TOK}`)).text()).toContain("You're going.");
+});
+
+test("a card order cancelled first and refunded after reads refunded in full", async () => {
+  const o = structuredClone(order);
+  o.status = "refunded";
+  o.refunded_cents = o.totals.total_cents;
+  o.tickets = o.tickets.map((t) => ({
+    ...t,
+    status: "void",
+    refunded: true,
+    qr: null,
+    qr_png: null,
+  }));
+  const { a } = app(() => Response.json(o));
+  const html = await (await a.request(`/orders/TS-7K2QF?t=${TOK}`)).text();
+  expect(html).toContain("This order was refunded in full:");
+});
+
 test("an order with no valid ticket has no QR, no PDF and no email button", async () => {
   const o = structuredClone(order);
   o.status = "refunded";
