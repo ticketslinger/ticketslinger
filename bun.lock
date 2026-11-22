@@ -36,7 +36,7 @@
       "dependencies": {
         "@simplewebauthn/browser": "14.0.0",
         "@ticketslinger/api-client": "workspace:*",
-        "hono": "4.13.13",
+        "hono": "4.13.16",
         "qrcode-generator": "1.4.4",
         "react": "19.3.0",
         "react-dom": "19.3.0",
@@ -57,7 +57,7 @@
       "dependencies": {
         "@stripe/stripe-js": "10.1.0",
         "@ticketslinger/api-client": "workspace:*",
-        "hono": "4.13.13",
+        "hono": "4.13.16",
         "preact": "11.0.1",
         "preact-render-to-string": "6.8.1",
       },
@@ -280,7 +280,7 @@
 
     "graceful-fs": ["graceful-fs@4.2.11", "", {}, "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ=="],
 
-    "hono": ["hono@4.13.13", "", {}, "sha512-CQ46U0ZkAGmbT/4UxdzzGJpacP2IeKgY4a5/tOI9AABbpOMfK739wfDXmv1usCk+3RkKj1hQy4/fjhiwa2xlrA=="],
+    "hono": ["hono@4.13.16", "", {}, "sha512-AOLOEhvrV+iH92xXCnFr/5+3KjPKcI3xP63XJtX5spAnkznPdHijlIsUTpi7/9EhWqrTCekw5c5zh1K+YsVw7A=="],
 
     "http-link-header": ["http-link-header@1.1.4", "", {}, "sha512-xT3GPW6/ZbGuw4UvwHqErSCEjNUlwbQJuZn9/q5U4WEKfp2kENVCAlousG1zLxHeaQ/ffOHUNpWamvkbBW0eNw=="],
 
